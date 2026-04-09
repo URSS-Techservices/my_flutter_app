@@ -1,15 +1,24 @@
 import 'dart:io';
+import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:halo/services/cloudinary_service.dart'; // Cloudinary helper class
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:halo/Bottom Pages/full_screen_camera_page.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:location/location.dart';
+import 'package:video_player/video_player.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_cropper/image_cropper.dart';
+import 'package:location/location.dart' as loc;
+import 'package:permission_handler/permission_handler.dart' as perm;
 
 
 
@@ -27,7 +36,6 @@ class _AddPostPageState extends State<AddPostPage> {
   final TextEditingController _captionController = TextEditingController();
   final TextEditingController _locationController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
-  final CloudinaryService _cloudinaryService = CloudinaryService();
 
   List<XFile> _selectedImages = [];
   List<XFile> _selectedVideos = [];
@@ -60,25 +68,130 @@ class _AddPostPageState extends State<AddPostPage> {
   bool _showMentionSuggestions = false;
   String _currentMentionQuery = '';
   int _mentionRequestId = 0; // to avoid race conditions
+  Timer? _draftSaveDebounce;
+
+  static const String _draftCaptionKey = 'add_post_draft_caption';
+  static const String _draftLocationKey = 'add_post_draft_location';
+  static const String _draftTagsKey = 'add_post_draft_tags';
+  static const String _draftImagesKey = 'add_post_draft_images';
+  static const String _draftVideosKey = 'add_post_draft_videos';
 
   @override
   void initState() {
     super.initState();
     _initializeCamera();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _promptAndRestoreDraftIfAny();
+    });
+    _captionController.addListener(_scheduleDraftSave);
+    _locationController.addListener(_scheduleDraftSave);
   }
 
   @override
   void dispose() {
+    _draftSaveDebounce?.cancel();
     _cameraController?.dispose();
+    _captionController.removeListener(_scheduleDraftSave);
+    _locationController.removeListener(_scheduleDraftSave);
     _captionController.dispose();
     _locationController.dispose();
     super.dispose();
   }
 
+  void _scheduleDraftSave() {
+    _draftSaveDebounce?.cancel();
+    _draftSaveDebounce = Timer(const Duration(milliseconds: 500), _saveDraft);
+  }
+
+  Future<void> _saveDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_draftCaptionKey, _captionController.text);
+    await prefs.setString(_draftLocationKey, _locationController.text);
+    await prefs.setStringList(_draftTagsKey, _selectedTags);
+    await prefs.setStringList(
+      _draftImagesKey,
+      _selectedImages.map((x) => x.path).toList(growable: false),
+    );
+    await prefs.setStringList(
+      _draftVideosKey,
+      _selectedVideos.map((x) => x.path).toList(growable: false),
+    );
+  }
+
+  Future<void> _restoreDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    final caption = prefs.getString(_draftCaptionKey) ?? '';
+    final location = prefs.getString(_draftLocationKey) ?? '';
+    final tags = prefs.getStringList(_draftTagsKey) ?? <String>[];
+    final imagePaths = prefs.getStringList(_draftImagesKey) ?? <String>[];
+    final videoPaths = prefs.getStringList(_draftVideosKey) ?? <String>[];
+
+    final restoredImages = imagePaths.where((p) => File(p).existsSync()).map(XFile.new).toList();
+    final restoredVideos = videoPaths.where((p) => File(p).existsSync()).map(XFile.new).toList();
+
+    if (!mounted) return;
+    setState(() {
+      _captionController.text = caption;
+      _locationController.text = location;
+      _selectedTags
+        ..clear()
+        ..addAll(tags.where((t) => _availableTags.contains(t)));
+      _selectedImages = restoredImages;
+      _selectedVideos = restoredVideos;
+    });
+  }
+
+  Future<void> _promptAndRestoreDraftIfAny() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasDraft = (prefs.getString(_draftCaptionKey)?.isNotEmpty ?? false) ||
+        (prefs.getString(_draftLocationKey)?.isNotEmpty ?? false) ||
+        ((prefs.getStringList(_draftTagsKey) ?? const <String>[]).isNotEmpty) ||
+        ((prefs.getStringList(_draftImagesKey) ?? const <String>[]).isNotEmpty) ||
+        ((prefs.getStringList(_draftVideosKey) ?? const <String>[]).isNotEmpty);
+    if (!mounted || !hasDraft) return;
+
+    final shouldRestore = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Continue last draft?'),
+            content: const Text(
+              'We found a saved draft for your post. Do you want to continue editing it?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Discard'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Continue'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!mounted) return;
+    if (shouldRestore) {
+      await _restoreDraft();
+    } else {
+      await _clearDraft();
+    }
+  }
+
+  Future<void> _clearDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_draftCaptionKey);
+    await prefs.remove(_draftLocationKey);
+    await prefs.remove(_draftTagsKey);
+    await prefs.remove(_draftImagesKey);
+    await prefs.remove(_draftVideosKey);
+  }
+
   /// Initialize camera
   Future<void> _initializeCamera() async {
     final status = await Permission.camera.request();
-    if (status != PermissionStatus.granted) {
+    if (status != perm.PermissionStatus.granted) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -122,11 +235,12 @@ class _AddPostPageState extends State<AddPostPage> {
     if (result is XFile) {
       setState(() {
         if (result.path.endsWith('.mp4')) {
-          _selectedVideos = [result];
+          _selectedVideos.add(result);
         } else {
           _selectedImages.add(result);
         }
       });
+      _scheduleDraftSave();
     }
   }
 
@@ -147,6 +261,7 @@ class _AddPostPageState extends State<AddPostPage> {
       setState(() {
         _selectedImages.add(photo);
       });
+      _scheduleDraftSave();
       _hideCamera();
     } catch (_) {}
   }
@@ -172,9 +287,10 @@ class _AddPostPageState extends State<AddPostPage> {
     try {
       final XFile video = await _cameraController!.stopVideoRecording();
       setState(() {
-        _selectedVideos = [video];
+        _selectedVideos.add(video);
         _isRecording = false;
       });
+      _scheduleDraftSave();
       _hideCamera();
     } catch (_) {}
   }
@@ -183,8 +299,9 @@ class _AddPostPageState extends State<AddPostPage> {
     final List<XFile>? images = await _picker.pickMultiImage();
     if (images != null && images.isNotEmpty) {
       setState(() {
-        _selectedImages = images;
+        _selectedImages.addAll(images);
       });
+      _scheduleDraftSave();
     }
   }
 
@@ -192,9 +309,162 @@ class _AddPostPageState extends State<AddPostPage> {
     final XFile? video = await _picker.pickVideo(source: ImageSource.gallery);
     if (video != null) {
       setState(() {
-        _selectedVideos = [video];
+        _selectedVideos.add(video);
       });
+      _scheduleDraftSave();
     }
+  }
+
+  Future<void> _fillCurrentLocation() async {
+    final location = loc.Location(); // use alias
+
+    try {
+      // 1. Check service (GPS ON/OFF)
+      bool serviceEnabled = await location.serviceEnabled();
+      if (!serviceEnabled) {
+        serviceEnabled = await location.requestService();
+        if (!serviceEnabled) return;
+      }
+
+      // 2. Request permission (ONLY permission_handler)
+      perm.PermissionStatus status =
+      await perm.Permission.location.request();
+
+      if (!status.isGranted) return;
+
+      // 3. Get location
+      final data = await location.getLocation();
+
+      if (!mounted) return;
+      if (data.latitude == null || data.longitude == null) return;
+
+      setState(() {
+        _locationController.text =
+        '${data.latitude!.toStringAsFixed(5)}, ${data.longitude!.toStringAsFixed(5)}';
+      });
+
+      _scheduleDraftSave();
+    } catch (_) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to get current location right now.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _rotateImageAt(int index) async {
+    if (index < 0 || index >= _selectedImages.length) return;
+    final source = File(_selectedImages[index].path);
+    try {
+      final bytes = await source.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return;
+      final rotated = img.copyRotate(decoded, angle: 90);
+      final tempDir = await getTemporaryDirectory();
+      final outPath =
+          '${tempDir.path}/rotated_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final outFile = File(outPath);
+      await outFile.writeAsBytes(img.encodeJpg(rotated, quality: 92));
+      if (!mounted) return;
+      setState(() {
+        _selectedImages[index] = XFile(outPath);
+      });
+      _scheduleDraftSave();
+    } catch (_) {}
+  }
+
+  Future<void> _cropImageSquareAt(int index) async {
+    if (index < 0 || index >= _selectedImages.length) return;
+    final source = File(_selectedImages[index].path);
+    try {
+      final bytes = await source.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return;
+      final size = math.min(decoded.width, decoded.height);
+      final x = ((decoded.width - size) / 2).round();
+      final y = ((decoded.height - size) / 2).round();
+      final cropped = img.copyCrop(decoded, x: x, y: y, width: size, height: size);
+      final tempDir = await getTemporaryDirectory();
+      final outPath =
+          '${tempDir.path}/cropped_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final outFile = File(outPath);
+      await outFile.writeAsBytes(img.encodeJpg(cropped, quality: 92));
+      if (!mounted) return;
+      setState(() {
+        _selectedImages[index] = XFile(outPath);
+      });
+      _scheduleDraftSave();
+    } catch (_) {}
+  }
+
+  Future<void> _freeformCropImageAt(int index) async {
+    if (index < 0 || index >= _selectedImages.length) return;
+    final sourcePath = _selectedImages[index].path;
+    try {
+      final cropped = await ImageCropper().cropImage(
+        sourcePath: sourcePath,
+        compressFormat: ImageCompressFormat.jpg,
+        compressQuality: 92,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop Image',
+            lockAspectRatio: false,
+            hideBottomControls: false,
+          ),
+          IOSUiSettings(
+            title: 'Crop Image',
+            aspectRatioLockEnabled: false,
+          ),
+        ],
+      );
+
+      if (cropped == null || !mounted) return;
+      setState(() {
+        _selectedImages[index] = XFile(cropped.path);
+      });
+      _scheduleDraftSave();
+    } catch (_) {}
+  }
+
+  Future<void> _openImageEditSheet(int index) async {
+    if (index < 0 || index >= _selectedImages.length) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.rotate_90_degrees_cw_rounded),
+              title: const Text('Rotate 90°'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _rotateImageAt(index);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.crop_square_rounded),
+              title: const Text('Center square crop'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _cropImageSquareAt(index);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.crop_free_rounded),
+              title: const Text('Freeform crop'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _freeformCropImageAt(index);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Parse @mentions from caption and return lowercase usernames
@@ -246,49 +516,16 @@ class _AddPostPageState extends State<AddPostPage> {
           .doc()
           .id;
 
-      List<Map<String, dynamic>> mediaList = [];
-
-      // Upload images to Firebase Storage
-      for (var image in _selectedImages) {
+      final mediaSequence = _combinedMediaItems();
+      final uploadTasks = mediaSequence.map((item) async {
+        final ext = item.isVideo ? 'mp4' : 'jpg';
         final ref = FirebaseStorage.instance
-            .ref('users/$userId/posts/$postId-${DateTime.now().millisecondsSinceEpoch}.jpg');
-
-        await ref.putFile(File(image.path));
-        final imageUrl = await ref.getDownloadURL();
-
-        mediaList.add({
-          'type': 'image',
-          'url': imageUrl,
-        });
-      }
-
-// 🔹 Upload images
-      for (var image in _selectedImages) {
-        final ref = FirebaseStorage.instance
-            .ref('users/$userId/posts/$postId-${DateTime.now().millisecondsSinceEpoch}.jpg');
-
-        await ref.putFile(File(image.path));
-        final imageUrl = await ref.getDownloadURL();
-
-        mediaList.add({
-          'type': 'image',
-          'url': imageUrl,
-        });
-      }
-
-// 🔹 Upload videos  ✅ ADD THIS HERE
-      for (var video in _selectedVideos) {
-        final ref = FirebaseStorage.instance
-            .ref('users/$userId/posts/$postId-${DateTime.now().millisecondsSinceEpoch}.mp4');
-
-        await ref.putFile(File(video.path));
-        final videoUrl = await ref.getDownloadURL();
-
-        mediaList.add({
-          'type': 'video',
-          'url': videoUrl,
-        });
-      }
+            .ref('users/$userId/posts/$postId-${DateTime.now().millisecondsSinceEpoch}.$ext');
+        await ref.putFile(File(item.path));
+        final url = await ref.getDownloadURL();
+        return {'type': item.isVideo ? 'video' : 'image', 'url': url};
+      }).toList(growable: false);
+      final mediaList = await Future.wait(uploadTasks);
 
 
       final mentions = _extractMentions(caption);
@@ -330,6 +567,7 @@ class _AddPostPageState extends State<AddPostPage> {
         _mentionSuggestions = [];
         _showMentionSuggestions = false;
       });
+      await _clearDraft();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -340,6 +578,20 @@ class _AddPostPageState extends State<AddPostPage> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  List<_PreviewMediaItem> _combinedMediaItems() {
+    return [
+      ..._selectedImages.map((x) => _PreviewMediaItem(path: x.path, isVideo: false)),
+      ..._selectedVideos.map((x) => _PreviewMediaItem(path: x.path, isVideo: true)),
+    ];
+  }
+
+  void _applyCombinedMediaItems(List<_PreviewMediaItem> items) {
+    _selectedImages =
+        items.where((m) => !m.isVideo).map((m) => XFile(m.path)).toList(growable: true);
+    _selectedVideos =
+        items.where((m) => m.isVideo).map((m) => XFile(m.path)).toList(growable: true);
   }
 
   // ---- @MENTION LOGIC ----
@@ -922,6 +1174,21 @@ class _AddPostPageState extends State<AddPostPage> {
     );
   }
 
+  Future<void> _openMediaPreview({
+    required XFile file,
+    required bool isVideo,
+    required VoidCallback onRemove,
+  }) async {
+    await showDialog(
+      context: context,
+      builder: (_) => _MediaPreviewDialog(
+        file: file,
+        isVideo: isVideo,
+        onRemove: onRemove,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final textTheme = GoogleFonts.poppinsTextTheme(
@@ -1131,6 +1398,11 @@ class _AddPostPageState extends State<AddPostPage> {
                                 horizontal: 16,
                                 vertical: 16,
                               ),
+                              suffixIcon: IconButton(
+                                tooltip: 'Use current location',
+                                icon: const Icon(Icons.my_location_rounded),
+                                onPressed: _fillCurrentLocation,
+                              ),
                             ),
                           ),
                         ),
@@ -1217,24 +1489,36 @@ class _AddPostPageState extends State<AddPostPage> {
                                         horizontal: 6.0),
                                     child: Stack(
                                       children: [
-                                        Container(
-                                          decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.circular(16),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: Colors.black.withOpacity(0.1),
-                                                blurRadius: 8,
-                                                offset: const Offset(0, 2),
-                                              ),
-                                            ],
+                                        GestureDetector(
+                                          onTap: () => _openMediaPreview(
+                                            file: img,
+                                            isVideo: false,
+                                            onRemove: () {
+                                              setState(() {
+                                                _selectedImages.removeAt(index);
+                                              });
+                                              _scheduleDraftSave();
+                                            },
                                           ),
-                                          child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(16),
-                                            child: Image.file(
-                                              File(img.path),
-                                              width: 110,
-                                              height: 110,
-                                              fit: BoxFit.cover,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              borderRadius: BorderRadius.circular(16),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: Colors.black.withOpacity(0.1),
+                                                  blurRadius: 8,
+                                                  offset: const Offset(0, 2),
+                                                ),
+                                              ],
+                                            ),
+                                            child: ClipRRect(
+                                              borderRadius: BorderRadius.circular(16),
+                                              child: Image.file(
+                                                File(img.path),
+                                                width: 110,
+                                                height: 110,
+                                                fit: BoxFit.cover,
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -1246,6 +1530,7 @@ class _AddPostPageState extends State<AddPostPage> {
                                               setState(() {
                                                 _selectedImages.removeAt(index);
                                               });
+                                              _scheduleDraftSave();
                                             },
                                             child: Container(
                                               padding: const EdgeInsets.all(6),
@@ -1268,6 +1553,25 @@ class _AddPostPageState extends State<AddPostPage> {
                                             ),
                                           ),
                                         ),
+                                        Positioned(
+                                          bottom: 6,
+                                          right: 6,
+                                          child: GestureDetector(
+                                            onTap: () => _openImageEditSheet(index),
+                                            child: Container(
+                                              padding: const EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black.withOpacity(0.65),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const Icon(
+                                                Icons.edit_rounded,
+                                                size: 14,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   );
@@ -1279,8 +1583,7 @@ class _AddPostPageState extends State<AddPostPage> {
                         if (_selectedVideos.isNotEmpty)
                           Container(
                             margin: const EdgeInsets.only(top: 12),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 14),
+                            padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
                                 colors: [
@@ -1294,50 +1597,73 @@ class _AddPostPageState extends State<AddPostPage> {
                                 width: 1.5,
                               ),
                             ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.red.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Icon(
-                                    Icons.videocam_rounded,
-                                    size: 20,
-                                    color: Colors.red,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    '1 video selected',
-                                    style: textTheme.bodyMedium?.copyWith(
-                                      color: Colors.black,
-                                      fontWeight: FontWeight.w600,
+                            child: SizedBox(
+                              height: 110,
+                              child: ListView.builder(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: _selectedVideos.length,
+                                itemBuilder: (context, index) {
+                                  final vid = _selectedVideos[index];
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                                    child: GestureDetector(
+                                      onTap: () => _openMediaPreview(
+                                        file: vid,
+                                        isVideo: true,
+                                        onRemove: () {
+                                          setState(() {
+                                            _selectedVideos.removeAt(index);
+                                          });
+                                          _scheduleDraftSave();
+                                        },
+                                      ),
+                                      child: Stack(
+                                        children: [
+                                          Container(
+                                            width: 110,
+                                            height: 110,
+                                            decoration: BoxDecoration(
+                                              color: Colors.black87,
+                                              borderRadius: BorderRadius.circular(16),
+                                            ),
+                                            child: const Center(
+                                              child: Icon(
+                                                Icons.play_circle_fill_rounded,
+                                                color: Colors.white,
+                                                size: 40,
+                                              ),
+                                            ),
+                                          ),
+                                          Positioned(
+                                            top: 6,
+                                            right: 6,
+                                            child: GestureDetector(
+                                              onTap: () {
+                                                setState(() {
+                                                  _selectedVideos.removeAt(index);
+                                                });
+                                                _scheduleDraftSave();
+                                              },
+                                              child: Container(
+                                                padding: const EdgeInsets.all(6),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.red.withOpacity(0.95),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                  Icons.close_rounded,
+                                                  size: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                ),
-                                GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      _selectedVideos = [];
-                                    });
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.all(6),
-                                    decoration: BoxDecoration(
-                                      color: Colors.red.withOpacity(0.2),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(
-                                      Icons.close_rounded,
-                                      size: 18,
-                                      color: Colors.red,
-                                    ),
-                                  ),
-                                ),
-                              ],
+                                  );
+                                },
+                              ),
                             ),
                           ),
 
@@ -1370,6 +1696,79 @@ class _AddPostPageState extends State<AddPostPage> {
                                     color: Colors.black87,
                                     fontStyle: FontStyle.italic,
                                   ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                        if (_selectedImages.isNotEmpty || _selectedVideos.isNotEmpty)
+                          Container(
+                            margin: const EdgeInsets.only(top: 12),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Reorder media (drag)',
+                                  style: textTheme.labelMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                ReorderableListView.builder(
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  itemCount: _combinedMediaItems().length,
+                                  onReorder: (oldIndex, newIndex) {
+                                    final items = _combinedMediaItems();
+                                    if (newIndex > oldIndex) newIndex -= 1;
+                                    final moved = items.removeAt(oldIndex);
+                                    items.insert(newIndex, moved);
+                                    setState(() {
+                                      _applyCombinedMediaItems(items);
+                                    });
+                                    _scheduleDraftSave();
+                                  },
+                                  itemBuilder: (context, index) {
+                                    final item = _combinedMediaItems()[index];
+                                    return ListTile(
+                                      key: ValueKey('${item.path}_${item.isVideo}_$index'),
+                                      leading: item.isVideo
+                                          ? Container(
+                                              width: 42,
+                                              height: 42,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black87,
+                                                borderRadius: BorderRadius.circular(8),
+                                              ),
+                                              child: const Icon(
+                                                Icons.videocam_rounded,
+                                                color: Colors.white,
+                                              ),
+                                            )
+                                          : ClipRRect(
+                                              borderRadius: BorderRadius.circular(8),
+                                              child: Image.file(
+                                                File(item.path),
+                                                width: 42,
+                                                height: 42,
+                                                fit: BoxFit.cover,
+                                              ),
+                                            ),
+                                      title: Text(item.isVideo ? 'Video' : 'Image'),
+                                      subtitle: Text(
+                                        item.path.split(Platform.pathSeparator).last,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      trailing: const Icon(Icons.drag_handle_rounded),
+                                    );
+                                  },
                                 ),
                               ],
                             ),
@@ -1416,6 +1815,9 @@ class _AddPostPageState extends State<AddPostPage> {
                           child: TextField(
                             controller: _captionController,
                             maxLines: 4,
+                            minLines: 4,
+                            maxLength: 2200,
+                            textCapitalization: TextCapitalization.sentences,
                             style: const TextStyle(color: Colors.black),
                             decoration: InputDecoration(
                               hintText:
@@ -1469,6 +1871,7 @@ class _AddPostPageState extends State<AddPostPage> {
                                 horizontal: 16,
                                 vertical: 16,
                               ),
+                              helperText: 'Use @username to mention people',
                             ),
                             onChanged: _onCaptionChanged,
                           ),
@@ -1528,6 +1931,7 @@ class _AddPostPageState extends State<AddPostPage> {
                                         ? _selectedTags.remove(tag)
                                         : _selectedTags.add(tag);
                                   });
+                                  _scheduleDraftSave();
                                 },
                                 child: AnimatedContainer(
                                   duration: const Duration(milliseconds: 200),
@@ -1593,10 +1997,65 @@ class _AddPostPageState extends State<AddPostPage> {
 
                         const SizedBox(height: 24),
 
-                        // Preview card
-                        _buildPreviewCard(textTheme),
+                        // Separate preview option before posting
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => _PostPreviewPage(
+                                  caption: _captionController.text.trim(),
+                                  location: _locationController.text.trim(),
+                                  tags: List<String>.from(_selectedTags),
+                                  mediaItems: List<_PreviewMediaItem>.from(
+                                    _combinedMediaItems(),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.preview_rounded),
+                          label: const Text('Open full preview'),
+                        ),
 
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 10),
+
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  await _saveDraft();
+                                  if (!mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Draft saved')),
+                                  );
+                                },
+                                icon: const Icon(Icons.save_outlined),
+                                label: const Text('Save draft'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  setState(() {
+                                    _selectedImages = [];
+                                    _selectedVideos = [];
+                                    _captionController.clear();
+                                    _locationController.clear();
+                                    _selectedTags.clear();
+                                  });
+                                  await _clearDraft();
+                                },
+                                icon: const Icon(Icons.restart_alt_rounded),
+                                label: const Text('Clear draft'),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 16),
 
                         // Submit button with improved design
                         Container(
@@ -1679,4 +2138,312 @@ class _AddPostPageState extends State<AddPostPage> {
       ),
     );
   }
+}
+
+class _MediaPreviewDialog extends StatefulWidget {
+  final XFile file;
+  final bool isVideo;
+  final VoidCallback onRemove;
+
+  const _MediaPreviewDialog({
+    required this.file,
+    required this.isVideo,
+    required this.onRemove,
+  });
+
+  @override
+  State<_MediaPreviewDialog> createState() => _MediaPreviewDialogState();
+}
+
+class _MediaPreviewDialogState extends State<_MediaPreviewDialog> {
+  VideoPlayerController? _videoController;
+  Future<void>? _initializeFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isVideo) {
+      _videoController = VideoPlayerController.file(File(widget.file.path));
+      _initializeFuture = _videoController!.initialize();
+      _videoController!.setLooping(true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const Text(
+                    'Media Preview',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: widget.isVideo
+                    ? FutureBuilder<void>(
+                        future: _initializeFuture,
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState != ConnectionState.done) {
+                            return const SizedBox(
+                              height: 240,
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+                          return AspectRatio(
+                            aspectRatio: _videoController!.value.aspectRatio,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                VideoPlayer(_videoController!),
+                                IconButton(
+                                  onPressed: () {
+                                    final c = _videoController!;
+                                    c.value.isPlaying ? c.pause() : c.play();
+                                    setState(() {});
+                                  },
+                                  iconSize: 56,
+                                  icon: Icon(
+                                    _videoController!.value.isPlaying
+                                        ? Icons.pause_circle_filled
+                                        : Icons.play_circle_fill,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      )
+                    : ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(File(widget.file.path), fit: BoxFit.contain),
+                      ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        widget.onRemove();
+                        Navigator.pop(context);
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: const Text('Remove media'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PostPreviewPage extends StatefulWidget {
+  final String caption;
+  final String location;
+  final List<String> tags;
+  final List<_PreviewMediaItem> mediaItems;
+
+  const _PostPreviewPage({
+    required this.caption,
+    required this.location,
+    required this.tags,
+    required this.mediaItems,
+  });
+
+  @override
+  State<_PostPreviewPage> createState() => _PostPreviewPageState();
+}
+
+class _PostPreviewPageState extends State<_PostPreviewPage> {
+  late final List<_PreviewMediaItem> _mediaItems;
+  final PageController _pageController = PageController();
+  int _currentIndex = 0;
+  VideoPlayerController? _videoController;
+  Future<void>? _videoInit;
+
+  @override
+  void initState() {
+    super.initState();
+    _mediaItems = [
+      ...widget.mediaItems,
+    ];
+    _setupVideoForCurrentIndex();
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _setupVideoForCurrentIndex() async {
+    if (_mediaItems.isEmpty) return;
+    final current = _mediaItems[_currentIndex];
+    await _videoController?.dispose();
+    _videoController = null;
+    _videoInit = null;
+
+    if (current.isVideo) {
+      _videoController = VideoPlayerController.file(File(current.path));
+      _videoInit = _videoController!.initialize();
+      _videoController!.setLooping(true);
+      if (mounted) setState(() {});
+    } else {
+      if (mounted) setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasMedia = _mediaItems.isNotEmpty;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Post Preview')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (hasMedia)
+              Column(
+                children: [
+                  SizedBox(
+                    height: 300,
+                    child: PageView.builder(
+                      controller: _pageController,
+                      itemCount: _mediaItems.length,
+                      onPageChanged: (index) {
+                        _currentIndex = index;
+                        _setupVideoForCurrentIndex();
+                      },
+                      itemBuilder: (context, index) {
+                        final media = _mediaItems[index];
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: media.isVideo
+                              ? (index == _currentIndex
+                                  ? FutureBuilder<void>(
+                                      future: _videoInit,
+                                      builder: (context, snapshot) {
+                                        if (snapshot.connectionState !=
+                                            ConnectionState.done) {
+                                          return const Center(
+                                            child: CircularProgressIndicator(),
+                                          );
+                                        }
+                                        return Stack(
+                                          alignment: Alignment.center,
+                                          children: [
+                                            AspectRatio(
+                                              aspectRatio:
+                                                  _videoController!.value.aspectRatio,
+                                              child: VideoPlayer(_videoController!),
+                                            ),
+                                            IconButton(
+                                              onPressed: () {
+                                                final c = _videoController!;
+                                                c.value.isPlaying
+                                                    ? c.pause()
+                                                    : c.play();
+                                                setState(() {});
+                                              },
+                                              iconSize: 58,
+                                              icon: Icon(
+                                                _videoController!.value.isPlaying
+                                                    ? Icons.pause_circle_filled
+                                                    : Icons.play_circle_fill,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    )
+                                  : Container(
+                                      color: Colors.black87,
+                                      child: const Center(
+                                        child: Icon(
+                                          Icons.play_circle_fill_rounded,
+                                          color: Colors.white,
+                                          size: 56,
+                                        ),
+                                      ),
+                                    ))
+                              : Image.file(
+                                  File(media.path),
+                                  fit: BoxFit.cover,
+                                  width: double.infinity,
+                                ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    '${_currentIndex + 1} / ${_mediaItems.length}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 16),
+            Text(
+              widget.location.isEmpty ? 'No location selected' : 'Location: ${widget.location}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 10),
+            Text(widget.caption.isEmpty ? 'No caption' : widget.caption),
+            const SizedBox(height: 10),
+            if (widget.tags.isNotEmpty)
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: widget.tags.map((t) => Chip(label: Text(t))).toList(),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PreviewMediaItem {
+  final String path;
+  final bool isVideo;
+
+  const _PreviewMediaItem({
+    required this.path,
+    required this.isVideo,
+  });
 }
