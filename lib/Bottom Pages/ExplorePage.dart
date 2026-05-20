@@ -3,7 +3,7 @@
 // FIXES IN THIS VERSION:
 // [V1] Grid videos now show play icon + black bg thumbnail (no broken tiles)
 // [V2] VideoPlayerController autoPlay now correctly triggers on page change
-// [V3] _MixedGridLayout removed — replaced with clean 3-col grid (no offset bugs)
+// [V12] Explore masonry: 1px gaps, 2-col phones for wider tiles, aspect from media/decode
 // [V4] Reels use SizedBox.expand + FittedBox(BoxFit.cover) for true fullscreen
 // [V5] Video ratio matches screen — FittedBox wraps SizedBox with video dimensions
 // [V6] PageView gesture conflict resolved (NeverScrollableScrollPhysics on inner)
@@ -19,6 +19,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
@@ -28,6 +29,77 @@ import 'package:halo/widgets/save_button.dart';
 import 'package:halo/services/save_service.dart';
 import 'package:halo/models/media_model.dart';
 import 'package:halo/services/app_cache_manager.dart';
+
+const double _kExploreGridGutter = 1;
+const double _kExploreGridOuterPadH = 2;
+
+/// Masonry column width / tile height (w ÷ h). Clamped so layout never explodes.
+const double _kExploreTileMinAspect = 0.42;
+const double _kExploreTileMaxAspect = 2.05;
+/// Vertical-ish default until real dimensions load (9:16-ish thumbs).
+const double _kExploreFallbackAspectVideo = 0.56;
+/// Slightly portrait default — avoids stiff squares while thumbnails decode.
+const double _kExploreFallbackAspectPhoto = 0.78;
+
+/// Fewer columns on phones so each tile is **wider** (less tall-skinny “rectangle”).
+int exploreMasonryCrossAxisCount(double width) {
+  if (width >= 1100) return 4;
+  if (width >= 560) return 3;
+  return 2;
+}
+
+int? _readPositiveInt(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v > 0 ? v : null;
+  if (v is num) {
+    final i = v.toInt();
+    return i > 0 ? i : null;
+  }
+  final p = int.tryParse(v.toString());
+  return (p != null && p > 0) ? p : null;
+}
+
+/// Reads `width`/`height` or `aspectRatio` + one side from a Firestore media map.
+(int?, int?) _intrinsicSizeFromMediaMap(Map<String, dynamic> map) {
+  int? w = _readPositiveInt(map['width']) ??
+      _readPositiveInt(map['thumbWidth']) ??
+      _readPositiveInt(map['w']);
+  int? h = _readPositiveInt(map['height']) ??
+      _readPositiveInt(map['thumbHeight']) ??
+      _readPositiveInt(map['h']);
+  if (w != null && h != null) return (w, h);
+
+  double? ard;
+  final ar = map['aspectRatio'] ?? map['aspect'];
+  if (ar is num) {
+    ard = ar.toDouble();
+  } else if (ar is String) {
+    ard = double.tryParse(ar);
+  }
+  if (ard != null && ard > 0) {
+    if (w != null) {
+      final hh = (w / ard).round();
+      if (hh > 0) return (w, hh);
+    }
+    if (h != null) {
+      final ww = (h * ard).round();
+      if (ww > 0) return (ww, h);
+    }
+  }
+  return (null, null);
+}
+
+String _exploreGridDisplayUrl(PostModel post) {
+  if (post.isVideo) {
+    if (post.thumbnailUrl.isNotEmpty) return post.thumbnailUrl;
+    final v = post.firstVideoItem;
+    if (v == null) return '';
+    if (v.thumbnail.isNotEmpty) return v.thumbnail;
+    if (v.thumb.isNotEmpty) return v.thumb;
+    return v.url;
+  }
+  return post.firstImageUrl;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -92,6 +164,8 @@ class VideoControllerPool {
         if (!entry.isDisposed) {
           entry.isInitialized = true;
           await entry.controller.setLooping(true);
+          await entry.controller.setVolume(0);
+          await entry.controller.pause();
         }
       } catch (_) {
         _remove(url);
@@ -105,7 +179,7 @@ class VideoControllerPool {
     final ctrl = VideoPlayerController.networkUrl(
       Uri.parse(url),
       videoPlayerOptions: VideoPlayerOptions(
-        mixWithOthers: true,
+        mixWithOthers: false,
         allowBackgroundPlayback: false,
       ),
     );
@@ -124,10 +198,8 @@ class VideoControllerPool {
 
           // ✅ Reels should loop
           await ctrl.setLooping(true);
-
-          // ❌ DO NOT force mute here
-          // Let UI control volume
-          // await ctrl.setVolume(0);  ← REMOVE THIS
+          await ctrl.setVolume(0);
+          await ctrl.pause();
         }
       }
     } catch (e) {
@@ -136,6 +208,15 @@ class VideoControllerPool {
     }
 
     return ctrl;
+  }
+
+  Future<void> _pauseAndMute(VideoPlayerController ctrl) async {
+    try {
+      if (ctrl.value.isInitialized) {
+        await ctrl.setVolume(0);
+        await ctrl.pause();
+      }
+    } catch (_) {}
   }
 
   VideoPlayerController? get(String url) {
@@ -170,11 +251,19 @@ class VideoControllerPool {
     _lruOrder.remove(url);
     if (entry != null && !entry.isDisposed) {
       entry.isDisposed = true;
-      entry.controller.dispose();
+      final ctrl = entry.controller;
+      unawaited(() async {
+        await _pauseAndMute(ctrl);
+        ctrl.dispose();
+      }());
     }
   }
 
   void release(String url) {
+    final entry = _pool[url];
+    if (entry != null && !entry.isDisposed && entry.isInitialized) {
+      unawaited(_pauseAndMute(entry.controller));
+    }
     _touch(url);
   }
 
@@ -228,6 +317,9 @@ class PostMediaItem {
   final String thumbnail;
   final int? trimStartMs;
   final int? trimEndMs;
+  /// From Firestore when present — drives masonry tile height without decoding.
+  final int? intrinsicWidth;
+  final int? intrinsicHeight;
   const PostMediaItem({
     required this.url,
     required this.isVideo,
@@ -238,6 +330,8 @@ class PostMediaItem {
     this.thumbnail = '',
     this.trimStartMs,
     this.trimEndMs,
+    this.intrinsicWidth,
+    this.intrinsicHeight,
   });
 
   String forGrid() {
@@ -368,6 +462,33 @@ class PostModel {
     );
   }
 
+  PostMediaItem? get _exploreCoverMediaItem {
+    if (isVideo) return firstVideoItem;
+    for (final m in mediaItems) {
+      if (!m.isVideo && m.forGrid().isNotEmpty) return m;
+    }
+    return mediaItems.isNotEmpty ? mediaItems.first : null;
+  }
+
+  /// Pixel size of the Explore thumbnail when `width`/`height` exist on media.
+  (int, int)? get exploreCoverPixelSize {
+    final cover = _exploreCoverMediaItem;
+    if (cover == null) return null;
+    final w = cover.intrinsicWidth;
+    final h = cover.intrinsicHeight;
+    if (w == null || h == null || w <= 0 || h <= 0) return null;
+    return (w, h);
+  }
+
+  /// Width ÷ height for the masonry cell, clamped for stable layout.
+  double exploreCoverAspectRatioClamped() {
+    final px = exploreCoverPixelSize;
+    if (px != null) {
+      return (px.$1 / px.$2).clamp(_kExploreTileMinAspect, _kExploreTileMaxAspect).toDouble();
+    }
+    return isVideo ? _kExploreFallbackAspectVideo : _kExploreFallbackAspectPhoto;
+  }
+
   static List<PostMediaItem> _parseMediaItems(Map<String, dynamic> data) {
 
     // ✅ PRIORITY 1: images[] (ALWAYS FIRST)
@@ -381,6 +502,7 @@ class PostModel {
         final type = (map['type'] ?? 'image').toString();
         final url = (map['url'] ?? '').toString();
         final thumb = (map['thumbnail'] ?? '').toString();
+        final dims = _intrinsicSizeFromMediaMap(map);
 
         return PostMediaItem(
           url: url,
@@ -390,6 +512,8 @@ class PostModel {
           full: url,
           videoUrl: type == 'video' ? url : '',
           thumbnail: thumb,
+          intrinsicWidth: dims.$1,
+          intrinsicHeight: dims.$2,
         );
       }).toList();
     }
@@ -960,7 +1084,36 @@ class _ExplorePageState extends State<ExplorePage> {
     ],
   );
 
-  // [V3] Clean 3-column grid — no custom delegate (eliminates offset bugs)
+  Widget _buildShimmerMasonry() {
+    final w = MediaQuery.sizeOf(context).width;
+    final n = exploreMasonryCrossAxisCount(w);
+    return MasonryGridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(
+        _kExploreGridOuterPadH,
+        6,
+        _kExploreGridOuterPadH,
+        10,
+      ),
+      crossAxisCount: n,
+      mainAxisSpacing: _kExploreGridGutter,
+      crossAxisSpacing: _kExploreGridGutter,
+      itemCount: 15,
+      itemBuilder: (_, i) {
+        final a = i % 7 == 0 ? 0.78 : (i % 3 == 1 ? 0.95 : 0.88);
+        return AspectRatio(
+          aspectRatio: a,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: const _ShimmerBox(width: double.infinity, height: double.infinity),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Masonry feed: chronological order, breathing room, 2–4 columns by width.
   Widget _buildGrid() {
     final posts = _filteredPostsCache;
 
@@ -980,34 +1133,38 @@ class _ExplorePageState extends State<ExplorePage> {
     }
 
     if (posts.isEmpty && _isFetching) {
-      return SliverToBoxAdapter(child: _buildShimmerGrid());
+      return SliverToBoxAdapter(child: _buildShimmerMasonry());
     }
 
+    final w = MediaQuery.sizeOf(context).width;
+    final n = exploreMasonryCrossAxisCount(w);
+
     return SliverPadding(
-      padding: const EdgeInsets.all(1),
-      sliver: SliverGrid(
-        delegate: SliverChildBuilderDelegate(
-              (context, index) {
-            if (index >= posts.length) return null;
-            final post = posts[index];
-            // Every 7th item is a hero (double-wide spanning 2 columns)
-            final isHero = (index % 7 == 6);
-            return RepaintBoundary(
-              child: _ExploreGridTile(
-                post: post,
-                isHero: isHero,
-                onTap: () => _onTileTap(post, posts),
-              ),
-            );
-          },
-          childCount: posts.length,
-        ),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 1,
-          mainAxisSpacing: 1,
-          childAspectRatio: 1,
-        ),
+      padding: const EdgeInsets.fromLTRB(
+        _kExploreGridOuterPadH,
+        4,
+        _kExploreGridOuterPadH,
+        12,
+      ),
+      sliver: SliverMasonryGrid.count(
+        crossAxisCount: n,
+        mainAxisSpacing: _kExploreGridGutter,
+        crossAxisSpacing: _kExploreGridGutter,
+        childCount: posts.length,
+        itemBuilder: (context, index) {
+          final post = posts[index];
+          final showCaption = index % 11 == 0 &&
+              post.caption.isNotEmpty &&
+              !post.isVideo;
+          return RepaintBoundary(
+            child: _ExploreGridTile(
+              post: post,
+              crossAxisCount: n,
+              showCaptionOverlay: showCaption,
+              onTap: () => _onTileTap(post, posts),
+            ),
+          );
+        },
       ),
     );
   }
@@ -1091,157 +1248,255 @@ class _ShimmerBoxState extends State<_ShimmerBox> with SingleTickerProviderState
   );
 }
 
-Widget _buildShimmerGrid() => GridView.builder(
-  shrinkWrap: true,
-  physics: const NeverScrollableScrollPhysics(),
-  padding: const EdgeInsets.all(1),
-  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-    crossAxisCount: 3, crossAxisSpacing: 1, mainAxisSpacing: 1, childAspectRatio: 1,
-  ),
-  itemCount: 12,
-  itemBuilder: (_, __) => const _ShimmerBox(width: double.infinity, height: double.infinity),
-);
-
 // ─────────────────────────────────────────────────────────────────────────────
-// [V1] GRID TILE — videos now show correctly with play icon overlay
+// GRID TILE
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _ExploreGridTile extends StatelessWidget {
+class _ExploreGridTile extends StatefulWidget {
   final PostModel post;
-  final bool isHero;
+  final int crossAxisCount;
+  final bool showCaptionOverlay;
   final VoidCallback onTap;
 
-  const _ExploreGridTile(
-      {required this.post, required this.isHero, required this.onTap});
+  const _ExploreGridTile({
+    required this.post,
+    required this.crossAxisCount,
+    required this.showCaptionOverlay,
+    required this.onTap,
+  });
+
+  @override
+  State<_ExploreGridTile> createState() => _ExploreGridTileState();
+}
+
+class _ExploreGridTileState extends State<_ExploreGridTile> {
+  late double _aspect;
+  ImageStream? _imageStream;
+  ImageStreamListener? _imageListener;
+
+  @override
+  void initState() {
+    super.initState();
+    _aspect = widget.post.exploreCoverAspectRatioClamped();
+    if (widget.post.exploreCoverPixelSize == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _resolveAspectFromImage());
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ExploreGridTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.post.id != widget.post.id) {
+      _stopImageListener();
+      _aspect = widget.post.exploreCoverAspectRatioClamped();
+      if (widget.post.exploreCoverPixelSize == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _resolveAspectFromImage());
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _stopImageListener();
+    super.dispose();
+  }
+
+  void _stopImageListener() {
+    final listener = _imageListener;
+    final stream = _imageStream;
+    if (listener != null && stream != null) {
+      stream.removeListener(listener);
+    }
+    _imageListener = null;
+    _imageStream = null;
+  }
+
+  void _resolveAspectFromImage() {
+    if (!mounted) return;
+    if (widget.post.exploreCoverPixelSize != null) return;
+    final url = _exploreGridDisplayUrl(widget.post);
+    if (url.isEmpty) return;
+
+    _stopImageListener();
+
+    final provider = CachedNetworkImageProvider(
+      url,
+      cacheManager: AppCacheManager.media,
+    );
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    _imageStream = stream;
+    final listener = ImageStreamListener(
+      (ImageInfo info, bool _) {
+        final w = info.image.width.toDouble();
+        final h = info.image.height.toDouble();
+        if (w <= 0 || h <= 0 || !mounted) return;
+        final r = (w / h).clamp(_kExploreTileMinAspect, _kExploreTileMaxAspect);
+        _stopImageListener();
+        setState(() => _aspect = r.toDouble());
+      },
+      onError: (_, __) => _stopImageListener(),
+    );
+    _imageListener = listener;
+    stream.addListener(listener);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final dpr = MediaQuery.of(context).devicePixelRatio;
-    final decode = (MediaQuery.of(context).size.width / 3 * dpr).round();
-    final imageUrl = post.firstImageUrl;
-    final videoThumbUrl =
-    post.thumbnailUrl.isNotEmpty
-        ? post.thumbnailUrl
-        : (post.firstVideoItem?.thumbnail ?? '').isNotEmpty
-        ? post.firstVideoItem!.thumbnail
-        : (post.firstVideoItem?.url ?? '');
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final extent = MediaQuery.sizeOf(context).width - _kExploreGridOuterPadH * 2;
+    final colW =
+        (extent - _kExploreGridGutter * (widget.crossAxisCount - 1)) / widget.crossAxisCount;
+    final tileH = colW / _aspect;
+    final decodeW = (colW * dpr).round();
+    final decodeH = (tileH * dpr).round();
+    final imageUrl = widget.post.firstImageUrl;
+    final videoThumbUrl = widget.post.thumbnailUrl.isNotEmpty
+        ? widget.post.thumbnailUrl
+        : (widget.post.firstVideoItem?.thumbnail ?? '').isNotEmpty
+            ? widget.post.firstVideoItem!.thumbnail
+            : (widget.post.firstVideoItem?.url ?? '');
+    const playIconSize = 34.0;
+    const badgeIconSize = 14.0;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: RepaintBoundary(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
+      onTap: widget.onTap,
+      child: AspectRatio(
+        aspectRatio: _aspect,
+        child: RepaintBoundary(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (widget.post.isVideo && videoThumbUrl.isNotEmpty)
+                  CachedNetworkImage(
+                    imageUrl: videoThumbUrl,
+                    cacheManager: AppCacheManager.media,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                    memCacheWidth: decodeW,
+                    memCacheHeight: decodeH,
+                    maxWidthDiskCache: decodeW,
+                    placeholder: (_, __) => ColoredBox(color: Colors.grey.shade900),
+                    errorWidget: (_, __, ___) => ColoredBox(
+                      color: Colors.grey.shade900,
+                      child: Icon(Icons.play_circle_fill,
+                          color: Colors.white70, size: playIconSize),
+                    ),
+                  )
+                else if (widget.post.isVideo)
+                  ColoredBox(
+                    color: const Color(0xFF2D1B69),
+                    child: Center(
+                      child: Icon(Icons.play_circle_fill,
+                          color: Colors.white, size: playIconSize),
+                    ),
+                  )
+                else if (widget.post.hasMedia && imageUrl.isNotEmpty)
+                  CachedNetworkImage(
+                    imageUrl: imageUrl,
+                    cacheManager: AppCacheManager.media,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                    memCacheWidth: decodeW,
+                    memCacheHeight: decodeH,
+                    maxWidthDiskCache: decodeW,
+                    placeholder: (_, __) => ColoredBox(color: Colors.grey.shade200),
+                    errorWidget: (_, __, ___) => ColoredBox(
+                      color: Colors.grey.shade200,
+                      child: const Icon(Icons.image_not_supported, color: Colors.grey),
+                    ),
+                  )
+                else
+                  ColoredBox(color: Colors.grey.shade200),
 
-            // 🎥 VIDEO POST
-            if (post.isVideo && videoThumbUrl.isNotEmpty)
-              CachedNetworkImage(
-                imageUrl: videoThumbUrl,
-                cacheManager: AppCacheManager.media,
-                fit: BoxFit.cover,
-                memCacheWidth: decode,
-                memCacheHeight: decode,
-                maxWidthDiskCache: decode,
-                placeholder: (_, __) => const SizedBox(),
-                errorWidget: (_, __, ___) => Container(
-                  color: Colors.black,
-                  child: const Center(
-                    child: Icon(Icons.play_circle_fill, color: Colors.white, size: 30),
-                  ),
-                ),
-              )
-
-            else if (post.isVideo)
-              Container(
-                color: Color(0xFF2D1B69),
-                child: const Center(
-                  child: Icon(Icons.play_circle_fill, color: Colors.white, size: 30),
-                ),
-              )
-
-            // 🖼️ IMAGE POST (FIXED)
-            else if (post.hasMedia && imageUrl.isNotEmpty)
-                CachedNetworkImage(
-                  imageUrl: imageUrl,
-                  cacheManager: AppCacheManager.media,
-                  fit: BoxFit.cover,
-                  memCacheWidth: decode,
-                  memCacheHeight: decode,
-                  maxWidthDiskCache: decode,
-                  placeholder: (_, __) => const SizedBox(),
-                  errorWidget: (_, __, ___) => Container(
-                    color: Colors.grey.shade200,
-                    child: const Icon(Icons.image_not_supported, color: Colors.grey),
-                  ),
-                )
-
-              else
-                Container(color: Colors.grey.shade200),
-
-            // 🎥 Video badge
-            if (post.isVideo)
-              Positioned(
-                top: 6,
-                right: 6,
-                child: Container(
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(Icons.videocam_rounded,
-                      color: Colors.white, size: 14),
-                ),
-              )
-
-            // 🖼️ Multi-image badge
-            else if (post.mediaItems.length > 1)
-              Positioned(
-                top: 6,
-                right: 6,
-                child: Container(
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(Icons.collections_rounded,
-                      color: Colors.white, size: 14),
-                ),
-              ),
-
-            // 🏷️ Hero caption
-            if (isHero)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withOpacity(0.6),
-                      ],
+                if (widget.post.isVideo)
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.black.withValues(alpha: 0.05),
+                            Colors.black.withValues(alpha: 0.26),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                  child: Text(
-                    post.caption,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
+
+                if (widget.post.isVideo)
+                  Center(
+                    child: Icon(
+                      Icons.play_circle_fill,
+                      color: Colors.white.withValues(alpha: 0.92),
+                      size: playIconSize,
                     ),
                   ),
-                ),
-              ),
-          ],
+
+                if (widget.post.isVideo)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Icon(Icons.videocam_rounded,
+                          color: Colors.white, size: badgeIconSize),
+                    ),
+                  )
+                else if (widget.post.mediaItems.length > 1)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Icon(Icons.collections_rounded,
+                          color: Colors.white, size: badgeIconSize),
+                    ),
+                  ),
+
+                if (widget.showCaptionOverlay)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(10, 24, 10, 10),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: 0.72),
+                          ],
+                        ),
+                      ),
+                      child: Text(
+                        widget.post.caption,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.poppins(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -2758,6 +3013,17 @@ class _VideoCellState extends State<_VideoCell> {
   void dispose() {
     _bindDebounce?.cancel();
     _detachListener();
+    final ctrl = _ctrl;
+    if (ctrl != null) {
+      unawaited(() async {
+        try {
+          if (ctrl.value.isInitialized) {
+            await ctrl.setVolume(0);
+            await ctrl.pause();
+          }
+        } catch (_) {}
+      }());
+    }
     if (widget.url.isNotEmpty) {
       VideoControllerPool.instance.release(widget.url);
     }
