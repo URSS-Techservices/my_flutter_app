@@ -6,6 +6,8 @@
 
 import 'dart:async';
 
+import 'dart:math' as math;
+
 import 'package:better_player/better_player.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -15,8 +17,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'package:halo/models/media_model.dart';
-
 import 'package:halo/services/app_cache_manager.dart';
+import 'package:halo/services/reel_player_lifecycle.dart';
+import 'package:halo/services/video_playback_resolver.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -53,97 +56,7 @@ class UserCache {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// URL HELPERS
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool _isRawUploadUrl(String url) {
-  if (url.isEmpty) return false;
-
-  final lower = url.toLowerCase();
-
-  return lower.contains('videos/raw/') || lower.contains('/raw/');
-}
-
-/// Primary + alternate URLs for playback and retry.
-
-({String primary, String fallback, bool isProcessed}) resolveReelPlaybackUrls(
-  Map<String, dynamic> data,
-  MediaModel firstVideo,
-) {
-  final processed = data['processed'] == true;
-
-  final docMp4 = (data['videoUrl'] as String? ?? '').trim();
-
-  final docHls = (data['hlsUrl'] as String? ?? '').trim();
-
-  final mediaMp4 = firstVideo.videoUrl.trim();
-
-  final mediaHls = firstVideo.hlsUrl.trim();
-
-  String? pickMp4() {
-    for (final u in [docMp4, mediaMp4]) {
-      if (u.isNotEmpty && !u.contains('.m3u8') && !_isRawUploadUrl(u)) {
-        return u;
-      }
-    }
-
-    if (processed) return null;
-
-    for (final u in [docMp4, mediaMp4]) {
-      if (u.isNotEmpty && !u.contains('.m3u8')) return u;
-    }
-
-    return null;
-  }
-
-  String? pickHls() {
-    for (final u in [docHls, mediaHls]) {
-      if (u.isNotEmpty && u.contains('.m3u8')) return u;
-    }
-
-    return null;
-  }
-
-  final mp4 = pickMp4();
-
-  final hls = pickHls();
-
-  // Processed reels: HLS first (720p segments, works across devices).
-  // Unprocessed: MP4-first; HLS/MP4 as retry alternate.
-
-  String primary = '';
-
-  String fallback = '';
-
-  if (processed && hls != null && hls.isNotEmpty) {
-    primary = hls;
-
-    if (mp4 != null && mp4.isNotEmpty) fallback = mp4;
-  } else if (mp4 != null && mp4.isNotEmpty) {
-    primary = mp4;
-
-    if (hls != null && hls.isNotEmpty) fallback = hls;
-  } else if (hls != null && hls.isNotEmpty) {
-    primary = hls;
-  } else {
-    final preferred = firstVideo.preferredVideoUrl.trim();
-
-    if (preferred.isNotEmpty && (!processed || !_isRawUploadUrl(preferred))) {
-      primary = preferred;
-    }
-  }
-
-  if (fallback.isEmpty && primary.isNotEmpty) {
-    if (primary.contains('.m3u8')) {
-      if (mp4 != null && mp4 != primary) fallback = mp4;
-    } else if (hls != null && hls != primary) {
-      fallback = hls;
-    }
-  }
-
-  return (primary: primary, fallback: fallback, isProcessed: processed);
-}
+// URL HELPERS — see [video_playback_resolver.dart] for shared playback selection.
 
 BetterPlayerVideoFormat _formatForUrl(String url) {
   final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
@@ -153,12 +66,283 @@ BetterPlayerVideoFormat _formatForUrl(String url) {
   return BetterPlayerVideoFormat.other;
 }
 
-const BetterPlayerCacheConfiguration _reelCacheConfig =
-    BetterPlayerCacheConfiguration(
-  useCache: false,
-  maxCacheSize: 0,
-  maxCacheFileSize: 0,
-);
+/// Caps poster decode pixels for faster decode / less memory (still sharp on device).
+(int, int) _reelPosterMemCachePixels(MediaQueryData mq, {int maxLongEdge = 960}) {
+  var w = (mq.size.width * mq.devicePixelRatio).round();
+  var h = (mq.size.height * mq.devicePixelRatio).round();
+  final long = math.max(w, h);
+  if (long > maxLongEdge) {
+    final scale = maxLongEdge / long;
+    w = math.max(1, (w * scale).round());
+    h = math.max(1, (h * scale).round());
+  }
+  return (w, h);
+}
+
+BetterPlayerCacheConfiguration getCache(String url) {
+  final isHls = url.contains(".m3u8");
+
+  return BetterPlayerCacheConfiguration(
+    useCache: !isHls,
+    maxCacheSize: 150 * 1024 * 1024,
+    maxCacheFileSize: 64 * 1024 * 1024,
+  );
+}
+
+/// Pooled BetterPlayer instances with generation guards (Phase 4).
+class ReelPlaybackPool {
+  ReelPlaybackPool._();
+
+  static final ReelPlaybackPool instance = ReelPlaybackPool._();
+
+  final Map<String, _PoolSlot> _slots = {};
+  final List<String> _lru = [];
+
+  int get maxSlots => ReelPlatformPolicy.maxPoolSlots;
+
+  BetterPlayerController? get(String reelId) {
+    final slot = _slots[reelId];
+    if (slot == null || slot.disposed) return null;
+    return slot.controller;
+  }
+
+  int? generationFor(String reelId) => _slots[reelId]?.generation;
+
+  bool isSlotAlive(String reelId, int generation) {
+    final slot = _slots[reelId];
+    return slot != null && !slot.disposed && slot.generation == generation;
+  }
+
+  bool isReady(String reelId) {
+    final slot = _slots[reelId];
+    if (slot == null || slot.disposed) return false;
+    try {
+      return slot.initialized && slot.controller.isVideoInitialized() == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void sync(List<ReelData> reels, int centerIndex, {int? alsoWarmIndex}) {
+    final keep = <String>{};
+    final indices = ReelPlatformPolicy.warmIndices(centerIndex, reels.length).toSet();
+    if (alsoWarmIndex != null &&
+        alsoWarmIndex >= 0 &&
+        alsoWarmIndex < reels.length) {
+      indices.add(alsoWarmIndex);
+    }
+
+    for (final i in indices) {
+      final reel = reels[i];
+      keep.add(reel.id);
+      final warmOnly = i != centerIndex;
+      unawaited(_ensureSlot(reel, warmOnly: warmOnly));
+    }
+
+    final remove = _slots.keys.where((id) => !keep.contains(id)).toList();
+    for (final id in remove) {
+      _disposeSlot(id, reason: 'sync_trim');
+    }
+
+    _enforceSlotLimit(keep);
+  }
+
+  void _enforceSlotLimit(Set<String> keep) {
+    while (_slots.length > maxSlots) {
+      String? victim;
+      for (final id in _lru) {
+        if (!keep.contains(id)) {
+          victim = id;
+          break;
+        }
+      }
+      victim ??= _slots.keys.firstWhere(
+        (id) => !keep.contains(id),
+        orElse: () => _lru.isNotEmpty ? _lru.first : _slots.keys.first,
+      );
+      _disposeSlot(victim, reason: 'pool_limit');
+    }
+  }
+
+  Future<void> prepare(ReelData reel, {required bool warmOnly}) =>
+      _ensureSlot(reel, warmOnly: warmOnly);
+
+  Future<void> switchToFallback(
+    String reelId,
+    String fallbackUrl, {
+    required ReelData template,
+  }) async {
+    if (fallbackUrl.isEmpty) return;
+    _disposeSlot(reelId, reason: 'fallback');
+    await _ensureSlot(
+      ReelData(
+        id: template.id,
+        videoUrl: fallbackUrl,
+        fallbackVideoUrl: '',
+        thumbnailUrl: template.thumbnailUrl,
+        caption: template.caption,
+        userId: template.userId,
+        isProcessed: template.isProcessed,
+        isProcessing: template.isProcessing,
+      ),
+      warmOnly: false,
+    );
+  }
+
+  void onMemoryPressure({String? keepReelId}) {
+    ReelLifecycleLog.memoryPressure(keepReelId: keepReelId);
+    final remove = _slots.keys.where((id) => id != keepReelId).toList();
+    for (final id in remove) {
+      _disposeSlot(id, reason: 'memory_pressure');
+    }
+  }
+
+  Future<void> _ensureSlot(ReelData reel, {required bool warmOnly}) async {
+    if (!reel.isPlayable) return;
+
+    final existing = _slots[reel.id];
+    if (existing != null && !existing.disposed) {
+      if (existing.url == reel.videoUrl) {
+        _touch(reel.id);
+        if (warmOnly && ReelPlatformPolicy.allowMutedWarmPlay) {
+          unawaited(_warmBuffer(existing));
+        }
+        return;
+      }
+      _disposeSlot(reel.id, reason: 'url_change');
+    }
+
+    final generation = DateTime.now().microsecondsSinceEpoch;
+    final config = BetterPlayerConfiguration(
+      autoPlay: false,
+      looping: true,
+      fit: BoxFit.cover,
+      aspectRatio: 9 / 16,
+      expandToFill: true,
+      autoDispose: false,
+      handleLifecycle: false,
+      controlsConfiguration: const BetterPlayerControlsConfiguration(
+        showControls: false,
+        showControlsOnInitialize: false,
+      ),
+    );
+
+    final controller = BetterPlayerController(config);
+    final slot = _PoolSlot(
+      reel: reel,
+      controller: controller,
+      url: reel.videoUrl,
+      generation: generation,
+    );
+    _slots[reel.id] = slot;
+    _touch(reel.id);
+    ReelLifecycleLog.bind(reel.id, generation: generation, url: reel.videoUrl);
+
+    final dataSource = BetterPlayerDataSource.network(
+      reel.videoUrl,
+      videoFormat: _formatForUrl(reel.videoUrl),
+      cacheConfiguration: getCache(reel.videoUrl),
+      notificationConfiguration: const BetterPlayerNotificationConfiguration(
+        showNotification: false,
+      ),
+    );
+
+    try {
+      await controller.setupDataSource(dataSource);
+      if (!isSlotAlive(reel.id, generation)) {
+        ReelLifecycleLog.generationMismatch(
+          reel.id,
+          expected: generation,
+          actual: _slots[reel.id]?.generation,
+        );
+        await _safeDisposeController(controller);
+        return;
+      }
+      slot.initialized = true;
+      if (warmOnly && ReelPlatformPolicy.allowMutedWarmPlay) {
+        unawaited(_warmBuffer(slot));
+      }
+    } catch (e) {
+      ReelLifecycleLog.playerException(reel.id, e);
+      if (isSlotAlive(reel.id, generation)) {
+        _disposeSlot(reel.id, reason: 'setup_failed');
+      }
+    }
+  }
+
+  Future<void> _warmBuffer(_PoolSlot slot) async {
+    if (!ReelPlatformPolicy.allowMutedWarmPlay) return;
+    if (slot.disposed || !slot.initialized) return;
+    final c = slot.controller;
+    final gen = slot.generation;
+    try {
+      if (!isSlotAlive(slot.reel.id, gen)) return;
+      if (c.isPlaying() != true) {
+        await c.setVolume(0);
+        if (!isSlotAlive(slot.reel.id, gen)) return;
+        await c.play();
+        if (!isSlotAlive(slot.reel.id, gen)) {
+          await c.pause();
+          await c.setVolume(0);
+        }
+      }
+    } catch (e) {
+      ReelLifecycleLog.playerException(slot.reel.id, e);
+    }
+  }
+
+  void _touch(String reelId) {
+    _lru.remove(reelId);
+    _lru.add(reelId);
+    final slot = _slots[reelId];
+    if (slot != null) slot.lastUsed = DateTime.now();
+  }
+
+  void _disposeSlot(String reelId, {String reason = ''}) {
+    final slot = _slots.remove(reelId);
+    _lru.remove(reelId);
+    if (slot == null) return;
+    slot.disposed = true;
+    ReelLifecycleLog.dispose(reelId, generation: slot.generation, reason: reason);
+    final c = slot.controller;
+    unawaited(_safeDisposeController(c));
+  }
+
+  Future<void> _safeDisposeController(BetterPlayerController c) async {
+    try {
+      if (c.isVideoInitialized() == true) {
+        await c.setVolume(0);
+        await c.pause();
+      }
+      c.dispose(forceDispose: true);
+    } catch (e) {
+      debugPrint('[ReelPlaybackPool] dispose error: $e');
+    }
+  }
+
+  void disposeAll() {
+    for (final id in _slots.keys.toList()) {
+      _disposeSlot(id, reason: 'dispose_all');
+    }
+  }
+}
+
+class _PoolSlot {
+  final ReelData reel;
+  final BetterPlayerController controller;
+  final String url;
+  final int generation;
+  bool initialized = false;
+  bool disposed = false;
+  DateTime lastUsed = DateTime.now();
+
+  _PoolSlot({
+    required this.reel,
+    required this.controller,
+    required this.url,
+    required this.generation,
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -180,6 +364,7 @@ class ReelData {
   final String userId;
 
   final bool isProcessed;
+  final bool isProcessing;
 
   const ReelData({
     required this.id,
@@ -189,9 +374,11 @@ class ReelData {
     required this.caption,
     required this.userId,
     this.isProcessed = false,
+    this.isProcessing = false,
   });
 
   bool get isPlayable => videoUrl.isNotEmpty;
+  bool get showProcessingOverlay => isProcessing && !isProcessed && !isPlayable;
 
   factory ReelData.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
@@ -209,7 +396,10 @@ class ReelData {
       ),
     );
 
-    final urls = resolveReelPlaybackUrls(data, firstVideo);
+    final urls = resolveReelPlayback(
+      postData: data,
+      mediaItem: firstVideo.toVideoMediaMap(),
+    );
 
     final thumbnailUrl = firstVideo.thumbnail.trim().isNotEmpty
         ? firstVideo.thumbnail.trim()
@@ -217,12 +407,13 @@ class ReelData {
 
     return ReelData(
       id: doc.id,
-      videoUrl: urls.primary,
-      fallbackVideoUrl: urls.fallback,
+      videoUrl: urls.primaryUrl,
+      fallbackVideoUrl: urls.fallbackUrl,
       thumbnailUrl: thumbnailUrl,
       caption: (data['caption'] as String? ?? '').trim(),
       userId: (data['userId'] as String? ?? '').trim(),
-      isProcessed: urls.isProcessed,
+      isProcessed: urls.processed,
+      isProcessing: urls.processing,
     );
   }
 }
@@ -259,6 +450,8 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
 
     WidgetsBinding.instance.addObserver(this);
 
+    _pageController.addListener(_onPageScroll);
+
     _loadReels();
   }
 
@@ -266,11 +459,53 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
+    _pageController.removeListener(_onPageScroll);
+
+    ReelPlaybackPool.instance.disposeAll();
+
     _pageController.dispose();
 
     _appPausedNotifier.dispose();
 
     super.dispose();
+  }
+
+  void _onPageScroll() {
+    if (!_pageController.hasClients || _reels.isEmpty) return;
+    final page = _pageController.page;
+    if (page == null) return;
+    final center = page.round().clamp(0, _reels.length - 1);
+    final ahead = ReelPlatformPolicy.scrollAheadIndex(page, _reels.length);
+    ReelPlaybackPool.instance.sync(_reels, center, alsoWarmIndex: ahead);
+  }
+
+  void _syncPlaybackPool(int center) {
+    ReelPlaybackPool.instance.sync(_reels, center);
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    super.didHaveMemoryPressure();
+    if (_reels.isEmpty) return;
+    final keepId = _reels[_currentIndex.clamp(0, _reels.length - 1)].id;
+    ReelPlaybackPool.instance.onMemoryPressure(keepReelId: keepId);
+  }
+
+  void _precacheReelPosters(int center) {
+    if (!mounted) return;
+    final mq = MediaQuery.of(context);
+    final px = _reelPosterMemCachePixels(mq);
+    for (final i in ReelPlatformPolicy.warmIndices(center, _reels.length)) {
+      final url = _reels[i].thumbnailUrl;
+      if (url.isEmpty) continue;
+      unawaited(
+        precacheImage(
+          CachedNetworkImageProvider(url, cacheManager: AppCacheManager.media),
+          context,
+          size: Size(px.$1.toDouble(), px.$2.toDouble()),
+        ),
+      );
+    }
   }
 
   @override
@@ -300,10 +535,19 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      setState(() {
-        _reels = snap.docs.map(ReelData.fromDoc).toList();
+      final reels = snap.docs.map(ReelData.fromDoc).toList();
 
+      if (!mounted) return;
+
+      setState(() {
+        _reels = reels;
         _loading = false;
+      });
+
+      _syncPlaybackPool(0);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _precacheReelPosters(0);
       });
     } catch (e) {
       if (!mounted) return;
@@ -315,7 +559,14 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
   void _onPageChanged(int index) {
     if (!mounted) return;
 
+    _syncPlaybackPool(index);
+    _precacheReelPosters(index);
     setState(() => _currentIndex = index);
+  }
+
+  bool _shouldWarmIndex(int index) {
+    return ReelPlatformPolicy.warmIndices(_currentIndex, _reels.length).contains(index) &&
+        index != _currentIndex;
   }
 
   @override
@@ -338,23 +589,75 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: PageView.builder(
-        controller: _pageController,
-        scrollDirection: Axis.vertical,
-        itemCount: _reels.length,
-        onPageChanged: _onPageChanged,
-        itemBuilder: (context, index) {
-          final reel = _reels[index];
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          PageView.builder(
+            controller: _pageController,
+            scrollDirection: Axis.vertical,
+            itemCount: _reels.length,
+            onPageChanged: _onPageChanged,
+            itemBuilder: (context, index) {
+              final reel = _reels[index];
 
-          return ReelItem(
-            key: ValueKey(reel.id),
-            reel: reel,
-            isActive: index == _currentIndex,
-            shouldPreload: index == _currentIndex + 1,
-            appPausedNotifier: _appPausedNotifier,
-          );
-        },
+              return ReelItem(
+                key: ValueKey(reel.id),
+                reel: reel,
+                isActive: index == _currentIndex,
+                shouldPreload: _shouldWarmIndex(index) && index != _currentIndex,
+                appPausedNotifier: _appPausedNotifier,
+              );
+            },
+          ),
+          if (ReelPlatformPolicy.useAheadWarmSurfaces)
+            _ReelAheadWarmSurfaces(
+              reels: _reels,
+              currentIndex: _currentIndex,
+            ),
+        ],
       ),
+    );
+  }
+}
+
+/// 1×1 surfaces so the pool can buffer the next reels before [PageView] builds them.
+class _ReelAheadWarmSurfaces extends StatelessWidget {
+  final List<ReelData> reels;
+  final int currentIndex;
+
+  const _ReelAheadWarmSurfaces({
+    required this.reels,
+    required this.currentIndex,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final pool = ReelPlaybackPool.instance;
+    final children = <Widget>[];
+
+    for (final delta in [1]) {
+      final i = currentIndex + delta;
+      if (i < 0 || i >= reels.length) continue;
+      final c = pool.get(reels[i].id);
+      if (c == null || !pool.isReady(reels[i].id)) continue;
+      children.add(
+        Positioned(
+          left: 0,
+          top: 0,
+          width: 2,
+          height: 2,
+          child: BetterPlayer(
+            key: ValueKey('reel_warm_${reels[i].id}'),
+            controller: c,
+          ),
+        ),
+      );
+    }
+
+    if (children.isEmpty) return const SizedBox.shrink();
+
+    return IgnorePointer(
+      child: Stack(children: children),
     );
   }
 }
@@ -397,9 +700,11 @@ class _ReelItemState extends State<ReelItem> {
 
   bool _playbackError = false;
 
-  bool _usingFallbackUrl = false;
+  String? _activePlaybackUrl;
 
-  bool _triedFallback = false;
+  final _bindGen = ReelBindGeneration();
+
+  final _fallbackTracker = ReelPlaybackFallbackTracker();
 
   Timer? _playbackDebounce;
 
@@ -413,7 +718,12 @@ class _ReelItemState extends State<ReelItem> {
 
   String _username = '';
 
-  bool get _needsController => widget.isActive || widget.shouldPreload;
+  int? _boundSlotGeneration;
+
+  bool get _needsController =>
+      widget.isActive ||
+      widget.shouldPreload ||
+      ReelPlaybackPool.instance.get(widget.reel.id) != null;
 
   bool get _wantsPlay =>
       widget.isActive && !_userPaused && !widget.appPausedNotifier.value;
@@ -423,9 +733,11 @@ class _ReelItemState extends State<ReelItem> {
     super.initState();
 
     widget.appPausedNotifier.addListener(_onAppPausedChanged);
+    _activePlaybackUrl = widget.reel.videoUrl;
 
     _loadUsername();
 
+    _bindPooledController();
     _ensureControllerLifecycle();
   }
 
@@ -437,92 +749,120 @@ class _ReelItemState extends State<ReelItem> {
     }
   }
 
+  bool _lifecycleAlive(int bindToken) {
+    if (_disposed) return false;
+    if (!_bindGen.matches(bindToken)) return false;
+    final gen = _boundSlotGeneration;
+    if (gen == null) return _controller != null;
+    return ReelPlaybackPool.instance.isSlotAlive(widget.reel.id, gen);
+  }
+
+  void _bindPooledController() {
+    final bindToken = _bindGen.value;
+    final pooled = ReelPlaybackPool.instance.get(widget.reel.id);
+    final slotGen = ReelPlaybackPool.instance.generationFor(widget.reel.id);
+
+    if (pooled == _controller && _boundSlotGeneration == slotGen) {
+      if (pooled != null && ReelPlaybackPool.instance.isReady(widget.reel.id)) {
+        if (mounted) setState(() => _videoInitialized = true);
+      }
+      return;
+    }
+
+    _detachControllerListener();
+    ReelLifecycleLog.unbind(widget.reel.id, generation: _boundSlotGeneration);
+
+    _controller = pooled;
+    _boundSlotGeneration = slotGen;
+    if (pooled != null && slotGen != null) {
+      pooled.addEventsListener(_onPlayerEvent);
+      ReelLifecycleLog.bind(widget.reel.id, generation: slotGen, url: _activePlaybackUrl);
+      _playbackError = false;
+      if (ReelPlaybackPool.instance.isReady(widget.reel.id) && mounted) {
+        setState(() => _videoInitialized = true);
+      }
+    }
+
+    if (!_lifecycleAlive(bindToken)) {
+      ReelLifecycleLog.generationMismatch(widget.reel.id);
+    }
+  }
+
   void _ensureControllerLifecycle() {
     if (_needsController && widget.reel.isPlayable) {
       if (_controller == null) {
-        _createController();
+        unawaited(_createLocalController());
       }
     } else {
-      _disposeController();
+      _releaseLocalBinding();
     }
   }
 
-  void _createController() {
-    if (_disposed || _controller != null) return;
+  ReelData _reelForUrl(String url) => ReelData(
+        id: widget.reel.id,
+        videoUrl: url,
+        fallbackVideoUrl: widget.reel.fallbackVideoUrl,
+        thumbnailUrl: widget.reel.thumbnailUrl,
+        caption: widget.reel.caption,
+        userId: widget.reel.userId,
+        isProcessed: widget.reel.isProcessed,
+        isProcessing: widget.reel.isProcessing,
+      );
 
-    final url =
-        _usingFallbackUrl ? widget.reel.fallbackVideoUrl : widget.reel.videoUrl;
+  Future<void> _createLocalController() async {
+    if (_disposed) return;
 
+    final bindToken = _bindGen.bump();
+    final url = _activePlaybackUrl ?? widget.reel.videoUrl;
     if (url.isEmpty) return;
 
-    _playbackError = false;
+    _fallbackTracker.markAttempted(url);
+    _activePlaybackUrl = url;
 
-    final config = BetterPlayerConfiguration(
-      autoPlay: false,
-      looping: true,
-      fit: BoxFit.cover,
-      aspectRatio: 9 / 16,
-      expandToFill: true,
-      autoDispose: false,
-      handleLifecycle: false,
-      controlsConfiguration: const BetterPlayerControlsConfiguration(
-        showControls: false,
-        showControlsOnInitialize: false,
-      ),
+    await ReelPlaybackPool.instance.prepare(
+      _reelForUrl(url),
+      warmOnly: !widget.isActive,
     );
 
-    final controller = BetterPlayerController(config);
+    if (!_lifecycleAlive(bindToken) || !mounted) return;
 
-    controller.addEventsListener(_onPlayerEvent);
-
-    _controller = controller;
-
-    unawaited(_setupDataSource(controller, url));
+    _bindPooledController();
+    if (_lifecycleAlive(bindToken)) {
+      _schedulePlaybackSync(immediate: widget.isActive);
+    }
   }
 
-  Future<void> _setupDataSource(
-    BetterPlayerController controller,
-    String url,
-  ) async {
-    if (_disposed || _controller != controller) return;
-
-    final dataSource = BetterPlayerDataSource.network(
-      url,
-      videoFormat: _formatForUrl(url),
-      cacheConfiguration: _reelCacheConfig,
-      notificationConfiguration: const BetterPlayerNotificationConfiguration(
-        showNotification: false,
-      ),
-    );
-
-    try {
-      await controller.setupDataSource(dataSource);
-      // Playback starts from the initialized event after the surface mounts.
-    } catch (e) {
-      debugPrint('[ReelItem] setupDataSource error for ${widget.reel.id}: $e');
-
-      if (!_disposed && mounted) {
-        setState(() => _playbackError = true);
-      }
+  void _detachControllerListener() {
+    final c = _controller;
+    if (c != null) {
+      try {
+        c.removeEventsListener(_onPlayerEvent);
+      } catch (_) {}
     }
+  }
+
+  void _markFirstFrame() {
+    if (_firstFrameRendered || !mounted) return;
+    setState(() => _firstFrameRendered = true);
+    ReelLifecycleLog.firstFrameRendered(widget.reel.id);
   }
 
   void _onPlayerEvent(BetterPlayerEvent event) {
     if (_disposed || !mounted) return;
+    final gen = _boundSlotGeneration;
+    if (gen != null && !ReelPlaybackPool.instance.isSlotAlive(widget.reel.id, gen)) {
+      return;
+    }
 
     switch (event.betterPlayerEventType) {
       case BetterPlayerEventType.initialized:
         setState(() => _videoInitialized = true);
-
-        _schedulePlaybackSync();
-
+        if (widget.isActive) _schedulePlaybackSync();
         break;
 
       case BetterPlayerEventType.play:
-        if (widget.isActive && !_firstFrameRendered) {
-          setState(() => _firstFrameRendered = true);
-        }
-
+      case BetterPlayerEventType.progress:
+        if (widget.isActive) _markFirstFrame();
         break;
 
       case BetterPlayerEventType.finished:
@@ -533,13 +873,11 @@ class _ReelItemState extends State<ReelItem> {
         break;
 
       case BetterPlayerEventType.exception:
-        debugPrint(
-          '[ReelItem] Player exception for ${widget.reel.id}: '
-          '${event.parameters}',
+        ReelLifecycleLog.playerException(
+          widget.reel.id,
+          event.parameters,
         );
-
         _handlePlaybackException();
-
         break;
 
       default:
@@ -549,17 +887,20 @@ class _ReelItemState extends State<ReelItem> {
 
   Future<void> _restartLoop() async {
     final c = _controller;
+    final bindToken = _bindGen.value;
+    final gen = _boundSlotGeneration;
 
-    if (_disposed || c == null || !_isVideoReady(c) || !_wantsPlay) return;
+    if (!_wantsPlay || c == null || !_isVideoReady(c)) return;
+    if (gen != null && !ReelPlaybackPool.instance.isSlotAlive(widget.reel.id, gen)) {
+      return;
+    }
 
     try {
       await c.seekTo(Duration.zero);
-
-      if (_disposed || _controller != c || !_wantsPlay) return;
-
+      if (!_lifecycleAlive(bindToken) || !_wantsPlay) return;
       await c.play();
     } catch (e) {
-      debugPrint('[ReelItem] loop restart error for ${widget.reel.id}: $e');
+      ReelLifecycleLog.playerException(widget.reel.id, e);
     }
   }
 
@@ -568,42 +909,62 @@ class _ReelItemState extends State<ReelItem> {
 
     _handlingException = true;
 
-    if (!_triedFallback &&
-        widget.reel.fallbackVideoUrl.isNotEmpty &&
-        !_usingFallbackUrl) {
-      _triedFallback = true;
+    final current = _activePlaybackUrl ?? widget.reel.videoUrl;
+    _fallbackTracker.markAttempted(current);
 
-      _usingFallbackUrl = true;
+    final next = _fallbackTracker.pickNext(
+      primaryUrl: widget.reel.videoUrl,
+      fallbackUrl: widget.reel.fallbackVideoUrl,
+    );
 
-      _disposeController(keepState: true);
+    if (next != null && next != current) {
+      ReelLifecycleLog.fallbackStart(widget.reel.id, next);
+      _releaseLocalBinding(keepState: true);
 
       if (mounted) {
         setState(() {
           _videoInitialized = false;
-
           _firstFrameRendered = false;
-
           _playbackError = false;
         });
 
-        _createController();
+        final bindToken = _bindGen.bump();
+        _activePlaybackUrl = next;
+
+        unawaited(
+          ReelPlaybackPool.instance
+              .switchToFallback(
+                widget.reel.id,
+                next,
+                template: widget.reel,
+              )
+              .then((_) {
+            if (!_lifecycleAlive(bindToken) || !mounted) return;
+            ReelLifecycleLog.fallbackSuccess(widget.reel.id, next);
+            _bindPooledController();
+            _schedulePlaybackSync(immediate: widget.isActive);
+          }),
+        );
       }
 
       _handlingException = false;
-
       return;
     }
 
     _handlingException = false;
-
-    setState(() => _playbackError = true);
+    if (mounted) setState(() => _playbackError = true);
   }
 
   /// Play/pause only after [BetterPlayer] is in the tree (next frame).
-  void _schedulePlaybackSync() {
+  void _schedulePlaybackSync({bool immediate = false}) {
     _playbackDebounce?.cancel();
 
-    _playbackDebounce = Timer(const Duration(milliseconds: 32), () {
+    if (immediate) {
+      if (!_disposed && mounted) unawaited(_applyPlayback());
+      return;
+    }
+
+    _playbackDebounce = Timer(const Duration(milliseconds: 16), () {
       if (!_disposed && mounted) {
         unawaited(_applyPlayback());
       }
@@ -629,30 +990,34 @@ class _ReelItemState extends State<ReelItem> {
   }
 
   Future<void> _applyPlayback() async {
+    final bindToken = _bindGen.value;
     final c = _controller;
+    final gen = _boundSlotGeneration;
 
-    if (_disposed || c == null || !_isVideoReady(c)) return;
+    if (c == null || !_isVideoReady(c)) return;
+    if (gen != null && !ReelPlaybackPool.instance.isSlotAlive(widget.reel.id, gen)) {
+      ReelLifecycleLog.generationMismatch(widget.reel.id, expected: gen);
+      return;
+    }
+    if (!_lifecycleAlive(bindToken)) return;
 
     try {
       if (_wantsPlay) {
+        ReelLifecycleLog.activate(widget.reel.id);
         await c.setVolume(1.0);
-
-        if (_disposed || _controller != c || !_wantsPlay) {
+        if (!_lifecycleAlive(bindToken) || !_wantsPlay) {
           await c.setVolume(0);
-
           await c.pause();
-
           return;
         }
-
         await c.play();
       } else {
+        ReelLifecycleLog.deactivate(widget.reel.id);
         await c.setVolume(0);
-
         await c.pause();
       }
     } catch (e) {
-      debugPrint('[ReelItem] playback apply error for ${widget.reel.id}: $e');
+      ReelLifecycleLog.playerException(widget.reel.id, e);
     }
   }
 
@@ -672,63 +1037,48 @@ class _ReelItemState extends State<ReelItem> {
 
     if (widget.isActive && !oldWidget.isActive) {
       _userPaused = false;
+      _firstFrameRendered = false;
+      ReelLifecycleLog.activate(widget.reel.id);
+    } else if (!widget.isActive && oldWidget.isActive) {
+      ReelLifecycleLog.deactivate(widget.reel.id);
+      _schedulePlaybackSync(immediate: true);
     }
+
+    _bindPooledController();
 
     if (needsNow != neededBefore ||
         oldWidget.reel.videoUrl != widget.reel.videoUrl) {
-      _usingFallbackUrl = false;
-
-      _triedFallback = false;
+      _fallbackTracker.reset();
+      _activePlaybackUrl = null;
 
       if (!needsNow) {
-        _disposeController();
+        _releaseLocalBinding();
       } else if (_controller == null && widget.reel.isPlayable) {
-        _createController();
+        unawaited(_createLocalController());
       }
     }
 
-    if (oldWidget.isActive != widget.isActive ||
+    if (widget.isActive && !oldWidget.isActive) {
+      _schedulePlaybackSync(immediate: true);
+    } else if (oldWidget.isActive != widget.isActive ||
         oldWidget.shouldPreload != widget.shouldPreload ||
         oldWidget.reel.id != widget.reel.id) {
-      _schedulePlaybackSync();
-    }
-
-    if (!widget.isActive && _firstFrameRendered) {
-      setState(() => _firstFrameRendered = false);
+      _schedulePlaybackSync(immediate: widget.isActive);
     }
   }
 
-  void _disposeController({bool keepState = false}) {
+  void _releaseLocalBinding({bool keepState = false}) {
     _playbackDebounce?.cancel();
-
-    final c = _controller;
-
+    ReelLifecycleLog.unbind(widget.reel.id, generation: _boundSlotGeneration);
+    _detachControllerListener();
+    _bindGen.bump();
     _controller = null;
-
-    if (c != null) {
-      c.removeEventsListener(_onPlayerEvent);
-
-      unawaited(() async {
-        try {
-          if (_isVideoReady(c)) {
-            await c.setVolume(0);
-
-            await c.pause();
-          }
-
-          c.dispose(forceDispose: true);
-        } catch (e) {
-          debugPrint('[ReelItem] dispose controller error: $e');
-        }
-      }());
-    }
+    _boundSlotGeneration = null;
 
     if (!keepState && mounted) {
       setState(() {
         _videoInitialized = false;
-
         _firstFrameRendered = false;
-
         _playbackError = false;
       });
     }
@@ -737,13 +1087,11 @@ class _ReelItemState extends State<ReelItem> {
   @override
   void dispose() {
     _disposed = true;
-
     _playbackDebounce?.cancel();
-
     widget.appPausedNotifier.removeListener(_onAppPausedChanged);
-
-    _disposeController(keepState: true);
-
+    ReelLifecycleLog.dispose(widget.reel.id, generation: _boundSlotGeneration, reason: 'item_dispose');
+    _bindGen.bump();
+    _releaseLocalBinding(keepState: true);
     super.dispose();
   }
 
@@ -775,9 +1123,9 @@ class _ReelItemState extends State<ReelItem> {
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
 
-    final pixelWidth = (mq.size.width * mq.devicePixelRatio).round();
-
-    final pixelHeight = (mq.size.height * mq.devicePixelRatio).round();
+    final posterPx = _reelPosterMemCachePixels(mq);
+    final pixelWidth = posterPx.$1;
+    final pixelHeight = posterPx.$2;
 
     final c = _controller;
 
@@ -788,9 +1136,9 @@ class _ReelItemState extends State<ReelItem> {
         _isVideoReady(c) &&
         (c.isBuffering() == true);
 
-    final showThumbnail = !widget.isActive || !_firstFrameRendered;
+    final showThumbnail = !_firstFrameRendered || !_videoInitialized;
 
-    final showProcessing = !widget.reel.isPlayable && !widget.reel.isProcessed;
+    final showProcessing = widget.reel.showProcessingOverlay;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -814,13 +1162,15 @@ class _ReelItemState extends State<ReelItem> {
             else if (showThumbnail)
               const ColoredBox(color: Colors.black),
 
-            // Surface must exist before play() — Offstage keeps preload attached.
+            // Surface must exist before play(); pool prefetches data source early.
             if (_videoInitialized && c != null && _needsController)
-              Offstage(
-                offstage: !widget.isActive,
+              Opacity(
+                opacity: _firstFrameRendered ? 1.0 : 0.0,
                 child: SizedBox.expand(
                   child: BetterPlayer(
-                    key: ValueKey('reel_player_${widget.reel.id}'),
+                    key: ValueKey(
+                      'reel_player_${widget.reel.id}_${_boundSlotGeneration ?? 0}',
+                    ),
                     controller: c,
                   ),
                 ),
@@ -828,9 +1178,23 @@ class _ReelItemState extends State<ReelItem> {
 
             if (showProcessing)
               const Center(
-                child: Text(
-                  'Processing video…',
-                  style: TextStyle(color: Colors.white54, fontSize: 14),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    SizedBox(height: 10),
+                    Text(
+                      'Processing video…',
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                  ],
                 ),
               ),
 
@@ -840,15 +1204,11 @@ class _ReelItemState extends State<ReelItem> {
                   onPressed: () {
                     setState(() {
                       _playbackError = false;
-
-                      _triedFallback = false;
-
-                      _usingFallbackUrl = false;
                     });
-
-                    _disposeController();
-
-                    _createController();
+                    _fallbackTracker.reset();
+                    _activePlaybackUrl = null;
+                    _releaseLocalBinding();
+                    unawaited(_createLocalController());
                   },
                   child: const Text(
                     'Tap to retry',

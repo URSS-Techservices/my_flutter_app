@@ -593,6 +593,8 @@ class _AddPostPageState extends State<AddPostPage>
         _uploadProgress  = 1;
       });
 
+      final hasVideo = mediaList.any((m) => (m['type'] ?? '') == 'video');
+
       await FirebaseFirestore.instance
           .collection('posts')
           .doc(postId)
@@ -610,7 +612,9 @@ class _AddPostPageState extends State<AddPostPage>
         if (legacyFirstImageUrl.isNotEmpty) 'imageUrl': legacyFirstImageUrl,
         if (legacyFirstVideoUrl.isNotEmpty) 'videoUrl': legacyFirstVideoUrl,
         'hasMedia': mediaList.isNotEmpty,
-        'isVideo': mediaList.any((m) => (m['type'] ?? '') == 'video'),
+        'isVideo': hasVideo,
+        'processing': hasVideo,
+        'processed': !hasVideo,
         'likeCount': 0,
         'commentCount': 0,
         // Keep createdAt always non-null for feed queries.
@@ -2050,7 +2054,7 @@ class _PostPreviewPageState extends State<_PostPreviewPage> {
                               : const Icon(Icons.send_rounded,
                               color: Colors.white, size: 18),
                           label: Text(
-                              _isPosting ? 'Posting…' : 'Post to Halo',
+                              _isPosting ? 'Posting…' : 'Post',
                               style: tt.titleSmall?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: Colors.white,

@@ -70,6 +70,10 @@ class MediaModel {
   final String thumbnail;
   final int? trimStartMs;
   final int? trimEndMs;
+  final bool processed;
+  final bool processing;
+  final String rawVideoUrl;
+  final Map<String, dynamic> qualities;
 
   const MediaModel({
     required this.type,
@@ -79,11 +83,29 @@ class MediaModel {
     required this.thumbnail,
     this.trimStartMs,
     this.trimEndMs,
+    this.processed = false,
+    this.processing = false,
+    this.rawVideoUrl = '',
+    this.qualities = const {},
   });
 
   bool get isImage => type == 'image';
   bool get isVideo => type == 'video';
   String get preferredVideoUrl => hlsUrl.isNotEmpty ? hlsUrl : videoUrl;
+
+  Map<String, dynamic> toVideoMediaMap() => {
+        'type': 'video',
+        'videoUrl': videoUrl,
+        'url': videoUrl,
+        'hlsUrl': hlsUrl,
+        'thumbnail': thumbnail,
+        'rawVideoUrl': rawVideoUrl,
+        'processed': processed,
+        'processing': processing,
+        if (qualities.isNotEmpty) 'qualities': qualities,
+        if (trimStartMs != null) 'trimStartMs': trimStartMs,
+        if (trimEndMs != null) 'trimEndMs': trimEndMs,
+      };
 
   factory MediaModel.fromMap(Map<String, dynamic> map) {
     final type = (map['type'] ?? '').toString().toLowerCase();
@@ -93,6 +115,12 @@ class MediaModel {
     final full = (map['full'] ?? '').toString().trim();
     final videoUrl = (map['videoUrl'] ?? url).toString().trim();
     final thumbnail = (map['thumbnail'] ?? map['thumbnailUrl'] ?? thumb).toString().trim();
+    final processed = map['processed'] == true;
+    final processing = map['processing'] == true;
+    final rawVideoUrl = (map['rawVideoUrl'] ?? '').toString().trim();
+    final q = map['qualities'];
+    final qualities =
+        q is Map ? Map<String, dynamic>.from(q) : const <String, dynamic>{};
 
     if (type == 'video' || videoUrl.endsWith('.mp4')) {
       return MediaModel(
@@ -103,6 +131,10 @@ class MediaModel {
         thumbnail: thumbnail,
         trimStartMs: _asIntNullable(map['trimStartMs']),
         trimEndMs: _asIntNullable(map['trimEndMs']),
+        processed: processed,
+        processing: processing,
+        rawVideoUrl: rawVideoUrl,
+        qualities: qualities,
       );
     }
 
@@ -170,15 +202,23 @@ class MediaModel {
     }
 
     if (legacyVideo.isNotEmpty) {
+      final docQ = data['qualities'];
+      final legacyQualities = docQ is Map
+          ? Map<String, dynamic>.from(docQ)
+          : const <String, dynamic>{};
       return [
         MediaModel(
           type: 'video',
           image: const MediaVariant(thumb: '', medium: '', full: ''),
           videoUrl: legacyVideo,
-          hlsUrl: '',
+          hlsUrl: (data['hlsUrl'] ?? '').toString().trim(),
           thumbnail: legacyThumb,
           trimStartMs: _asIntNullable(data['trimStartMs']),
           trimEndMs: _asIntNullable(data['trimEndMs']),
+          processed: data['processed'] == true,
+          processing: data['processing'] == true,
+          rawVideoUrl: (data['rawVideoUrl'] ?? '').toString().trim(),
+          qualities: legacyQualities,
         ),
       ];
     }

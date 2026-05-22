@@ -119,6 +119,10 @@ class UploadService {
       SettableMetadata(
         contentType: 'video/mp4',
         cacheControl: 'public,max-age=31536000,immutable',
+        customMetadata: {
+          'postId': postId,
+          'mediaIndex': index.toString(),
+        },
       ),
     );
     final videoUrl = await videoRef.getDownloadURL();
@@ -140,6 +144,9 @@ class UploadService {
       'type': 'video',
       'videoUrl': videoUrl,
       'url': videoUrl,
+      'rawVideoUrl': videoUrl,
+      'processing': true,
+      'processed': false,
       if (thumbnailUrl.isNotEmpty) 'thumbnail': thumbnailUrl,
       if (thumbnailUrl.isNotEmpty) 'thumbnailUrl': thumbnailUrl,
       if (trimStartMs != null) 'trimStartMs': trimStartMs,

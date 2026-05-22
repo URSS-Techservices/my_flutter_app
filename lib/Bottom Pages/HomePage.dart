@@ -22,6 +22,8 @@ import 'package:halo/screens/profile/profile_router_screen.dart';
 import 'package:halo/interest_selection_page.dart';
 import 'package:halo/services/story_service.dart';
 import 'package:halo/services/app_cache_manager.dart';
+import 'package:halo/services/reel_player_lifecycle.dart';
+import 'package:halo/services/video_playback_resolver.dart';
 import 'package:halo/models/story_model.dart';
 import 'package:halo/models/media_model.dart';
 import 'package:halo/utils/story_ranking.dart';
@@ -363,17 +365,34 @@ class _HomePageState extends State<HomePage> {
       final media = MediaModel.parsePostMedia(data);
       if (media.isNotEmpty) {
         final first = media.first;
-        if (first.isVideo) continue;
+        if (first.isVideo) {
+          final thumb = first.thumbnail.trim().isNotEmpty
+              ? first.thumbnail.trim()
+              : (data['thumbnailUrl'] ?? data['thumbUrl'] ?? '').toString().trim();
+          if (thumb.isNotEmpty) {
+            if (i == 0) {
+              unawaited(_throttledPrecacheImageUrl(thumb));
+            } else {
+              SchedulerBinding.instance.scheduleTask<void>(
+                () async {
+                  await Future<void>.delayed(const Duration(milliseconds: 60));
+                  await _throttledPrecacheImageUrl(thumb);
+                },
+                Priority.idle,
+              );
+            }
+          }
+          continue;
+        }
         final url = first.image.forFeedByDevice(isLargeDevice);
         if (url.isNotEmpty) {
-          final provider = CachedNetworkImageProvider(url);
           if (i == 0) {
-            unawaited(_throttledPrecache(provider));
+            unawaited(_throttledPrecacheImageUrl(url));
           } else {
             SchedulerBinding.instance.scheduleTask<void>(
               () async {
                 await Future<void>.delayed(const Duration(milliseconds: 60));
-                await _throttledPrecache(provider);
+                await _throttledPrecacheImageUrl(url);
               },
               Priority.idle,
             );
@@ -384,16 +403,21 @@ class _HomePageState extends State<HomePage> {
       final images = List<String>.from(data['images'] ?? const []);
       final imageUrl = images.isNotEmpty ? images.first.trim() : '';
       final fallback = (data['imageUrl'] as String?)?.trim() ?? '';
-      final url = imageUrl.isNotEmpty ? imageUrl : fallback;
+      var url = imageUrl.isNotEmpty ? imageUrl : fallback;
+      final lower = url.toLowerCase();
+      if (url.isNotEmpty &&
+          (lower.contains('.mp4') || lower.contains('.m3u8'))) {
+        final th = (data['thumbnailUrl'] ?? data['thumbUrl'] ?? '').toString().trim();
+        if (th.isNotEmpty) url = th;
+      }
       if (url.isNotEmpty) {
-        final provider = CachedNetworkImageProvider(url);
         if (i == 0) {
-          unawaited(_throttledPrecache(provider));
+          unawaited(_throttledPrecacheImageUrl(url));
         } else {
           SchedulerBinding.instance.scheduleTask<void>(
             () async {
               await Future<void>.delayed(const Duration(milliseconds: 60));
-              await _throttledPrecache(provider);
+              await _throttledPrecacheImageUrl(url);
             },
             Priority.idle,
           );
@@ -402,12 +426,22 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _throttledPrecache(ImageProvider provider) async {
-    if (!mounted) return;
+  /// Same [AppCacheManager.media] + decode size as feed [CachedNetworkImage] tiles.
+  Future<void> _throttledPrecacheImageUrl(String url) async {
+    if (!mounted || url.isEmpty) return;
     if (_activeDecodes >= _maxConcurrentDecodes) return;
     _activeDecodes++;
     try {
-      await precacheImage(provider, context);
+      final mq = MediaQuery.of(context);
+      final provider = CachedNetworkImageProvider(
+        url,
+        cacheManager: AppCacheManager.media,
+      );
+      await precacheImage(
+        provider,
+        context,
+        size: Size(mq.size.width, 300),
+      );
     } finally {
       _activeDecodes--;
     }
@@ -1064,8 +1098,10 @@ class _PostImage extends StatelessWidget {
         placeholder: (_, __) => thumbUrl.isNotEmpty
             ? CachedNetworkImage(
           imageUrl: thumbUrl,
+          cacheManager: AppCacheManager.media,
           width: double.infinity,
           fit: BoxFit.fitWidth,
+          memCacheWidth: decodeWidth,
           placeholder: (_, __) => Container(height: 250, color: Colors.grey.shade200),
           errorWidget: (_, __, ___) => Container(height: 250, color: Colors.grey.shade200),
         )
@@ -1614,10 +1650,15 @@ class _DoubleTapHeartOverlayState extends State<_DoubleTapHeartOverlay>
 
 class _PostMedia extends StatelessWidget {
   final List<dynamic> media;
+  final Map<String, dynamic> postData;
   final VoidCallback? onVideoTap;
 
-  const _PostMedia({Key? key, required this.media, this.onVideoTap})
-      : super(key: key);
+  const _PostMedia({
+    Key? key,
+    required this.media,
+    required this.postData,
+    this.onVideoTap,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -1625,11 +1666,6 @@ class _PostMedia extends StatelessWidget {
 
     final first = Map<String, dynamic>.from(media.first as Map);
     final type = (first['type'] ?? 'image').toString();
-    final url = (type == 'video'
-            ? (first['videoUrl'] ?? first['url'] ?? '')
-            : (first['medium'] ?? first['full'] ?? first['thumb'] ?? first['url'] ?? ''))
-        .toString()
-        .trim();
     final thumbUrl = (first['thumb'] ?? first['thumbnail'] ?? first['thumbnailUrl'] ?? '')
         .toString()
         .trim();
@@ -1637,6 +1673,66 @@ class _PostMedia extends StatelessWidget {
     final trimEndMs = _asIntNullable(first['trimEndMs']);
 
     if (type == 'video') {
+      final playback = resolveVideoPlayback(
+        postData: postData,
+        mediaItem: first,
+      );
+      final url = playback.primaryUrl;
+
+      if (playback.showProcessingOverlay) {
+        return SizedBox(
+          height: 300,
+          width: double.infinity,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (thumbUrl.isNotEmpty)
+                CachedNetworkImage(
+                  imageUrl: thumbUrl,
+                  cacheManager: AppCacheManager.media,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                )
+              else
+                ColoredBox(color: Colors.grey.shade900),
+              const ColoredBox(
+                color: Colors.black45,
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white70,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Processing video…',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      if (url.isEmpty) {
+        return Container(
+          height: 300,
+          color: Colors.grey.shade900,
+          child: const Center(
+            child: Icon(Icons.videocam_off, color: Colors.white54, size: 48),
+          ),
+        );
+      }
+
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onVideoTap,
@@ -1645,11 +1741,16 @@ class _PostMedia extends StatelessWidget {
             width: double.infinity,
             child: _NetworkVideo(
               url: url,
+              fallbackUrl: playback.fallbackUrl,
               trimStartMs: trimStartMs,
               trimEndMs: trimEndMs,
             )),
       );
     }
+
+    final url = (first['medium'] ?? first['full'] ?? first['thumb'] ?? first['url'] ?? '')
+        .toString()
+        .trim();
 
     if (url.isEmpty) {
       return Container(
@@ -1668,11 +1769,13 @@ class _PostMedia extends StatelessWidget {
 
 class _NetworkVideo extends StatefulWidget {
   final String url;
+  final String fallbackUrl;
   final int? trimStartMs;
   final int? trimEndMs;
   const _NetworkVideo({
     Key? key,
     required this.url,
+    this.fallbackUrl = '',
     this.trimStartMs,
     this.trimEndMs,
   }) : super(key: key);
@@ -1682,7 +1785,8 @@ class _NetworkVideo extends StatefulWidget {
 }
 
 class _NetworkVideoState extends State<_NetworkVideo> {
-  static const int _maxCachedControllers = 3;
+  static int get _maxCachedControllers =>
+      ReelPlatformPolicy.isIOS ? 2 : 3;
   static final LinkedHashMap<String, VideoPlayerController> _videoCache =
       LinkedHashMap<String, VideoPlayerController>();
   static final Set<String> _visibleKeys = <String>{};
@@ -1696,6 +1800,7 @@ class _NetworkVideoState extends State<_NetworkVideo> {
   Duration? _effectiveTrimEnd;
   Timer? _initDebounce;
   String? _cacheKey;
+  int _initGeneration = 0;
 
   @override
   void initState() {
@@ -1718,17 +1823,26 @@ class _NetworkVideoState extends State<_NetworkVideo> {
   void _initIfNeeded() {
     if (_initStarted || widget.url.trim().isEmpty) return;
     _initStarted = true;
+    final initGen = ++_initGeneration;
     try {
       final key = widget.url.trim();
       _cacheKey = key;
       final cachedController = _videoCache[key];
       final controller = cachedController ??
-          VideoPlayerController.networkUrl(Uri.parse(widget.url));
+          VideoPlayerController.networkUrl(
+            Uri.parse(widget.url),
+            videoPlayerOptions: VideoPlayerOptions(
+              mixWithOthers: false,
+              allowBackgroundPlayback: false,
+            ),
+          );
       _videoCache.remove(key);
       _videoCache[key] = controller;
       _evictIfNeeded(excludeKey: key);
       _controller = controller;
+      ReelLifecycleLog.bind(key, generation: initGen);
       if (controller.value.isInitialized) {
+        if (initGen != _initGeneration || !mounted) return;
         _updateTrimBounds();
         controller
           ..setLooping(false)
@@ -1739,7 +1853,7 @@ class _NetworkVideoState extends State<_NetworkVideo> {
         return;
       }
       controller.initialize().then((_) {
-        if (!mounted) {
+        if (initGen != _initGeneration || !mounted) {
           _pauseAndHide();
           return;
         }
@@ -1752,13 +1866,17 @@ class _NetworkVideoState extends State<_NetworkVideo> {
         }
         setState(() => _initialized = true);
         _syncPlayback();
-      }).catchError((Object _) {
+      }).catchError((Object e) {
+        ReelLifecycleLog.playerException(key, e);
+        if (initGen != _initGeneration) return;
         _removeControllerFromCache();
         _controller = null;
         if (!mounted) return;
         setState(() => _error = true);
       });
-    } catch (_) {
+    } catch (e) {
+      ReelLifecycleLog.playerException(widget.url, e);
+      if (initGen != _initGeneration) return;
       _removeControllerFromCache();
       _controller = null;
       if (mounted) setState(() => _error = true);
@@ -1807,14 +1925,21 @@ class _NetworkVideoState extends State<_NetworkVideo> {
 
   void _syncPlayback() {
     final c = _controller;
-    if (c == null || !c.value.isInitialized) return;
-    if (_isVisible) {
-      if (c.value.position < _effectiveTrimStart) {
-        c.seekTo(_effectiveTrimStart);
+    if (c == null || !c.value.isInitialized || !mounted) return;
+    if (_cacheKey != widget.url.trim()) return;
+    try {
+      if (_isVisible) {
+        ReelLifecycleLog.activate(widget.url);
+        if (c.value.position < _effectiveTrimStart) {
+          c.seekTo(_effectiveTrimStart);
+        }
+        c.play();
+      } else {
+        ReelLifecycleLog.deactivate(widget.url);
+        c.pause();
       }
-      c.play();
-    } else {
-      c.pause();
+    } catch (e) {
+      ReelLifecycleLog.playerException(widget.url, e);
     }
   }
 
@@ -1851,6 +1976,8 @@ class _NetworkVideoState extends State<_NetworkVideo> {
   @override
   void dispose() {
     _initDebounce?.cancel();
+    _initGeneration++;
+    ReelLifecycleLog.dispose(widget.url, reason: 'home_network_video');
     _controller?.removeListener(_enforceTrimWindow);
     _pauseAndHide();
     super.dispose();
@@ -2041,6 +2168,10 @@ class _PostItem extends StatelessWidget {
               'type': m.type,
               'url': m.isVideo ? m.videoUrl : m.image.forFeed(),
               'videoUrl': m.videoUrl,
+              'hlsUrl': m.hlsUrl,
+              'rawVideoUrl': m.rawVideoUrl,
+              'processed': m.processed,
+              'processing': m.processing,
               'thumb': m.image.thumb,
               'medium': m.image.medium,
               'full': m.image.full,
@@ -2127,6 +2258,12 @@ class _PostItem extends StatelessWidget {
               child: mediaForPost.isNotEmpty
                   ? _PostMedia(
                 media: mediaForPost,
+                postData: {
+                  'processed': data['processed'] == true,
+                  'processing': data['processing'] == true,
+                  'videoUrl': videoUrl,
+                  'hlsUrl': (data['hlsUrl'] ?? '').toString(),
+                },
                 onVideoTap: () {
                   Navigator.push(
                     context,
