@@ -28,6 +28,7 @@ import 'package:halo/models/media_model.dart';
 import 'package:halo/services/app_cache_manager.dart';
 import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/video_playback_resolver.dart';
+import 'package:halo/services/blocked_url_memory.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GRID LAYOUT CONFIG
@@ -125,11 +126,26 @@ class VideoControllerPool {
 
   Future<VideoPlayerController?> preload(String url) {
     if (url.isEmpty) return Future.value(null);
+    // Hard short-circuit: if a previous run of the app (or earlier in this
+    // session) crashed ExoPlayer on this exact URL (NO_EXCEEDS_CAPABILITIES,
+    // decoder init failure, 4K HEVC OOM, …), never try again. Without this
+    // check the user can swipe back to a Dolby-Vision iPhone reel and we'll
+    // re-crash the decoder every single time — saturating MediaCodec, eating
+    // surfaces, and stalling the whole feed.
+    if (BlockedUrlMemory.instance.contains(url)) {
+      debugPrint('[EXPLORE_POOL] skip known-bad url ${_shortUrlForLog(url)}');
+      return Future.value(null);
+    }
     return _preloadInflight.putIfAbsent(url, () {
       return _preloadBody(url).whenComplete(() {
         _preloadInflight.remove(url);
       });
     });
+  }
+
+  static String _shortUrlForLog(String url) {
+    if (url.length <= 80) return url;
+    return '${url.substring(0, 77)}…';
   }
 
   Future<VideoPlayerController?> getOrPreload(String url) async {
@@ -178,7 +194,7 @@ class VideoControllerPool {
       ..generation = generation;
     _pool[url] = entry;
     _lruOrder.add(url);
-    ReelLifecycleLog.bind(url, generation: generation);
+    ReelLifecycleLog.bind('explore_cell', generation: generation, url: url);
 
     try {
       if (!entry.isDisposed) {
@@ -192,6 +208,11 @@ class VideoControllerPool {
       }
     } catch (e) {
       ReelLifecycleLog.playerException(url, e);
+      // initialize() failed — almost always because the decoder doesn't
+      // support the source codec (Dolby Vision, HEVC 4K, AV1, …) or the
+      // file is too big to mmap. Remember the URL so the next swipe-back
+      // doesn't re-crash MediaCodec.
+      unawaited(BlockedUrlMemory.instance.add(url));
       _remove(url);
       return null;
     }
@@ -269,25 +290,39 @@ class VideoControllerPool {
 // REEL PREFETCH MANAGER (unchanged)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Instagram-style prefetch: at most **2** videos ahead of the current index.
+/// Any in-flight prefetch is cancelled when the user swipes to a new index so
+/// we never waste bandwidth on a reel the user already passed.
 class ReelPrefetchManager {
   ReelPrefetchManager._();
   static final ReelPrefetchManager instance = ReelPrefetchManager._();
 
+  static const int _kPrefetchAhead = 2;
+
   int _lastIndex = -1;
+  int _generation = 0;
 
   Future<void> prefetchAround(List<String> videoUrls, int currentIndex) async {
     if (currentIndex == _lastIndex) return;
     _lastIndex = currentIndex;
+    final gen = ++_generation;
 
-    final indices = ReelPlatformPolicy.warmIndices(currentIndex, videoUrls.length)
-        .where((idx) => idx != currentIndex);
-
-    for (final idx in indices) {
+    for (int offset = 1; offset <= _kPrefetchAhead; offset++) {
+      final idx = currentIndex + offset;
+      if (idx < 0 || idx >= videoUrls.length) continue;
       final url = videoUrls[idx];
-      if (url.isNotEmpty && !VideoControllerPool.instance.isReady(url)) {
-        unawaited(VideoControllerPool.instance.preload(url));
+      if (url.isEmpty) continue;
+      if (gen != _generation) {
+        debugPrint('[PLAYER_RECYCLED] prefetch_cancelled idx=$idx');
+        return;
       }
+      if (VideoControllerPool.instance.isReady(url)) continue;
+      unawaited(VideoControllerPool.instance.preload(url));
     }
+  }
+
+  void cancel() {
+    _generation++;
   }
 }
 
@@ -344,18 +379,30 @@ class PostMediaItem {
         if (qualities.isNotEmpty) 'qualities': qualities,
         if (trimStartMs != null) 'trimStartMs': trimStartMs,
         if (trimEndMs != null) 'trimEndMs': trimEndMs,
+        if (intrinsicWidth != null) 'intrinsicWidth': intrinsicWidth,
+        if (intrinsicHeight != null) 'intrinsicHeight': intrinsicHeight,
+        if (intrinsicWidth != null) 'sourceWidth': intrinsicWidth,
+        if (intrinsicHeight != null) 'sourceHeight': intrinsicHeight,
       };
 
   String forGrid() {
     if (isVideo) {
       if (thumbnail.isNotEmpty) return thumbnail;
-      if (thumb.isNotEmpty) return thumb;
-      return url;
+      if (thumb.isNotEmpty && !_isVideoFileUrl(thumb)) return thumb;
+      return '';
     }
     if (thumb.isNotEmpty) return thumb;
     if (medium.isNotEmpty) return medium;
     if (full.isNotEmpty) return full;
     return url;
+  }
+
+  static bool _isVideoFileUrl(String u) {
+    final lower = u.toLowerCase();
+    return lower.contains('.mp4') ||
+        lower.contains('.mov') ||
+        lower.contains('.m4v') ||
+        isRawUploadStorageUrl(u);
   }
 
   String forFeed() {
@@ -464,8 +511,22 @@ class PostModel {
   String fallbackUrlFor(PostMediaItem item) =>
       playbackFor(item).fallbackUrl;
 
-  bool get isVideoProcessing =>
-      processing && !processed && isVideo;
+  bool get isVideoProcessing {
+    if (!isVideo) return false;
+    final item = firstVideoItem;
+    if (item != null && playbackFor(item).isPlayable) return false;
+    return processing && !processed;
+  }
+
+  /// Poster for grids / processing overlay (never an .mp4 URL).
+  String posterUrlFor(PostMediaItem item) {
+    if (thumbnailUrl.isNotEmpty) return thumbnailUrl;
+    if (item.thumbnail.isNotEmpty) return item.thumbnail;
+    if (item.thumb.isNotEmpty && !PostMediaItem._isVideoFileUrl(item.thumb)) {
+      return item.thumb;
+    }
+    return '';
+  }
 
   factory PostModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -541,13 +602,15 @@ class PostModel {
         final map = item as Map<String, dynamic>;
         final type  = (map['type'] ?? 'image').toString();
         final url   = (map['url'] ?? '').toString();
-        final thumb = (map['thumbnail'] ?? '').toString();
+        final thumb = (map['thumbnail'] ?? map['thumbnailUrl'] ?? '').toString();
         final dims  = _intrinsicSizeFromMediaMap(map);
         final q = map['qualities'];
         return PostMediaItem(
           url: url,
           isVideo: type == 'video',
-          thumb: thumb.isNotEmpty ? thumb : url,
+          thumb: type == 'video'
+              ? (thumb.isNotEmpty ? thumb : '')
+              : (thumb.isNotEmpty ? thumb : url),
           medium: url,
           full: url,
           videoUrl: type == 'video'
@@ -1538,13 +1601,10 @@ class _InstagramGridTile extends StatelessWidget {
     // Pick the best display URL
     final String displayUrl;
     if (post.isVideo) {
-      displayUrl = post.thumbnailUrl.isNotEmpty
-          ? post.thumbnailUrl
-          : (post.firstVideoItem?.thumbnail.isNotEmpty == true
-          ? post.firstVideoItem!.thumbnail
-          : (post.firstVideoItem?.thumb.isNotEmpty == true
-          ? post.firstVideoItem!.thumb
-          : post.firstVideoUrl));
+      final item = post.firstVideoItem;
+      displayUrl = item != null
+          ? post.posterUrlFor(item)
+          : post.thumbnailUrl;
     } else {
       displayUrl = post.firstImageUrl;
     }
@@ -1965,7 +2025,9 @@ class _MediaCarouselState extends State<_MediaCarousel> {
               final decodeWidth =
               (mq.size.width * mq.devicePixelRatio).round();
               final decodeHeight = (380 * mq.devicePixelRatio).round();
-              final thumbUrl = m.forGrid();
+              final thumbUrl = widget.post.posterUrlFor(m).isNotEmpty
+                  ? widget.post.posterUrlFor(m)
+                  : m.forGrid();
               final fallbackUrl =
               imageUrl.replaceAll('.webp', '.jpg');
 
@@ -1975,9 +2037,7 @@ class _MediaCarouselState extends State<_MediaCarousel> {
                     ? _VideoCell(
                   key: ValueKey('media_${playUrl.isNotEmpty ? playUrl : m.rawVideoUrl}'),
                   url: playUrl,
-                  thumbnailUrl: m.thumbnail.isNotEmpty
-                      ? m.thumbnail
-                      : m.thumb,
+                  thumbnailUrl: thumbUrl,
                   trimStartMs: m.trimStartMs,
                   trimEndMs: m.trimEndMs,
                   fit: BoxFit.cover,
@@ -1986,6 +2046,7 @@ class _MediaCarouselState extends State<_MediaCarousel> {
                   showProcessing: playback.showProcessingOverlay,
                   visibilityKey:
                   'media_${playUrl.hashCode}_$i',
+                  postId: widget.post.id,
                 )
                     : CachedNetworkImage(
                   imageUrl: imageUrl,
@@ -2773,17 +2834,30 @@ class _ReelItemState extends State<_ReelItem> {
             onDoubleTap: _onDoubleTap,
             child: _VideoCell(
               key: ValueKey('reel_${post.id}'),
-              url: post.firstVideoUrl,
-              thumbnailUrl: post.thumbnailUrl,
+              url: firstVideo != null
+                  ? post.playbackUrlFor(firstVideo)
+                  : post.firstVideoUrl,
+              thumbnailUrl: firstVideo != null
+                  ? post.posterUrlFor(firstVideo)
+                  : post.thumbnailUrl,
               trimStartMs: firstVideo?.trimStartMs,
               trimEndMs: firstVideo?.trimEndMs,
               fit: BoxFit.cover,
-              autoPlay: widget.isCurrent && post.firstVideoUrl.isNotEmpty,
-              warmUp: widget.warmUp && post.firstVideoUrl.isNotEmpty,
+              autoPlay: widget.isCurrent &&
+                  (firstVideo != null
+                      ? post.playbackUrlFor(firstVideo).isNotEmpty
+                      : post.firstVideoUrl.isNotEmpty),
+              warmUp: widget.warmUp &&
+                  (firstVideo != null
+                      ? post.playbackUrlFor(firstVideo).isNotEmpty
+                      : post.firstVideoUrl.isNotEmpty),
               muted: widget.muted,
               visibilityKey: 'reel_${post.id}',
               showProgressBar: true,
-              showProcessing: post.isVideoProcessing,
+              showProcessing: firstVideo != null
+                  ? post.playbackFor(firstVideo).showProcessingOverlay
+                  : post.isVideoProcessing,
+              postId: post.id,
             ),
           ),
 
@@ -2939,13 +3013,17 @@ class _ReelAuthorInfoState extends State<_ReelAuthorInfo> {
 
     if (_currentUserId != null &&
         _currentUserId != widget.userId) {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_currentUserId!)
-          .collection('following')
-          .doc(widget.userId)
-          .get();
-      if (mounted) setState(() => _following = doc.exists);
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(_currentUserId!)
+            .collection('following')
+            .doc(widget.userId)
+            .get();
+        if (mounted) setState(() => _following = doc.exists);
+      } catch (_) {
+        // Transient Firestore errors during fast scroll — ignore.
+      }
     }
   }
 
@@ -3218,6 +3296,10 @@ class _VideoCell extends StatefulWidget {
   final String? visibilityKey;
   final bool showProgressBar;
   final bool showProcessing;
+  /// Optional Firestore document id of the post that owns this video. When set,
+  /// a runtime decoder crash on [url] will nudge `reels/<id>` + `posts/<id>` to
+  /// be re-transcoded by the backend.
+  final String? postId;
 
   const _VideoCell({
     Key? key,
@@ -3232,6 +3314,7 @@ class _VideoCell extends StatefulWidget {
     this.visibilityKey,
     this.showProgressBar = false,
     this.showProcessing = false,
+    this.postId,
   }) : super(key: key);
 
   @override
@@ -3248,12 +3331,21 @@ class _VideoCellState extends State<_VideoCell> {
   Duration? _effectiveTrimEnd;
   Timer? _bindDebounce;
   int _bindGeneration = 0;
+  bool _capabilityErrorFlagged = false;
 
   bool get _videoReady =>
       _ctrl != null && _ctrl!.value.isInitialized && !_error;
 
+  /// `true` when the resolver / memory says this URL has historically crashed
+  /// the platform decoder. In that case we don't even hand it to
+  /// VideoPlayerController — just show the poster.
+  bool get _knownBadUrl =>
+      widget.url.isNotEmpty &&
+          BlockedUrlMemory.instance.contains(widget.url);
+
   bool get _shouldBind =>
       widget.url.isNotEmpty &&
+          !_knownBadUrl &&
           (widget.autoPlay || widget.warmUp || _isVisible);
 
   @override
@@ -3332,7 +3424,7 @@ class _VideoCellState extends State<_VideoCell> {
   }
 
   Future<void> _bindToPoolOrPreload() async {
-    if (!mounted || widget.url.isEmpty) return;
+    if (!mounted || widget.url.isEmpty || widget.showProcessing) return;
 
     final url = widget.url;
     final gen = ++_bindGeneration;
@@ -3341,6 +3433,15 @@ class _VideoCellState extends State<_VideoCell> {
         _ctrl != null &&
         _ctrl!.value.isInitialized) {
       _applyMuteAndPlayback();
+      return;
+    }
+
+    // Hard-stop: if we already know this URL crashes ExoPlayer (4K Dolby
+    // Vision, AVC@L5.2, …), don't even attempt to initialize again. The
+    // resolver-level block isn't reachable from the Explore page because
+    // Explore uses raw `playUrl` directly, so we enforce it here.
+    if (BlockedUrlMemory.instance.contains(url)) {
+      if (mounted) setState(() => _error = true);
       return;
     }
 
@@ -3359,7 +3460,10 @@ class _VideoCellState extends State<_VideoCell> {
     }
 
     if (pooled == null) {
-      setState(() => _error = true);
+      // preload() returned null — either the URL is now in BlockedUrlMemory
+      // (just recorded) or the network/decoder failed. Either way, surface
+      // the poster and stop retrying for this widget instance.
+      if (mounted) setState(() => _error = true);
       return;
     }
 
@@ -3402,6 +3506,7 @@ class _VideoCellState extends State<_VideoCell> {
     if (c == null) return;
 
     if (c.value.hasError) {
+      _recordCapabilityFailure(c.value.errorDescription);
       setState(() => _error = true);
       return;
     }
@@ -3416,6 +3521,60 @@ class _VideoCellState extends State<_VideoCell> {
     }
 
     _enforceTrimWindow();
+  }
+
+  /// Persist the failing URL in [BlockedUrlMemory] (so swipe-back never
+  /// re-attempts it) and, when we know the owning post id, ask the backend
+  /// to re-transcode the source via `requestedTranscodeAt`.
+  ///
+  /// We only act on errors that look like decoder-capability failures — the
+  /// only class of failures where re-trying is hopeless without backend
+  /// transcoding. Transient network blips are NOT added to the blocklist.
+  void _recordCapabilityFailure(String? errorDescription) {
+    if (_capabilityErrorFlagged) return;
+    final url = _attachedUrl ?? widget.url;
+    if (url.isEmpty) return;
+
+    final lower = (errorDescription ?? '').toLowerCase();
+    final looksLikeDecoderFailure = lower.contains('exceeds_capabilities') ||
+        lower.contains('decoder init failed') ||
+        lower.contains('decoderinitializationexception') ||
+        lower.contains('mediacodec') ||
+        lower.contains('format_supported=no') ||
+        lower.contains('illegalargumentexception');
+
+    // For very early errors (e.g. controller surfaces `hasError` with no
+    // description because initialize() never produced a format), still treat
+    // as a decoder failure — otherwise the user is stuck on a blank cell.
+    final shouldRecord = looksLikeDecoderFailure || lower.isEmpty;
+    if (!shouldRecord) return;
+
+    _capabilityErrorFlagged = true;
+    debugPrint(
+      '[EXPLORE_DECODER_FAIL] postId=${widget.postId ?? '-'} url=$url '
+      'desc=${errorDescription ?? '(none)'}',
+    );
+    unawaited(BlockedUrlMemory.instance.add(url));
+
+    final postId = widget.postId;
+    if (postId != null && postId.isNotEmpty) {
+      unawaited(_writeBackendRequeueFlag(postId));
+    }
+  }
+
+  static Future<void> _writeBackendRequeueFlag(String postId) async {
+    try {
+      final fs = FirebaseFirestore.instance;
+      final payload = <String, dynamic>{
+        'transcodeError': 'exceeds_capabilities',
+        'legacyRawFallback': true,
+        'requestedTranscodeAt': FieldValue.serverTimestamp(),
+      };
+      await Future.wait([
+        fs.collection('reels').doc(postId).set(payload, SetOptions(merge: true)),
+        fs.collection('posts').doc(postId).set(payload, SetOptions(merge: true)),
+      ]);
+    } catch (_) {/* best-effort */}
   }
 
   void _applyMuteAndPlayback() {
@@ -3434,6 +3593,7 @@ class _VideoCellState extends State<_VideoCell> {
       }
     } catch (e) {
       ReelLifecycleLog.playerException(widget.url, e);
+      _recordCapabilityFailure(e.toString());
     }
   }
 

@@ -3,13 +3,16 @@ import 'dart:async';
 import 'package:halo/Bottom Pages/HomePage.dart';
 import 'package:halo/Category/categorypage.dart';
 import 'package:halo/forgotpasswordpage.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
+import 'package:halo/services/blocked_url_memory.dart';
 import 'package:halo/widgets/google_sign_in_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
@@ -34,6 +37,7 @@ void main() async {
     ),
   );
   unawaited(loadAppThemeMode());
+  unawaited(BlockedUrlMemory.instance.init());
   runApp(const ProviderScope(child: _AppRoot()));
 }
 
@@ -50,9 +54,25 @@ class _AppRootState extends State<_AppRoot> {
   @override
   void initState() {
     super.initState();
-    _firebaseInit = Firebase.initializeApp(
+    _firebaseInit = _initFirebaseAndAppCheck();
+  }
+
+  Future<FirebaseApp> _initFirebaseAndAppCheck() async {
+    final app = await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    try {
+      await FirebaseAppCheck.instance.activate(
+        androidProvider:
+            kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
+        appleProvider:
+            kDebugMode ? AppleProvider.debug : AppleProvider.appAttest,
+      );
+      debugPrint('[AppCheck] activated debug=$kDebugMode');
+    } catch (e) {
+      debugPrint('[AppCheck] activation failed: $e');
+    }
+    return app;
   }
 
   @override

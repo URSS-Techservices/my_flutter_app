@@ -10,35 +10,27 @@ class ReelPlatformPolicy {
 
   static bool get isAndroid => !kIsWeb && Platform.isAndroid;
 
-  /// Max simultaneous pooled players (warm + active).
-  static int get maxPoolSlots => isIOS ? 2 : 3;
+  /// Hard cap: **2 simultaneous ExoPlayer / AVPlayer** instances (current + next).
+  /// Anything above is LRU-evicted by [ReelPlaybackPool] to prevent
+  /// `pipelineFull: too many frames in pipeline` and 256 MB heap OOM.
+  static int get maxPoolSlots => 2;
 
-  /// Reel indices to keep warm relative to [centerIndex].
+  /// Warm window: ONLY `[center, center+1]`. We never warm `center+2`
+  /// (that was the source of pipeline-overload + frame-pump churn).
   static Iterable<int> warmIndices(int centerIndex, int length) sync* {
     if (length <= 0) return;
-    if (isIOS) {
-      for (final i in [centerIndex, centerIndex + 1]) {
-        if (i >= 0 && i < length) yield i;
-      }
-      return;
-    }
-    for (final i in [centerIndex - 1, centerIndex, centerIndex + 1, centerIndex + 2]) {
+    for (final i in [centerIndex, centerIndex + 1]) {
       if (i >= 0 && i < length) yield i;
     }
   }
 
-  /// Extra scroll-ahead index while swiping (Android only).
-  static int? scrollAheadIndex(double page, int length) {
-    if (isIOS || length <= 0) return null;
-    final center = page.round().clamp(0, length - 1);
-    final ahead = page.ceil().clamp(0, length - 1);
-    return ahead != center ? ahead : null;
-  }
+  /// We no longer pre-render an extra scroll-ahead surface — Instagram doesn't.
+  static int? scrollAheadIndex(double page, int length) => null;
 
-  static bool get useAheadWarmSurfaces => !isIOS;
+  static bool get useAheadWarmSurfaces => false;
 
-  /// iOS: data-source prepare only — no muted play on hidden surfaces.
-  static bool get allowMutedWarmPlay => !isIOS;
+  /// Never play muted on a hidden surface — that's where OOM comes from.
+  static bool get allowMutedWarmPlay => false;
 }
 
 /// Debug lifecycle lines for reel stress testing.

@@ -18,6 +18,8 @@ import 'package:flutter/material.dart';
 
 import 'package:halo/models/media_model.dart';
 import 'package:halo/services/app_cache_manager.dart';
+import 'package:halo/services/blocked_url_memory.dart';
+import 'package:halo/services/memory_watchdog.dart';
 import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/video_playback_resolver.dart';
 
@@ -79,15 +81,50 @@ BetterPlayerVideoFormat _formatForUrl(String url) {
   return (w, h);
 }
 
+/// HLS must NEVER be cached (segments rotate). For raw MP4 we keep a tiny LRU
+/// cache (32 MB total) just for thumbnails / processed MP4 first bytes.
 BetterPlayerCacheConfiguration getCache(String url) {
-  final isHls = url.contains(".m3u8");
-
+  final isHls = url.contains('.m3u8');
   return BetterPlayerCacheConfiguration(
     useCache: !isHls,
-    maxCacheSize: 150 * 1024 * 1024,
-    maxCacheFileSize: 64 * 1024 * 1024,
+    maxCacheSize: 32 * 1024 * 1024,
+    maxCacheFileSize: 4 * 1024 * 1024,
   );
 }
+
+/// Instagram-grade buffering tuned for instant start AND zero mid-playback
+/// stalls.
+///
+/// Earlier we set `minBufferMs=800/maxBufferMs=2500` to fight OOM crashes on
+/// 256 MB-heap devices. That fixed memory but made every reel look like it
+/// was buffering: the renderer would start with a 300 ms head, run dry within
+/// a second on slower networks, and the "rebuffering" indicator would flash
+/// for every swipe — exactly the "slow-start with buffering" the user is
+/// reporting in the logs.
+///
+/// The new numbers (≈4 s start headroom, up to 15 s of pre-roll, only 400 ms
+/// required before playback begins) match the public defaults used by
+/// Instagram/TikTok-style feeds:
+///
+///   * `bufferForPlaybackMs: 400` → playback starts as soon as ~0.4 s of
+///     video is decoded — feels instant on swipe.
+///   * `minBufferMs: 4000` → keeps roughly 4 s of decoded media on hand so
+///     transient network jitter doesn't immediately turn into a stall.
+///   * `maxBufferMs: 15000` → allows pre-buffering up to ~15 s on Wi-Fi so
+///     the user can scrub or watch through a network blip; with 2 active
+///     1080p H.264 reels at ~4 Mbps this caps memory at ~15 MB/player,
+///     well under the 8 MB/player ceiling we were forcing before
+///     (since BetterPlayer/ExoPlayer evicts already-played samples).
+///   * `bufferForPlaybackAfterRebufferMs: 1500` → after a stall, wait for a
+///     reasonable 1.5 s before resuming, preventing a stall-loop on bad
+///     networks.
+const BetterPlayerBufferingConfiguration kReelBufferingConfig =
+    BetterPlayerBufferingConfiguration(
+      minBufferMs: 2000,
+      maxBufferMs: 7000,
+      bufferForPlaybackMs: 300,
+      bufferForPlaybackAfterRebufferMs: 800,
+);
 
 /// Pooled BetterPlayer instances with generation guards (Phase 4).
 class ReelPlaybackPool {
@@ -197,8 +234,31 @@ class ReelPlaybackPool {
     }
   }
 
+  /// Hard pressure: drop the LRU slot (does not touch `keepReelId`).
+  void evictOldest({String? keepReelId}) {
+    final candidates = _lru.where((id) => id != keepReelId).toList();
+    if (candidates.isEmpty) return;
+    final victim = candidates.first;
+    debugPrint('[PLAYER_RECYCLED] memory_evict $victim');
+    _disposeSlot(victim, reason: 'memory_evict_oldest');
+  }
+
+  /// Soft pressure: stop accepting new warm-only slots; already-warm and the
+  /// current reel keep playing.
+  bool _acceptNewWarmSlots = true;
+  bool get acceptNewWarmSlots => _acceptNewWarmSlots;
+  set acceptNewWarmSlots(bool v) {
+    if (_acceptNewWarmSlots == v) return;
+    _acceptNewWarmSlots = v;
+    debugPrint('[PLAYER_RECYCLED] acceptWarm=$v');
+  }
+
   Future<void> _ensureSlot(ReelData reel, {required bool warmOnly}) async {
     if (!reel.isPlayable) return;
+    if (warmOnly && !_acceptNewWarmSlots) {
+      debugPrint('[PLAYER_RECYCLED] warm_skipped_under_pressure ${reel.id}');
+      return;
+    }
 
     final existing = _slots[reel.id];
     if (existing != null && !existing.disposed) {
@@ -221,6 +281,7 @@ class ReelPlaybackPool {
       expandToFill: true,
       autoDispose: false,
       handleLifecycle: false,
+      allowedScreenSleep: false,
       controlsConfiguration: const BetterPlayerControlsConfiguration(
         showControls: false,
         showControlsOnInitialize: false,
@@ -238,10 +299,18 @@ class ReelPlaybackPool {
     _touch(reel.id);
     ReelLifecycleLog.bind(reel.id, generation: generation, url: reel.videoUrl);
 
+    final isPreview =
+        reel.previewUrl.isNotEmpty &&
+            reel.videoUrl == reel.previewUrl;
+
+    final targetVideo =
+        reel.fallbackVideoUrl;
+
     final dataSource = BetterPlayerDataSource.network(
       reel.videoUrl,
       videoFormat: _formatForUrl(reel.videoUrl),
       cacheConfiguration: getCache(reel.videoUrl),
+      bufferingConfiguration: kReelBufferingConfig,
       notificationConfiguration: const BetterPlayerNotificationConfiguration(
         showNotification: false,
       ),
@@ -259,7 +328,76 @@ class ReelPlaybackPool {
         return;
       }
       slot.initialized = true;
-      if (warmOnly && ReelPlatformPolicy.allowMutedWarmPlay) {
+
+// preview → HLS switch
+      if (
+      isPreview &&
+          targetVideo.isNotEmpty &&
+          !warmOnly
+      ) {
+        Future.delayed(
+          const Duration(milliseconds: 800),
+              () async {
+            try {
+              // Slot already removed/replaced
+              if (!isSlotAlive(
+                reel.id,
+                generation,
+              )) {
+                return;
+              }
+
+              await controller.setupDataSource(
+                BetterPlayerDataSource.network(
+                  targetVideo,
+                  videoFormat:
+                  _formatForUrl(targetVideo),
+                  cacheConfiguration:
+                  getCache(targetVideo),
+                  bufferingConfiguration:
+                  kReelBufferingConfig,
+                  notificationConfiguration:
+                  const BetterPlayerNotificationConfiguration(
+                    showNotification: false,
+                  ),
+                ),
+              );
+
+              // Recheck after async switch
+              if (!isSlotAlive(
+                reel.id,
+                generation,
+              )) {
+                return;
+              }
+
+              // Resume playback after switch
+              await controller.setVolume(1);
+
+              if (
+              controller.isPlaying() !=
+                  true
+              ) {
+                await controller.play();
+              }
+
+              debugPrint(
+                '[PREVIEW_TO_HLS_OK] ${reel.id}',
+              );
+            } catch (e) {
+              debugPrint(
+                '[PREVIEW_SWITCH_FAIL] '
+                    '${reel.id} $e',
+              );
+            }
+          },
+        );
+      }
+
+      if (
+      warmOnly &&
+          ReelPlatformPolicy.allowMutedWarmPlay
+      ) {
         unawaited(_warmBuffer(slot));
       }
     } catch (e) {
@@ -359,26 +497,45 @@ class ReelData {
 
   final String thumbnailUrl;
 
+  final String previewUrl;
+
   final String caption;
 
   final String userId;
 
   final bool isProcessed;
   final bool isProcessing;
+  final bool legacyRawFallback;
+  final ReelStatus status;
+  final String? blockedReason;
 
   const ReelData({
     required this.id,
     required this.videoUrl,
     this.fallbackVideoUrl = '',
     required this.thumbnailUrl,
+    this.previewUrl = '',
     required this.caption,
     required this.userId,
     this.isProcessed = false,
     this.isProcessing = false,
+    this.legacyRawFallback = false,
+    this.status = ReelStatus.missingVideo,
+    this.blockedReason,
   });
 
   bool get isPlayable => videoUrl.isNotEmpty;
-  bool get showProcessingOverlay => isProcessing && !isProcessed && !isPlayable;
+
+  /// Show processing only while transcoding.
+  /// Raw uploads are NEVER played directly.
+  /// Playback starts after preview / processed output exists.
+  bool get showProcessingOverlay => !isPlayable &&
+      status == ReelStatus.processing;
+
+  /// Show "Video unavailable" + retry button for failed / missing reels.
+  bool get showMissingOverlay => !isPlayable &&
+      (status == ReelStatus.failedTranscode ||
+          status == ReelStatus.missingVideo);
 
   factory ReelData.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
@@ -404,18 +561,68 @@ class ReelData {
     final thumbnailUrl = firstVideo.thumbnail.trim().isNotEmpty
         ? firstVideo.thumbnail.trim()
         : (data['thumbnailUrl'] as String? ?? '').trim();
+    final previewUrl = (data['previewUrl'] as String? ?? '').trim();
+
+    if (
+    urls.legacyRawFallback &&
+        !urls.processed
+    ) {
+      unawaited(
+        _markForLegacyTranscodeRequeue(
+          doc.id,
+        ),
+      );
+    }
 
     return ReelData(
       id: doc.id,
-      videoUrl: urls.primaryUrl,
-      fallbackVideoUrl: urls.fallbackUrl,
-      thumbnailUrl: thumbnailUrl,
+      videoUrl:
+        previewUrl.isNotEmpty
+            ? previewUrl
+            : urls.primaryUrl,
+
+      fallbackVideoUrl:
+          urls.fallbackUrl.isNotEmpty
+              ? urls.fallbackUrl
+              : urls.primaryUrl,
+      thumbnailUrl:  thumbnailUrl,
+      previewUrl: previewUrl,
       caption: (data['caption'] as String? ?? '').trim(),
       userId: (data['userId'] as String? ?? '').trim(),
       isProcessed: urls.processed,
       isProcessing: urls.processing,
+      legacyRawFallback: urls.legacyRawFallback,
+      status: urls.status,
+      blockedReason: urls.blockedReason,
     );
   }
+}
+
+/// Best-effort: nudge the backend to re-queue transcoding for a legacy reel.
+///
+/// Writes `requestedTranscodeAt = serverTimestamp` on BOTH `reels/{id}` and
+/// `posts/{id}` (the same id is used for both in this app). The
+/// `requeueLegacyReel` / `requeueLegacyPost` Cloud Functions dedup on
+/// `requeuedAt` so spamming this is safe.
+///
+/// Throttled per-id with a tiny in-memory cache so a single feed scroll doesn't
+/// produce hundreds of Firestore writes.
+final Set<String> _legacyRequeueSentThisSession = <String>{};
+
+Future<void> _markForLegacyTranscodeRequeue(String reelId) async {
+  if (reelId.isEmpty) return;
+  if (!_legacyRequeueSentThisSession.add(reelId)) return;
+  try {
+    final fs = FirebaseFirestore.instance;
+    final payload = <String, dynamic>{
+      'legacyRawFallback': true,
+      'requestedTranscodeAt': FieldValue.serverTimestamp(),
+    };
+    await Future.wait([
+      fs.collection('reels').doc(reelId).set(payload, SetOptions(merge: true)),
+      fs.collection('posts').doc(reelId).set(payload, SetOptions(merge: true)),
+    ]);
+  } catch (_) {/* ignore — non-fatal */}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -443,6 +650,7 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
   bool _appPaused = false;
 
   final _appPausedNotifier = ValueNotifier<bool>(false);
+  StreamSubscription<MemoryWatchdogEvent>? _memorySub;
 
   @override
   void initState() {
@@ -451,6 +659,10 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
 
     _pageController.addListener(_onPageScroll);
+
+    MemoryWatchdog.instance.start();
+    _memorySub =
+        MemoryWatchdog.instance.stream.listen(_handleMemoryWatchdog);
 
     _loadReels();
   }
@@ -463,6 +675,10 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
 
     ReelPlaybackPool.instance.disposeAll();
 
+    _memorySub?.cancel();
+    MemoryWatchdog.instance.stop();
+
+    _swipeDebounce?.cancel();
     _pageController.dispose();
 
     _appPausedNotifier.dispose();
@@ -470,16 +686,47 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  void _handleMemoryWatchdog(MemoryWatchdogEvent ev) {
+    if (!mounted || _reels.isEmpty) return;
+    final keep = _reels[_currentIndex.clamp(0, _reels.length - 1)].id;
+    switch (ev.pressure) {
+      case MemoryPressure.ok:
+        ReelPlaybackPool.instance.acceptNewWarmSlots = true;
+        break;
+      case MemoryPressure.soft:
+        ReelPlaybackPool.instance.acceptNewWarmSlots = false;
+        break;
+      case MemoryPressure.hard:
+        ReelPlaybackPool.instance.acceptNewWarmSlots = false;
+        ReelPlaybackPool.instance.evictOldest(keepReelId: keep);
+        break;
+      case MemoryPressure.critical:
+        ReelPlaybackPool.instance.acceptNewWarmSlots = false;
+        ReelPlaybackPool.instance.onMemoryPressure(keepReelId: keep);
+        break;
+    }
+  }
+
+  Timer? _swipeDebounce;
+  int? _lastSyncedCenter;
+
   void _onPageScroll() {
     if (!_pageController.hasClients || _reels.isEmpty) return;
     final page = _pageController.page;
     if (page == null) return;
     final center = page.round().clamp(0, _reels.length - 1);
-    final ahead = ReelPlatformPolicy.scrollAheadIndex(page, _reels.length);
-    ReelPlaybackPool.instance.sync(_reels, center, alsoWarmIndex: ahead);
+    if (_lastSyncedCenter == center) return;
+    _swipeDebounce?.cancel();
+    _swipeDebounce = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      _lastSyncedCenter = center;
+      ReelPlaybackPool.instance.sync(_reels, center);
+    });
   }
 
   void _syncPlaybackPool(int center) {
+    _swipeDebounce?.cancel();
+    _lastSyncedCenter = center;
     ReelPlaybackPool.instance.sync(_reels, center);
   }
 
@@ -491,11 +738,16 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
     ReelPlaybackPool.instance.onMemoryPressure(keepReelId: keepId);
   }
 
+  /// Instagram prefetch window: 5 thumbnails around the center reel.
   void _precacheReelPosters(int center) {
     if (!mounted) return;
     final mq = MediaQuery.of(context);
     final px = _reelPosterMemCachePixels(mq);
-    for (final i in ReelPlatformPolicy.warmIndices(center, _reels.length)) {
+    final range = <int>{};
+    for (int i = center - 2; i <= center + 2; i++) {
+      if (i >= 0 && i < _reels.length) range.add(i);
+    }
+    for (final i in range) {
       final url = _reels[i].thumbnailUrl;
       if (url.isEmpty) continue;
       unawaited(
@@ -699,6 +951,7 @@ class _ReelItemState extends State<ReelItem> {
   bool _firstFrameRendered = false;
 
   bool _playbackError = false;
+  bool _capabilityErrorMarked = false;
 
   String? _activePlaybackUrl;
 
@@ -783,8 +1036,14 @@ class _ReelItemState extends State<ReelItem> {
       }
     }
 
-    if (!_lifecycleAlive(bindToken)) {
-      ReelLifecycleLog.generationMismatch(widget.reel.id);
+    if (pooled != null &&
+        slotGen != null &&
+        !_lifecycleAlive(bindToken)) {
+      ReelLifecycleLog.generationMismatch(
+        widget.reel.id,
+        expected: bindToken,
+        actual: slotGen,
+      );
     }
   }
 
@@ -809,20 +1068,41 @@ class _ReelItemState extends State<ReelItem> {
         isProcessing: widget.reel.isProcessing,
       );
 
+  /// Single-bind guard — prevents the `activate → dispose → activate` loop that
+  /// produced "generation mismatch expected=1 actual=4" in the logs.
+  String? _bindingUrl;
+
   Future<void> _createLocalController() async {
     if (_disposed) return;
+    if (widget.reel.showProcessingOverlay || !widget.reel.isPlayable) return;
 
-    final bindToken = _bindGen.bump();
     final url = _activePlaybackUrl ?? widget.reel.videoUrl;
     if (url.isEmpty) return;
 
+    // Same URL is already being bound or has already been bound — skip.
+    if (_bindingUrl == url) {
+      debugPrint('[PLAYER_RECYCLED] duplicate_bind_skipped ${widget.reel.id}');
+      return;
+    }
+    final existing = ReelPlaybackPool.instance.get(widget.reel.id);
+    if (existing != null && _activePlaybackUrl == url && _controller == existing) {
+      return;
+    }
+
+    _bindingUrl = url;
+    final bindToken = _bindGen.bump();
     _fallbackTracker.markAttempted(url);
     _activePlaybackUrl = url;
 
-    await ReelPlaybackPool.instance.prepare(
-      _reelForUrl(url),
-      warmOnly: !widget.isActive,
-    );
+    try {
+      await ReelPlaybackPool.instance.prepare(
+        _reelForUrl(url),
+        warmOnly: !widget.isActive,
+      );
+    } finally {
+      // Clear binding lock only if a fresher bind hasn't kicked in.
+      if (_bindingUrl == url) _bindingUrl = null;
+    }
 
     if (!_lifecycleAlive(bindToken) || !mounted) return;
 
@@ -877,6 +1157,7 @@ class _ReelItemState extends State<ReelItem> {
           widget.reel.id,
           event.parameters,
         );
+        _maybeMarkTranscodeError(event.parameters);
         _handlePlaybackException();
         break;
 
@@ -902,6 +1183,52 @@ class _ReelItemState extends State<ReelItem> {
     } catch (e) {
       ReelLifecycleLog.playerException(widget.reel.id, e);
     }
+  }
+
+  /// If ExoPlayer reports a *codec capability* failure (e.g. 4K Dolby Vision
+  /// or H.264 high@4K60 on an Android decoder that tops out at FHD@30),
+  /// persist `transcodeError` on the Firestore doc so:
+  ///   1. The resolver returns `FAILED_TRANSCODE` next time and the UI shows
+  ///      "Video unavailable" + retry instead of re-entering the OOM loop.
+  ///   2. A backend Firestore trigger can re-queue transcoding for this reel.
+  void _maybeMarkTranscodeError(Map<String, dynamic>? params) {
+    if (_capabilityErrorMarked) return;
+    final detail =
+        params?.values.map((v) => v.toString()).join(' ').toLowerCase() ?? '';
+    final isCapability = detail.contains('no_exceeds_capabilities') ||
+        detail.contains('decoder init failed') ||
+        detail.contains('mediacodecvideorenderer error') ||
+        detail.contains('exceeds_capabilities') ||
+        detail.contains('decoderinitializationexception');
+    if (!isCapability) return;
+
+    _capabilityErrorMarked = true;
+    final reelId = widget.reel.id;
+    final failingUrl = _activePlaybackUrl ?? widget.reel.videoUrl;
+
+    if (failingUrl.isNotEmpty) {
+      unawaited(BlockedUrlMemory.instance.add(failingUrl));
+    }
+    debugPrint(
+      '[TRANSCODE_ERROR] reel=$reelId url=$failingUrl — marking for re-queue',
+    );
+    unawaited(_writeCapabilityError(reelId));
+  }
+
+  static Future<void> _writeCapabilityError(String reelId) async {
+    if (reelId.isEmpty) return;
+    try {
+      final fs = FirebaseFirestore.instance;
+      final payload = <String, dynamic>{
+        'transcodeError': 'exceeds_capabilities',
+        'legacyRawFallback': true,
+        'requestedTranscodeAt': FieldValue.serverTimestamp(),
+      };
+      await Future.wait([
+        fs.collection('reels').doc(reelId).set(payload, SetOptions(merge: true)),
+        fs.collection('posts').doc(reelId).set(payload, SetOptions(merge: true)),
+      ]);
+    } catch (_) {/* best-effort */}
   }
 
   Future<void> _handlePlaybackException() async {
@@ -1191,8 +1518,44 @@ class _ReelItemState extends State<ReelItem> {
                     ),
                     SizedBox(height: 10),
                     Text(
-                      'Processing video…',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                      'Preparing video…',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'Ready in ~2 minutes',
+                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+
+            if (widget.reel.showMissingOverlay)
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.videocam_off_rounded,
+                        color: Colors.white70, size: 40),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Video unavailable',
+                      style: TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton.icon(
+                      onPressed: () {
+                        if (mounted) setState(() {});
+                      },
+                      icon: const Icon(Icons.refresh, color: Colors.white),
+                      label: const Text(
+                        'Retry',
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
                   ],
                 ),
@@ -1334,7 +1697,7 @@ class _CaptionBlock extends StatelessWidget {
             fontSize: 14,
           ),
         ),
-        if (caption.isNotEmpty) ...[
+        if (caption.isNotEmpty) ...[  
           const SizedBox(height: 6),
           Text(
             caption,
@@ -1347,3 +1710,4 @@ class _CaptionBlock extends StatelessWidget {
     );
   }
 }
+

@@ -59,7 +59,7 @@ class AddPostPage extends StatefulWidget {
 
 class _AddPostPageState extends State<AddPostPage>
     with SingleTickerProviderStateMixin {
-  static const int _maxMediaItems = 6;
+  static const int _maxMediaItems = 4;
 
   // Controllers
   final _captionCtrl       = TextEditingController();

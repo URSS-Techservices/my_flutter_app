@@ -35,7 +35,9 @@ Reels: `videos/processed/{reelId}/` (same structure).
 | `qualities` | `{ "1080": url, "720": url, "480": url, "360": url }` |
 | `media[].hlsUrl` / `qualities` | Same per video item |
 
-Legacy posts with `hls/playlist.m3u8` or `optimized.mp4` still play via the client resolver.
+Client rejects legacy `index.m3u8` / `hls/playlist.m3u8` (403 on untokenized segments). Uses `master.m3u8` or MP4 fallback.
+
+After transcode, Cloud Function validates every `.ts` URL in variant playlists returns HTTP 200.
 
 ## FFmpeg (per tier)
 

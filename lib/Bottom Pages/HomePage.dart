@@ -1666,9 +1666,12 @@ class _PostMedia extends StatelessWidget {
 
     final first = Map<String, dynamic>.from(media.first as Map);
     final type = (first['type'] ?? 'image').toString();
-    final thumbUrl = (first['thumb'] ?? first['thumbnail'] ?? first['thumbnailUrl'] ?? '')
+    var thumbUrl = (first['thumb'] ?? first['thumbnail'] ?? first['thumbnailUrl'] ?? '')
         .toString()
         .trim();
+    if (thumbUrl.contains('.mp4') || isRawUploadStorageUrl(thumbUrl)) {
+      thumbUrl = (postData['thumbnailUrl'] ?? '').toString().trim();
+    }
     final trimStartMs = _asIntNullable(first['trimStartMs']);
     final trimEndMs = _asIntNullable(first['trimEndMs']);
 
@@ -1679,7 +1682,7 @@ class _PostMedia extends StatelessWidget {
       );
       final url = playback.primaryUrl;
 
-      if (playback.showProcessingOverlay) {
+      if (playback.showProcessingOverlay || url.isEmpty) {
         return SizedBox(
           height: 300,
           width: double.infinity,
@@ -1822,6 +1825,9 @@ class _NetworkVideoState extends State<_NetworkVideo> {
 
   void _initIfNeeded() {
     if (_initStarted || widget.url.trim().isEmpty) return;
+    if (shouldBlockPlaybackUrl(widget.url.trim(), postData: const {})) {
+      return;
+    }
     _initStarted = true;
     final initGen = ++_initGeneration;
     try {
