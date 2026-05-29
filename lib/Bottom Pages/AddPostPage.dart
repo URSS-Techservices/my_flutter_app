@@ -15,6 +15,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:http/http.dart' as http;
 import 'package:halo/services/upload_service.dart';
+import 'package:halo/services/video_upload_policy.dart';
 import 'video_quick_edit_page.dart';
 import 'video_thumbnail_picker.dart';
 
@@ -233,6 +234,8 @@ class _AddPostPageState extends State<AddPostPage>
     // ✅ Important null check
     if (edited == null || !mounted) return;
 
+    if (!await _ensureVideoAllowed(edited.file)) return;
+
     // STEP 3: Open thumbnail picker (AFTER edited)
     final thumbBytes = await Navigator.push<Uint8List>(
       context,
@@ -276,6 +279,7 @@ class _AddPostPageState extends State<AddPostPage>
         ),
       );
       if (edited == null || !mounted) return;
+      if (!await _ensureVideoAllowed(edited.file)) return;
       setState(() => _media.add(
             MediaItem(
               file: XFile(edited.file.path),
@@ -632,6 +636,9 @@ class _AddPostPageState extends State<AddPostPage>
       _showSnack('Post shared successfully!');
       _reset();
       Navigator.of(context).popUntil((r) => r.isFirst);
+    } on VideoUploadRejectedException catch (e) {
+      if (!mounted) return;
+      _showSnack(e.rejection.userMessage);
     } catch (e) {
       if (!mounted) return;
       _showSnack('Upload failed: $e');
@@ -660,6 +667,14 @@ class _AddPostPageState extends State<AddPostPage>
     if (!mounted) return;
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Reject unsupported videos before thumbnail picker / upload.
+  Future<bool> _ensureVideoAllowed(File videoFile) async {
+    final rejection = await VideoUploadPolicy.validateFile(videoFile);
+    if (rejection == null) return true;
+    _showSnack(rejection.userMessage);
+    return false;
   }
 
   Future<void> _runPostsBackfill() async {
@@ -897,8 +912,11 @@ class _AddPostPageState extends State<AddPostPage>
         : _mediaTile(Icons.camera_alt_rounded, 'Camera', kSecondaryColor,
         _isCamReady ? _openCamera : null),
     const SizedBox(width: 12),
-    _mediaTile(Icons.videocam_rounded, 'Video',
-        const Color(0xFF2E7D32), _pickVideo),
+    Tooltip(
+      message: 'Supported: ${VideoUploadLimits.supportedSummary}',
+      child: _mediaTile(Icons.videocam_rounded, 'Video',
+          const Color(0xFF2E7D32), _pickVideo),
+    ),
   ]);
 
   Widget _mediaTile(

@@ -29,6 +29,11 @@ import 'package:halo/services/app_cache_manager.dart';
 import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/video_playback_resolver.dart';
 import 'package:halo/services/blocked_url_memory.dart';
+import 'package:halo/services/reel_cache_policy.dart';
+import 'package:halo/services/reel_streaming_coordinator.dart';
+import 'package:halo/services/video_migration_service.dart';
+import 'package:halo/services/app_logger.dart';
+import 'package:halo/services/perf_session_log.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GRID LAYOUT CONFIG
@@ -119,13 +124,33 @@ class VideoControllerPool {
   VideoControllerPool._();
   static final VideoControllerPool instance = VideoControllerPool._();
 
-  static int get _maxPoolSize => ReelPlatformPolicy.isIOS ? 2 : 4;
+  static int get _maxPoolSize => ReelPlatformPolicy.maxPoolSlots;
   final Map<String, _PooledController> _pool = {};
   final List<String> _lruOrder = [];
   final Map<String, Future<VideoPlayerController?>> _preloadInflight = {};
 
+  /// Set by [VideoMemoryBridge] when RSS crosses soft threshold.
+  bool pauseNewPreloads = false;
+
+  int get pooledCount => _pool.length;
+
+  /// Drops every pooled decoder except [url], then preloads [url] alone so the
+  /// tapped reel does not compete with grid/detail warmups for MediaCodec slots.
+  Future<VideoPlayerController?> prepareExclusive(String url) async {
+    if (url.isEmpty) return null;
+    pauseNewPreloads = false;
+    for (final key in List.of(_pool.keys)) {
+      if (key != url) _remove(key);
+    }
+    for (final key in _preloadInflight.keys.toList()) {
+      if (key != url) _preloadInflight.remove(key);
+    }
+    return await getOrPreload(url);
+  }
+
   Future<VideoPlayerController?> preload(String url) {
     if (url.isEmpty) return Future.value(null);
+    if (pauseNewPreloads) return Future.value(null);
     // Hard short-circuit: if a previous run of the app (or earlier in this
     // session) crashed ExoPlayer on this exact URL (NO_EXCEEDS_CAPABILITIES,
     // decoder init failure, 4K HEVC OOM, …), never try again. Without this
@@ -133,7 +158,11 @@ class VideoControllerPool {
     // re-crash the decoder every single time — saturating MediaCodec, eating
     // surfaces, and stalling the whole feed.
     if (BlockedUrlMemory.instance.contains(url)) {
-      debugPrint('[EXPLORE_POOL] skip known-bad url ${_shortUrlForLog(url)}');
+      AppLogger.debugThrottled(
+        LogCategory.pool,
+        'skip_bad:$url',
+        'skip known-bad url ${_shortUrlForLog(url)}',
+      );
       return Future.value(null);
     }
     return _preloadInflight.putIfAbsent(url, () {
@@ -279,10 +308,35 @@ class VideoControllerPool {
     _touch(url);
   }
 
+  void pauseAll() {
+    for (final entry in _pool.values) {
+      if (entry.isInitialized && !entry.isDisposed) {
+        unawaited(_pauseAndMute(entry.controller));
+      }
+    }
+  }
+
   void disposeAll() {
+    pauseNewPreloads = false;
     for (final url in List.of(_pool.keys)) {
       _remove(url);
     }
+  }
+
+  /// Hard memory pressure: drop the oldest pooled decoder (LRU head).
+  void evictOldest() {
+    if (_lruOrder.isEmpty) return;
+    _remove(_lruOrder.first);
+  }
+
+  /// Keeps at most one entry when [keepUrl] is non-empty.
+  void disposeAllExcept(String? keepUrl) {
+    final keep = keepUrl?.trim() ?? '';
+    for (final url in List.of(_pool.keys)) {
+      if (url == keep) continue;
+      _remove(url);
+    }
+    if (keep.isEmpty) pauseNewPreloads = false;
   }
 }
 
@@ -297,7 +351,7 @@ class ReelPrefetchManager {
   ReelPrefetchManager._();
   static final ReelPrefetchManager instance = ReelPrefetchManager._();
 
-  static const int _kPrefetchAhead = 2;
+  static const int _kPrefetchAhead = 1;
 
   int _lastIndex = -1;
   int _generation = 0;
@@ -313,7 +367,7 @@ class ReelPrefetchManager {
       final url = videoUrls[idx];
       if (url.isEmpty) continue;
       if (gen != _generation) {
-        debugPrint('[PLAYER_RECYCLED] prefetch_cancelled idx=$idx');
+        AppLogger.debug(LogCategory.pool, 'prefetch_cancelled idx=$idx');
         return;
       }
       if (VideoControllerPool.instance.isReady(url)) continue;
@@ -340,6 +394,7 @@ class PostMediaItem {
   final String hlsUrl;
   final String thumbnail;
   final String rawVideoUrl;
+  final String previewUrl;
   final bool processed;
   final bool processing;
   final int? trimStartMs;
@@ -347,6 +402,7 @@ class PostMediaItem {
   final int? intrinsicWidth;
   final int? intrinsicHeight;
   final Map<String, dynamic> qualities;
+  final String transcodeError;
 
   const PostMediaItem({
     required this.url,
@@ -358,6 +414,7 @@ class PostMediaItem {
     this.hlsUrl = '',
     this.thumbnail = '',
     this.rawVideoUrl = '',
+    this.previewUrl = '',
     this.processed = false,
     this.processing = false,
     this.qualities = const {},
@@ -365,6 +422,7 @@ class PostMediaItem {
     this.trimEndMs,
     this.intrinsicWidth,
     this.intrinsicHeight,
+    this.transcodeError = '',
   });
 
   Map<String, dynamic> toMediaMap() => {
@@ -374,6 +432,7 @@ class PostMediaItem {
         'hlsUrl': hlsUrl,
         'thumbnail': thumbnail,
         'rawVideoUrl': rawVideoUrl,
+        if (previewUrl.isNotEmpty) 'previewUrl': previewUrl,
         'processed': processed,
         'processing': processing,
         if (qualities.isNotEmpty) 'qualities': qualities,
@@ -383,6 +442,7 @@ class PostMediaItem {
         if (intrinsicHeight != null) 'intrinsicHeight': intrinsicHeight,
         if (intrinsicWidth != null) 'sourceWidth': intrinsicWidth,
         if (intrinsicHeight != null) 'sourceHeight': intrinsicHeight,
+        if (transcodeError.isNotEmpty) 'transcodeError': transcodeError,
       };
 
   String forGrid() {
@@ -457,7 +517,10 @@ class PostModel {
   final bool processed;
   final bool processing;
   final String hlsUrl;
+  final String previewUrl;
   final Map<String, dynamic> qualities;
+  final String transcodeError;
+  final String transcodeErrorCategory;
 
   final String captionLower;
   final String locationLower;
@@ -483,16 +546,24 @@ class PostModel {
     this.processed = false,
     this.processing = false,
     this.hlsUrl = '',
+    this.previewUrl = '',
     this.qualities = const {},
+    this.transcodeError = '',
+    this.transcodeErrorCategory = '',
     required this.captionLower,
     required this.locationLower,
   });
+
+  bool get hasTranscodeFailure => transcodeError.isNotEmpty;
 
   Map<String, dynamic> get _playbackPostData => {
         'processed': processed,
         'processing': processing,
         'videoUrl': firstVideoUrl,
         'hlsUrl': hlsUrl,
+        if (transcodeError.isNotEmpty) 'transcodeError': transcodeError,
+        if (transcodeErrorCategory.isNotEmpty)
+          'transcodeErrorCategory': transcodeErrorCategory,
         if (qualities.isNotEmpty)
           'qualities': qualities
         else if (firstVideoItem?.qualities.isNotEmpty == true)
@@ -511,12 +582,57 @@ class PostModel {
   String fallbackUrlFor(PostMediaItem item) =>
       playbackFor(item).fallbackUrl;
 
+  /// Canonical Explore/reels URL (HLS → processed MP4 → safe raw).
+  String exploreReelPlaybackUrl() {
+    final item = firstVideoItem;
+    if (item == null) return firstVideoUrl;
+    final playback = playbackFor(item);
+    // Short Cloud Function preview (~few MB) beats multi‑MB raw uploads on cold start.
+    if (playback.status == ReelStatus.processing ||
+        playback.legacyRawFallback) {
+      final preview = previewUrl.isNotEmpty
+          ? previewUrl
+          : (item.previewUrl.isNotEmpty ? item.previewUrl : '');
+      if (preview.isNotEmpty && !BlockedUrlMemory.instance.contains(preview)) {
+        return preview;
+      }
+    }
+    if (playback.status == ReelStatus.failedTranscode) return '';
+    final url = playback.primaryUrl;
+    return url.isNotEmpty ? url : firstVideoUrl;
+  }
+
   bool get isVideoProcessing {
     if (!isVideo) return false;
     final item = firstVideoItem;
     if (item != null && playbackFor(item).isPlayable) return false;
     return processing && !processed;
   }
+
+  /// True when Explore can open the reel viewer and start playback immediately.
+  bool isInstantPlayableForExplore() {
+    if (!isVideo) return false;
+    final item = firstVideoItem;
+    if (item == null) return false;
+    final playback = playbackFor(item);
+    if (!playback.isPlayable) return false;
+    if (BlockedUrlMemory.instance.contains(playback.primaryUrl)) {
+      return false;
+    }
+    if (playback.status == ReelStatus.readyHls ||
+        playback.status == ReelStatus.readyMp4) {
+      return true;
+    }
+    if (playback.status == ReelStatus.processing &&
+        playback.blockedReason != 'upload_service_blocked') {
+      return true;
+    }
+    return false;
+  }
+
+  /// Grid badge: reel exists but HLS / safe raw is not ready yet.
+  bool get showExploreGridProcessingOverlay =>
+      isVideo && !isInstantPlayableForExplore();
 
   /// Poster for grids / processing overlay (never an .mp4 URL).
   String posterUrlFor(PostMediaItem item) {
@@ -537,6 +653,11 @@ class PostModel {
     final parsedProcessed = data['processed'] == true;
     final parsedProcessing = data['processing'] == true;
     final parsedHlsUrl = (data['hlsUrl'] ?? '').toString().trim();
+    final parsedPreviewUrl = (data['previewUrl'] ?? '').toString().trim();
+    final parsedTranscodeError =
+        (data['transcodeError'] ?? '').toString().trim();
+    final parsedTranscodeCategory =
+        (data['transcodeErrorCategory'] ?? '').toString().trim();
     final parsedQualities = data['qualities'] is Map
         ? Map<String, dynamic>.from(data['qualities'] as Map)
         : const <String, dynamic>{};
@@ -545,6 +666,10 @@ class PostModel {
       'processing': parsedProcessing,
       'videoUrl': (data['videoUrl'] ?? '').toString().trim(),
       'hlsUrl': parsedHlsUrl,
+      if (parsedTranscodeError.isNotEmpty)
+        'transcodeError': parsedTranscodeError,
+      if (parsedTranscodeCategory.isNotEmpty)
+        'transcodeErrorCategory': parsedTranscodeCategory,
     };
     final parsedFirstImageItem = parsedMedia.firstWhere(
           (m) => !m.isVideo,
@@ -589,7 +714,10 @@ class PostModel {
       processed:    parsedProcessed,
       processing:   parsedProcessing,
       hlsUrl:       parsedHlsUrl,
+      previewUrl:   parsedPreviewUrl,
       qualities:    parsedQualities,
+      transcodeError: parsedTranscodeError,
+      transcodeErrorCategory: parsedTranscodeCategory,
       captionLower:       (data['caption'] ?? '').toString().toLowerCase(),
       locationLower:      (data['location'] ?? '').toString().toLowerCase(),
     );
@@ -619,6 +747,7 @@ class PostModel {
           hlsUrl: (map['hlsUrl'] ?? '').toString(),
           thumbnail: thumb,
           rawVideoUrl: (map['rawVideoUrl'] ?? '').toString(),
+          previewUrl: (map['previewUrl'] ?? '').toString().trim(),
           processed: map['processed'] == true,
           processing: map['processing'] == true,
           qualities: q is Map
@@ -628,13 +757,14 @@ class PostModel {
           trimEndMs: _asIntNullable(map['trimEndMs']),
           intrinsicWidth: dims.$1,
           intrinsicHeight: dims.$2,
+          transcodeError: (map['transcodeError'] ?? '').toString().trim(),
         );
       }).toList();
     }
 
     final parsed = MediaModel.parsePostMedia(data);
     final validParsed = parsed.where((m) {
-      final u = m.isVideo ? (m.videoUrl ?? '') : m.image.forFeed();
+      final u = m.isVideo ? m.videoUrl : m.image.forFeed();
       return u.trim().isNotEmpty;
     }).toList();
 
@@ -649,15 +779,16 @@ class PostModel {
             ? m.image.medium
             : (m.image.full.isNotEmpty ? m.image.full : '')));
         return PostMediaItem(
-          url: isVideo ? (m.videoUrl ?? '') : imageUrl,
+          url: isVideo ? m.videoUrl : imageUrl,
           isVideo: isVideo,
           thumb: m.image.thumb,
           medium: m.image.medium,
           full: m.image.full,
-          videoUrl: m.videoUrl ?? '',
+          videoUrl: m.videoUrl,
           hlsUrl: m.hlsUrl,
-          thumbnail: m.thumbnail ?? '',
+          thumbnail: m.thumbnail,
           rawVideoUrl: m.rawVideoUrl,
+          previewUrl: (data['previewUrl'] ?? '').toString().trim(),
           processed: m.processed,
           processing: m.processing,
           qualities: const {},
@@ -809,13 +940,16 @@ class _ExplorePageState extends State<ExplorePage> {
   final ValueNotifier<Map<String, dynamic>> _savedPostsNotifier =
   ValueNotifier<Map<String, dynamic>>(const <String, dynamic>{});
   StreamSubscription<Map<String, dynamic>>? _savedPostsSub;
-
   List<PostModel> _filteredPostsCache = const [];
 
   @override
   void initState() {
     super.initState();
     if (widget.openReelsOnStart) _filter = _ExploreFilter.videos;
+    AppLogger.perf('explore_page_open', fields: {
+      'openReels': widget.openReelsOnStart,
+      'filter': _filter.name,
+    });
     _initSavedPostsListener();
     _fetchNextPage();
     _scrollCtrl.addListener(_onScroll);
@@ -862,6 +996,7 @@ class _ExplorePageState extends State<ExplorePage> {
 
   @override
   void dispose() {
+    unawaited(PerfSessionLog.exportSummary());
     _scrollCtrl.dispose();
     _searchCtrl.dispose();
     _savedPostsSub?.cancel();
@@ -881,6 +1016,11 @@ class _ExplorePageState extends State<ExplorePage> {
   Future<void> _fetchNextPage() async {
     if (_isFetching || (!_hasMore && !_hasMoreUndated)) return;
     _isFetching = true;
+    final sw = Stopwatch()..start();
+    AppLogger.perf('explore_fetch_start', fields: {
+      'posts': _posts.length,
+      'filter': _filter.name,
+    });
     if (mounted) setState(() {});
 
     try {
@@ -936,8 +1076,19 @@ class _ExplorePageState extends State<ExplorePage> {
 
       _recomputeTrending();
       _rebuildFilteredPostsCache();
+      AppLogger.perf('explore_firestore_done', fields: {
+        'ms': sw.elapsedMilliseconds,
+        'added': addedCount,
+        'total': _posts.length,
+        'filtered': _filteredPostsCache.length,
+      });
       _tryAutoOpenReels();
     } catch (e) {
+      AppLogger.error(
+        LogCategory.explore,
+        'explore_fetch_failed after ${sw.elapsedMilliseconds}ms',
+        error: e,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Failed to load posts. Pull to retry.')),
@@ -945,7 +1096,13 @@ class _ExplorePageState extends State<ExplorePage> {
       }
     } finally {
       _isFetching = false;
-      if (mounted) setState(() {});
+      if (mounted) {
+        AppLogger.perf('explore_setState', fields: {
+          'reason': 'fetchFinally',
+          'ms': sw.elapsedMilliseconds,
+        });
+        setState(() {});
+      }
     }
   }
 
@@ -993,7 +1150,32 @@ class _ExplorePageState extends State<ExplorePage> {
     await _fetchNextPage();
   }
 
+  void _warmStartupOnTap(List<PostModel> videoPosts, int startIdx) {
+    if (startIdx < 0 || startIdx >= videoPosts.length) return;
+    final post = videoPosts[startIdx];
+    final url = post.exploreReelPlaybackUrl();
+    if (url.isEmpty) return;
+    ReelPrefetchManager.instance.cancel();
+    unawaited(VideoControllerPool.instance.prepareExclusive(url));
+  }
+
   void _openReels(List<PostModel> videoPosts, int startIdx) {
+    final post = startIdx >= 0 && startIdx < videoPosts.length
+        ? videoPosts[startIdx]
+        : null;
+    final playback = post?.firstVideoItem != null
+        ? post!.playbackFor(post.firstVideoItem!)
+        : null;
+    AppLogger.perf('explore_reels_open', fields: {
+      'startIdx': startIdx,
+      'count': videoPosts.length,
+      'postId': post?.id,
+      'status': playback?.status.tag,
+      'legacyRaw': playback?.legacyRawFallback ?? false,
+      'transcodeFail': post?.hasTranscodeFailure ?? false,
+      'urlKind': _reelUrlKind(post),
+    });
+    _warmStartupOnTap(videoPosts, startIdx);
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1001,6 +1183,7 @@ class _ExplorePageState extends State<ExplorePage> {
           videoPosts: videoPosts,
           initialIndex: startIdx,
           savedPostsListenable: _savedPostsNotifier,
+          initialTapAt: DateTime.now(),
         ),
       ),
     );
@@ -1019,11 +1202,41 @@ class _ExplorePageState extends State<ExplorePage> {
     );
   }
 
+  static String _reelUrlKind(PostModel? post) {
+    if (post == null) return 'none';
+    final url = post.exploreReelPlaybackUrl();
+    if (url.isEmpty) return post.hasTranscodeFailure ? 'blocked' : 'empty';
+    if (url.contains('.m3u8')) return 'hls';
+    if (post.previewUrl.isNotEmpty && url.contains('preview')) return 'preview';
+    if (post.processed) return 'processed';
+    return 'raw';
+  }
+
   void _onTileTap(PostModel post, List<PostModel> posts) {
     if (post.isVideo) {
-      final videoPosts = posts.where((p) => p.isVideo).toList();
-      final startIdx = videoPosts.indexWhere((p) => p.id == post.id);
-      _openReels(videoPosts, startIdx < 0 ? 0 : startIdx);
+      if (!post.isInstantPlayableForExplore()) {
+        final msg = post.hasTranscodeFailure
+            ? 'This video could not be processed. It will not play until re-uploaded or fixed on the server.'
+            : 'This reel is still processing. Try again shortly.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+        return;
+      }
+
+      final readyVideoPosts = posts
+          .where((p) => p.isVideo && p.isInstantPlayableForExplore())
+          .toList(growable: false);
+      if (readyVideoPosts.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No instant-play reels are ready right now.'),
+          ),
+        );
+        return;
+      }
+      final startIdx = readyVideoPosts.indexWhere((p) => p.id == post.id);
+      _openReels(readyVideoPosts, startIdx < 0 ? 0 : startIdx);
       return;
     }
     _openPostDetail(post);
@@ -1081,6 +1294,65 @@ class _ExplorePageState extends State<ExplorePage> {
     );
   }
 
+  Future<void> _showVideoMigrationDialog() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Migrate legacy videos'),
+        content: const Text(
+          'Re-queue transcode for up to 200 legacy / stuck posts and reels. '
+          'Skips posts with permanent transcode errors. '
+          'Deploy updated Cloud Functions before running.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'retry_failed'),
+            child: const Text('Retry failed'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'run'),
+            child: const Text('Run'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != 'run' && confirmed != 'retry_failed' || !mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Migration started…')),
+    );
+
+    try {
+      final result = await VideoMigrationService.instance.migrateLegacyVideos(
+        maxDocs: 200,
+        collection: 'both',
+        includeStuckProcessing: true,
+        retryPermanentFailures: confirmed == 'retry_failed',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Migration done: $result')),
+      );
+      AppLogger.info(LogCategory.explore, 'MIGRATE_LEGACY_VIDEOS $result');
+      await _refresh();
+    } catch (e, st) {
+      AppLogger.error(
+        LogCategory.explore,
+        'MIGRATE_LEGACY_VIDEOS failed',
+        error: e,
+        stackTrace: st,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Migration failed: $e')),
+      );
+    }
+  }
+
   // ── HEADER ──────────────────────────────────────────────────────────────────
 
   Widget _buildHeader() => Column(
@@ -1097,12 +1369,17 @@ class _ExplorePageState extends State<ExplorePage> {
             onPressed: () => Navigator.pop(context),
           ),
           const SizedBox(width: 8),
-          Text(
-            'Explore',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.w700,
-              fontSize: 22,
-              color: const Color(0xFF1F1033),
+          GestureDetector(
+            onLongPress: (kDebugMode || kProfileMode)
+                ? () => _showVideoMigrationDialog()
+                : null,
+            child: Text(
+              'Explore',
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.w700,
+                fontSize: 22,
+                color: const Color(0xFF1F1033),
+              ),
             ),
           ),
         ]),
@@ -1643,13 +1920,47 @@ class _InstagramGridTile extends StatelessWidget {
             ),
           ),
 
+          if (post.showExploreGridProcessingOverlay)
+            Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: 0.45),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        post.hasTranscodeFailure
+                            ? Icons.error_outline_rounded
+                            : Icons.hourglass_top_rounded,
+                        color: Colors.white,
+                        size: isFeatured ? 28 : 22,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        post.hasTranscodeFailure
+                            ? 'Unavailable'
+                            : 'Processing',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: isFeatured ? 11 : 9,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
           // ── Top-right badge ─────────────────────────────────────────────
           if (post.isVideo)
             Positioned(
               top: 6,
               right: 6,
               child: _GridBadge(
-                icon: Icons.play_arrow_rounded,
+                icon: post.showExploreGridProcessingOverlay
+                    ? Icons.hourglass_top_rounded
+                    : Icons.play_arrow_rounded,
                 size: isFeatured ? 18 : 14,
               ),
             )
@@ -2640,11 +2951,13 @@ class _ExploreReelsViewer extends StatefulWidget {
   final List<PostModel> videoPosts;
   final int initialIndex;
   final ValueListenable<Map<String, dynamic>> savedPostsListenable;
+  final DateTime? initialTapAt;
 
   const _ExploreReelsViewer({
     required this.videoPosts,
     required this.initialIndex,
     required this.savedPostsListenable,
+    this.initialTapAt,
   });
 
   @override
@@ -2652,25 +2965,155 @@ class _ExploreReelsViewer extends StatefulWidget {
       _ExploreReelsViewerState();
 }
 
-class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
+class _ExploreReelsViewerState extends State<_ExploreReelsViewer>
+    with WidgetsBindingObserver {
   late final PageController _controller;
   int _currentIndex = 0;
   bool _globalMuted = false;
+  bool _lowMemoryMode = false;
+  bool _startupMetricLogged = false;
+  bool _allowAheadPrefetch = false;
+  late final String _startupPostId;
+  final ReelStreamingCoordinator _streamingCoordinator =
+      ReelStreamingCoordinator();
+  late final ReelCachePolicy _cachePolicy;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _cachePolicy = ReelCachePolicy(
+      cacheManager: AppCacheManager.media,
+      warmRetentionLimit: ReelPlatformPolicy.maxPoolSlots + 1,
+    );
     _currentIndex = widget.initialIndex;
+    final safeIdx =
+        _currentIndex.clamp(0, widget.videoPosts.length > 0 ? widget.videoPosts.length - 1 : 0);
+    _startupPostId = widget.videoPosts.isEmpty ? '' : widget.videoPosts[safeIdx].id;
     _controller = PageController(initialPage: widget.initialIndex);
+    unawaited(_primeInitialReel());
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final urls =
-      widget.videoPosts.map((p) => p.firstVideoUrl).toList();
-      ReelPrefetchManager.instance.prefetchAround(urls, _currentIndex);
+      unawaited(_applyViewportPolicy(_currentIndex));
+    });
+  }
+
+  Future<void> _primeInitialReel() async {
+    if (widget.videoPosts.isEmpty) return;
+    final idx = widget.initialIndex.clamp(0, widget.videoPosts.length - 1);
+    final url = widget.videoPosts[idx].exploreReelPlaybackUrl();
+    if (url.isEmpty) return;
+    final t0 = DateTime.now();
+    await VideoControllerPool.instance.prepareExclusive(url);
+    if (!mounted) return;
+    AppLogger.perf('reels_prime_done', fields: {
+      'postId': widget.videoPosts[idx].id,
+      'ms': DateTime.now().difference(t0).inMilliseconds,
+      'poolReady': VideoControllerPool.instance.isReady(url),
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      VideoControllerPool.instance.pauseNewPreloads = false;
+      unawaited(_applyViewportPolicy(_currentIndex));
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      VideoControllerPool.instance.pauseNewPreloads = true;
+      VideoControllerPool.instance.pauseAll();
+    }
+  }
+
+  List<ReelStreamEntry> _streamEntries() {
+    return widget.videoPosts.map((post) {
+      final firstVideo = post.firstVideoItem;
+      final playback =
+          firstVideo != null ? post.playbackFor(firstVideo) : null;
+      return ReelStreamEntry(
+        reelId: post.id,
+        playbackUrl: post.exploreReelPlaybackUrl(),
+        fallbackUrl: playback?.fallbackUrl ?? '',
+      );
+    }).toList(growable: false);
+  }
+
+  Future<void> _applyViewportPolicy(int index) async {
+    final entries = _streamEntries();
+    if (entries.isEmpty) return;
+
+    final safeIndex = index.clamp(0, entries.length - 1);
+    final decision = _streamingCoordinator.onViewportChanged(
+      entries: entries,
+      currentIndex: safeIndex,
+      lowMemoryMode: _lowMemoryMode,
+      startupOnly: !_allowAheadPrefetch,
+    );
+
+    _cachePolicy.replaceHotSet(decision.hotIds);
+
+    for (final url in decision.preloadUrls) {
+      if (url.isEmpty) continue;
+      unawaited(VideoControllerPool.instance.preload(url));
+    }
+
+    for (final url in decision.releaseUrls) {
+      if (url.isEmpty) continue;
+      VideoControllerPool.instance.release(url);
+      if (_lowMemoryMode) {
+        await _cachePolicy.evictMediaByUrl(url);
+      }
+    }
+
+    final current = entries[safeIndex];
+    await _cachePolicy.markWatched(
+      reelId: current.reelId,
+      mediaUrl: current.playbackUrl,
+    );
+
+    AppLogger.debug(
+      LogCategory.pool,
+      'REEL_PREFETCH idx=$safeIndex ahead=${decision.aheadWindow} '
+      'behind=${decision.behindWindow} preloads=${decision.preloadUrls.length}',
+    );
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    if (widget.videoPosts.isEmpty) return;
+    final safeIndex = _currentIndex.clamp(0, widget.videoPosts.length - 1);
+    final keepUrl = widget.videoPosts[safeIndex].exploreReelPlaybackUrl();
+    ReelLifecycleLog.memoryPressure(keepReelId: widget.videoPosts[safeIndex].id);
+    VideoControllerPool.instance.pauseNewPreloads = true;
+    VideoControllerPool.instance.disposeAllExcept(keepUrl);
+    setState(() => _lowMemoryMode = true);
+    unawaited(_applyViewportPolicy(safeIndex));
+  }
+
+  void _onInitialFrameRendered(String postId) {
+    if (_startupMetricLogged) return;
+    if (widget.videoPosts.isEmpty || _startupPostId.isEmpty) return;
+    if (postId != _startupPostId) return;
+    final tappedAt = widget.initialTapAt;
+    if (tappedAt == null) return;
+    _startupMetricLogged = true;
+    final ms = DateTime.now().difference(tappedAt).inMilliseconds;
+    AppLogger.metric('tap_to_first_frame_ms', fields: {
+      'ms': ms,
+      'postId': postId,
+      'currentIndex': _currentIndex,
+    });
+    if (!_allowAheadPrefetch) {
+      setState(() => _allowAheadPrefetch = true);
+      unawaited(_applyViewportPolicy(_currentIndex));
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    AppLogger.perf('explore_reels_close', fields: {'index': _currentIndex});
+    VideoControllerPool.instance.disposeAll();
+    _cachePolicy.clearWarmQueue();
     _controller.dispose();
     super.dispose();
   }
@@ -2710,9 +3153,7 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
         itemCount: widget.videoPosts.length,
         onPageChanged: (i) {
           setState(() => _currentIndex = i);
-          final urls =
-          widget.videoPosts.map((p) => p.firstVideoUrl).toList();
-          ReelPrefetchManager.instance.prefetchAround(urls, i);
+          unawaited(_applyViewportPolicy(i));
         },
         itemBuilder: (_, index) {
           final post = widget.videoPosts[index];
@@ -2728,6 +3169,7 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer> {
                 setState(() => _globalMuted = !_globalMuted),
             onBack: () => Navigator.pop(context),
             currentUserId: FirebaseAuth.instance.currentUser?.uid,
+            onFirstFrame: _onInitialFrameRendered,
           );
         },
       ),
@@ -2748,6 +3190,7 @@ class _ReelItem extends StatefulWidget {
   final VoidCallback onMuteToggle;
   final VoidCallback onBack;
   final String? currentUserId;
+  final ValueChanged<String> onFirstFrame;
 
   const _ReelItem({
     Key? key,
@@ -2759,6 +3202,7 @@ class _ReelItem extends StatefulWidget {
     required this.onMuteToggle,
     required this.onBack,
     required this.currentUserId,
+    required this.onFirstFrame,
   }) : super(key: key);
 
   @override
@@ -2834,23 +3278,16 @@ class _ReelItemState extends State<_ReelItem> {
             onDoubleTap: _onDoubleTap,
             child: _VideoCell(
               key: ValueKey('reel_${post.id}'),
-              url: firstVideo != null
-                  ? post.playbackUrlFor(firstVideo)
-                  : post.firstVideoUrl,
+              url: post.exploreReelPlaybackUrl(),
               thumbnailUrl: firstVideo != null
                   ? post.posterUrlFor(firstVideo)
                   : post.thumbnailUrl,
               trimStartMs: firstVideo?.trimStartMs,
               trimEndMs: firstVideo?.trimEndMs,
               fit: BoxFit.cover,
-              autoPlay: widget.isCurrent &&
-                  (firstVideo != null
-                      ? post.playbackUrlFor(firstVideo).isNotEmpty
-                      : post.firstVideoUrl.isNotEmpty),
-              warmUp: widget.warmUp &&
-                  (firstVideo != null
-                      ? post.playbackUrlFor(firstVideo).isNotEmpty
-                      : post.firstVideoUrl.isNotEmpty),
+              autoPlay:
+                  widget.isCurrent && post.exploreReelPlaybackUrl().isNotEmpty,
+              warmUp: widget.warmUp && post.exploreReelPlaybackUrl().isNotEmpty,
               muted: widget.muted,
               visibilityKey: 'reel_${post.id}',
               showProgressBar: true,
@@ -2858,6 +3295,7 @@ class _ReelItemState extends State<_ReelItem> {
                   ? post.playbackFor(firstVideo).showProcessingOverlay
                   : post.isVideoProcessing,
               postId: post.id,
+              onFirstFrame: () => widget.onFirstFrame(post.id),
             ),
           ),
 
@@ -3016,7 +3454,7 @@ class _ReelAuthorInfoState extends State<_ReelAuthorInfo> {
       try {
         final doc = await FirebaseFirestore.instance
             .collection('users')
-            .doc(_currentUserId!)
+            .doc(_currentUserId)
             .collection('following')
             .doc(widget.userId)
             .get();
@@ -3033,14 +3471,14 @@ class _ReelAuthorInfoState extends State<_ReelAuthorInfo> {
     setState(() => _followLoading = true);
     final followRef = FirebaseFirestore.instance
         .collection('users')
-        .doc(_currentUserId!)
+        .doc(_currentUserId)
         .collection('following')
         .doc(widget.userId);
     final followerRef = FirebaseFirestore.instance
         .collection('users')
         .doc(widget.userId)
         .collection('followers')
-        .doc(_currentUserId!);
+        .doc(_currentUserId);
     try {
       if (_following) {
         await followRef.delete();
@@ -3300,6 +3738,7 @@ class _VideoCell extends StatefulWidget {
   /// a runtime decoder crash on [url] will nudge `reels/<id>` + `posts/<id>` to
   /// be re-transcoded by the backend.
   final String? postId;
+  final VoidCallback? onFirstFrame;
 
   const _VideoCell({
     Key? key,
@@ -3315,6 +3754,7 @@ class _VideoCell extends StatefulWidget {
     this.showProgressBar = false,
     this.showProcessing = false,
     this.postId,
+    this.onFirstFrame,
   }) : super(key: key);
 
   @override
@@ -3331,7 +3771,9 @@ class _VideoCellState extends State<_VideoCell> {
   Duration? _effectiveTrimEnd;
   Timer? _bindDebounce;
   int _bindGeneration = 0;
+  bool _bindInFlight = false;
   bool _capabilityErrorFlagged = false;
+  bool _firstFrameNotified = false;
 
   bool get _videoReady =>
       _ctrl != null && _ctrl!.value.isInitialized && !_error;
@@ -3394,6 +3836,7 @@ class _VideoCellState extends State<_VideoCell> {
       _ctrl = null;
       _attachedUrl = null;
       _error = false;
+      _firstFrameNotified = false;
       if (widget.url.isNotEmpty) {
         Future.microtask(_kickBind);
       } else {
@@ -3418,16 +3861,18 @@ class _VideoCellState extends State<_VideoCell> {
     if (old.autoPlay != widget.autoPlay &&
         widget.autoPlay &&
         widget.url.isNotEmpty &&
-        !_videoReady) {
+        !_videoReady &&
+        !_bindInFlight) {
       unawaited(_bindToPoolOrPreload());
     }
   }
 
   Future<void> _bindToPoolOrPreload() async {
     if (!mounted || widget.url.isEmpty || widget.showProcessing) return;
+    if (_bindInFlight) return;
 
     final url = widget.url;
-    final gen = ++_bindGeneration;
+    final gen = _bindGeneration;
 
     if (_attachedUrl == url &&
         _ctrl != null &&
@@ -3436,39 +3881,52 @@ class _VideoCellState extends State<_VideoCell> {
       return;
     }
 
-    // Hard-stop: if we already know this URL crashes ExoPlayer (4K Dolby
-    // Vision, AVC@L5.2, …), don't even attempt to initialize again. The
-    // resolver-level block isn't reachable from the Explore page because
-    // Explore uses raw `playUrl` directly, so we enforce it here.
-    if (BlockedUrlMemory.instance.contains(url)) {
-      if (mounted) setState(() => _error = true);
-      return;
+    if (VideoControllerPool.instance.isReady(url)) {
+      final pooled = VideoControllerPool.instance.get(url);
+      if (pooled != null &&
+          mounted &&
+          gen == _bindGeneration &&
+          widget.url == url) {
+        _attachController(pooled, url);
+        ReelLifecycleLog.bind(url, generation: gen);
+        return;
+      }
     }
 
-    if (!_shouldBind &&
-        !VideoControllerPool.instance.isReady(url)) {
-      return;
+    _bindInFlight = true;
+    try {
+      if (BlockedUrlMemory.instance.contains(url)) {
+        if (mounted) setState(() => _error = true);
+        return;
+      }
+
+      if (!_shouldBind && !VideoControllerPool.instance.isReady(url)) {
+        return;
+      }
+
+      VideoPlayerController? pooled =
+          VideoControllerPool.instance.get(url);
+      pooled ??= await VideoControllerPool.instance.preload(url);
+
+      if (!mounted || gen != _bindGeneration || widget.url != url) {
+        ReelLifecycleLog.generationMismatch(
+          url,
+          expected: gen,
+          actual: _bindGeneration,
+        );
+        return;
+      }
+
+      if (pooled == null) {
+        if (mounted) setState(() => _error = true);
+        return;
+      }
+
+      _attachController(pooled, url);
+      ReelLifecycleLog.bind(url, generation: gen);
+    } finally {
+      _bindInFlight = false;
     }
-
-    VideoPlayerController? pooled =
-    VideoControllerPool.instance.get(url);
-    pooled ??= await VideoControllerPool.instance.preload(url);
-
-    if (!mounted || gen != _bindGeneration || widget.url != url) {
-      ReelLifecycleLog.generationMismatch(url, expected: gen, actual: _bindGeneration);
-      return;
-    }
-
-    if (pooled == null) {
-      // preload() returned null — either the URL is now in BlockedUrlMemory
-      // (just recorded) or the network/decoder failed. Either way, surface
-      // the poster and stop retrying for this widget instance.
-      if (mounted) setState(() => _error = true);
-      return;
-    }
-
-    _attachController(pooled, url);
-    ReelLifecycleLog.bind(url, generation: gen);
   }
 
   void _attachController(
@@ -3512,6 +3970,11 @@ class _VideoCellState extends State<_VideoCell> {
     }
 
     if (c.value.isInitialized) {
+      if (!_firstFrameNotified) {
+        _firstFrameNotified = true;
+        widget.onFirstFrame?.call();
+        ReelLifecycleLog.firstFrameRendered(widget.url);
+      }
       if (_effectiveTrimStart == Duration.zero &&
           _effectiveTrimEnd == null &&
           (widget.trimStartMs != null ||
@@ -3550,8 +4013,9 @@ class _VideoCellState extends State<_VideoCell> {
     if (!shouldRecord) return;
 
     _capabilityErrorFlagged = true;
-    debugPrint(
-      '[EXPLORE_DECODER_FAIL] postId=${widget.postId ?? '-'} url=$url '
+    AppLogger.warning(
+      LogCategory.explore,
+      'DECODER_FAIL postId=${widget.postId ?? '-'} url=$url '
       'desc=${errorDescription ?? '(none)'}',
     );
     unawaited(BlockedUrlMemory.instance.add(url));
@@ -3565,6 +4029,16 @@ class _VideoCellState extends State<_VideoCell> {
   static Future<void> _writeBackendRequeueFlag(String postId) async {
     try {
       final fs = FirebaseFirestore.instance;
+      final snap = await fs.collection('posts').doc(postId).get();
+      final data = snap.data();
+      if (data != null) {
+        final category =
+            (data['transcodeErrorCategory'] ?? '').toString().trim();
+        final existing = (data['transcodeError'] ?? '').toString().trim();
+        if (category == 'permanent' && existing.isNotEmpty) return;
+        final attempts = (data['transcodeAttemptCount'] as num?)?.toInt() ?? 0;
+        if (attempts >= 8) return;
+      }
       final payload = <String, dynamic>{
         'transcodeError': 'exceeds_capabilities',
         'legacyRawFallback': true,
@@ -3636,7 +4110,12 @@ class _VideoCellState extends State<_VideoCell> {
   void _togglePlay() {
     final c = _ctrl;
     if (c == null || !_videoReady) return;
-    setState(() => c.value.isPlaying ? c.pause() : c.play());
+    if (c.value.isPlaying) {
+      unawaited(c.pause());
+    } else {
+      unawaited(c.play());
+    }
+    if (mounted) setState(() {});
   }
 
   @override

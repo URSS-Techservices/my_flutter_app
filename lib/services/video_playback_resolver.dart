@@ -16,6 +16,7 @@ library;
 
 import 'package:flutter/foundation.dart';
 
+import 'app_logger.dart';
 import 'blocked_url_memory.dart';
 
 /// Maximum source dimensions we'll *attempt* to play from a raw upload when
@@ -29,6 +30,19 @@ import 'blocked_url_memory.dart';
 const int kMaxRawPlaybackWidth = 1920;
 const int kMaxRawPlaybackHeight = 1920;
 const int kMaxRawPlaybackFps = 31;
+
+class _ResolverLogThrottle {
+  static final Map<String, DateTime> _last = {};
+
+  static bool shouldLog(String key,
+      {Duration interval = const Duration(seconds: 30)}) {
+    final now = DateTime.now();
+    final prev = _last[key];
+    if (prev != null && now.difference(prev) < interval) return false;
+    _last[key] = now;
+    return true;
+  }
+}
 
 /// Explicit reel lifecycle states the UI can switch on.
 enum ReelStatus {
@@ -295,9 +309,16 @@ String? pickProcessedMp4(
   final itemMp4 = _str(item['videoUrl']).isNotEmpty
       ? _str(item['videoUrl'])
       : _str(item['url']);
+  final docProcessed =
+      _truthy(item['processed']) || _truthy(postData['processed']);
   for (final u in [itemMp4, docMp4]) {
     if (u.isEmpty || u.contains('.m3u8')) continue;
-    if (isRawUploadStorageUrl(u)) continue;
+    if (isRawUploadStorageUrl(u)) {
+      // After transcode, Firestore may still point at posts/.../video.mp4
+      // while `processed` is true and HLS is still propagating.
+      if (docProcessed) return u;
+      continue;
+    }
     if (!isProcessedOutputUrl(u)) continue;
     return u;
   }
@@ -345,20 +366,39 @@ ResolvedVideoPlayback _resolveChain({
       _truthy(item['processing']) ||
           _truthy(postData['processing']);
 
+  final hls = pickProcessedHls(item, postData);
+  final mp4 = pickProcessedMp4(item, postData);
+  final raw = pickRawFallback(item, postData);
+
   final transcodeError =
       _str(item['transcodeError']).isNotEmpty ||
           _str(postData['transcodeError']).isNotEmpty;
 
-  final hls = pickProcessedHls(item, postData);
-  final mp4 = pickProcessedMp4(item, postData);
-  final raw = pickRawFallback(item, postData);
+  // Failed transcode must win over raw fallback — otherwise posts like
+  // f7kHhVNJ (ffmpeg permanent error, 302 requeues) still open as playable raw MP4.
+  if (transcodeError) {
+    AppLogger.debug(LogCategory.resolver, 'FAILED_TRANSCODE $context');
+
+    return ResolvedVideoPlayback(
+      primaryUrl: '',
+      fallbackUrl: raw ?? '',
+      processed: false,
+      processing: false,
+      status: ReelStatus.failedTranscode,
+      blockedReason: 'transcode_error',
+      sourceWidth: meta.width,
+      sourceHeight: meta.height,
+      sourceFps: meta.fps,
+    );
+  }
 
   // ─────────────────────────────
   // 1. HLS (highest priority)
   // ─────────────────────────────
   if (hls != null && hls.isNotEmpty) {
-    debugPrint(
-      '[HLS_SELECTED] $context ${_shortUrl(hls)}',
+    AppLogger.debug(
+      LogCategory.resolver,
+      'HLS_SELECTED $context ${_shortUrl(hls)}',
     );
 
     return ResolvedVideoPlayback(
@@ -377,8 +417,9 @@ ResolvedVideoPlayback _resolveChain({
   // 2. Processed MP4 fallback
   // ─────────────────────────────
   if (mp4 != null && mp4.isNotEmpty) {
-    debugPrint(
-      '[PROCESSED_SELECTED] $context ${_shortUrl(mp4)}',
+    AppLogger.debug(
+      LogCategory.resolver,
+      'PROCESSED_SELECTED $context ${_shortUrl(mp4)}',
     );
 
     return ResolvedVideoPlayback(
@@ -429,11 +470,14 @@ ResolvedVideoPlayback _resolveChain({
         metaSaysBad || exoticCodec || knownBad || uploadServiceBlocked;
 
     if (!mustBlock) {
-      debugPrint(
-        '[RAW_FALLBACK] $context legacy=$isLegacy '
-        'processing=$processing processed=$processed '
-        'meta=${meta.width}x${meta.height}@${meta.fps} ${_shortUrl(raw)}',
-      );
+      if (_ResolverLogThrottle.shouldLog('raw_fallback:$context')) {
+        AppLogger.debug(
+          LogCategory.resolver,
+          'RAW_FALLBACK $context legacy=$isLegacy '
+          'processing=$processing processed=$processed '
+          'meta=${meta.width}x${meta.height}@${meta.fps} ${_shortUrl(raw)}',
+        );
+      }
       return ResolvedVideoPlayback(
         primaryUrl: raw,
         fallbackUrl: '',
@@ -454,10 +498,13 @@ ResolvedVideoPlayback _resolveChain({
             ? 'upload_service_blocked'
             : (meta.rawBlockReason ??
                 (exoticCodec ? 'exotic_codec' : 'unknown'));
-    debugPrint(
-      '[RAW_BLOCKED] $context legacy=$isLegacy reason=$reason '
-      'size=${meta.width}x${meta.height}@${meta.fps} ${_shortUrl(raw)}',
-    );
+    if (_ResolverLogThrottle.shouldLog('raw_blocked:$context:$reason')) {
+      AppLogger.debug(
+        LogCategory.resolver,
+        'RAW_BLOCKED $context legacy=$isLegacy reason=$reason '
+        'size=${meta.width}x${meta.height}@${meta.fps} ${_shortUrl(raw)}',
+      );
+    }
     return ResolvedVideoPlayback(
       primaryUrl: '',
       fallbackUrl: '',
@@ -473,32 +520,9 @@ ResolvedVideoPlayback _resolveChain({
   }
 
   // ─────────────────────────────
-  // 4. Failed transcode
+  // 4. Missing video
   // ─────────────────────────────
-  if (transcodeError) {
-    debugPrint(
-      '[FAILED_TRANSCODE] $context',
-    );
-
-    return ResolvedVideoPlayback(
-      primaryUrl: '',
-      fallbackUrl: '',
-      processed: false,
-      processing: false,
-      status: ReelStatus.failedTranscode,
-      blockedReason: 'transcode_error',
-      sourceWidth: meta.width,
-      sourceHeight: meta.height,
-      sourceFps: meta.fps,
-    );
-  }
-
-  // ─────────────────────────────
-  // 5. Missing video
-  // ─────────────────────────────
-  debugPrint(
-    '[MISSING_VIDEO] $context',
-  );
+  AppLogger.debug(LogCategory.resolver, 'MISSING_VIDEO $context');
 
   return ResolvedVideoPlayback(
     primaryUrl: '',

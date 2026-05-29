@@ -18,6 +18,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
 import 'app_theme_mode.dart';
 import 'package:flutter/services.dart';
+import 'package:halo/services/app_logger.dart';
+import 'package:halo/services/video_memory_bridge.dart';
 
 // ----------------- HALO THEME CONSTANTS -----------------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -28,6 +30,8 @@ const Color kDarkBackgroundBottom = Color(0xFF050505);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppLogger.init();
+  VideoMemoryBridge.install();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       systemNavigationBarColor: Colors.white,
@@ -68,9 +72,9 @@ class _AppRootState extends State<_AppRoot> {
         appleProvider:
             kDebugMode ? AppleProvider.debug : AppleProvider.appAttest,
       );
-      debugPrint('[AppCheck] activated debug=$kDebugMode');
+      AppLogger.info(LogCategory.general, 'AppCheck activated debug=$kDebugMode');
     } catch (e) {
-      debugPrint('[AppCheck] activation failed: $e');
+      AppLogger.warning(LogCategory.general, 'AppCheck activation failed: $e');
     }
     return app;
   }

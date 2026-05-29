@@ -379,9 +379,13 @@ async function validateHlsOutput(bucket, processedBase, sharedToken) {
   console.log(`[HLS validate] OK ${processedBase}`);
 }
 
-function runFfmpeg(inputPath, outputPath, outputOptions) {
+function runFfmpeg(inputPath, outputPath, outputOptions, inputOptions = []) {
   return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
+    const cmd = ffmpeg(inputPath);
+    if (inputOptions && inputOptions.length > 0) {
+      cmd.inputOptions(inputOptions);
+    }
+    cmd
       .outputOptions(outputOptions)
       .output(outputPath)
       .on('end', resolve)
@@ -533,9 +537,10 @@ function rotationFilterPrefix(rotationDeg) {
 
 /** Fit inside max box; letterbox pad to even size only — no stretch, no square forcing. */
 function scalePadFilter(tier, rotationDeg = 0) {
+  // No shell quoting — fluent-ffmpeg spawns without a shell; literal quotes break FFmpeg.
   return [
     rotationFilterPrefix(rotationDeg),
-    `scale='min(${tier.width},iw)':'min(${tier.height},ih)':force_original_aspect_ratio=decrease`,
+    `scale=w=min(${tier.width}\\,iw):h=min(${tier.height}\\,ih):force_original_aspect_ratio=decrease`,
     `pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:color=black`,
     'fps=30',
     'format=yuv420p',
@@ -553,9 +558,11 @@ const ORIENTATION_OUTPUT_OPTS = [
  * H.264 high profile @ level 4.1, 2-sec GOP (matches hls_time), iOS-friendly.
  * Strip HDR / DV / HEVC sidedata before encode so output is universally playable.
  */
+/** Must be applied as INPUT options (before -i). */
+const ORIENTATION_INPUT_OPTS = ['-noautorotate'];
+
 function baseVideoOptions(tier, rotationDeg = 0) {
   return [
-    '-noautorotate',
     '-vf',
     scalePadFilter(tier, rotationDeg),
     '-c:v',
@@ -586,8 +593,6 @@ function baseVideoOptions(tier, rotationDeg = 0) {
     'bt709',
     '-color_trc',
     'bt709',
-    '-bsf:v',
-    'filter_units=remove_types=6',
     '-avoid_negative_ts',
     'make_zero',
     '-fflags',
@@ -607,8 +612,10 @@ async function normalizeSource(localInput, tempDir, topTier, rotationDeg) {
   const out = path.join(tempDir, '_normalized.mp4');
   const vf = scalePadFilter(topTier, rotationDeg);
   console.log(`[FFMPEG_START] normalize tier=${topTier.key} (${topTier.width}x${topTier.height})`);
-  await runFfmpeg(localInput, out, [
-    '-noautorotate',
+  await runFfmpeg(
+    localInput,
+    out,
+    [
     '-vf',
     vf,
     '-c:v',
@@ -639,8 +646,6 @@ async function normalizeSource(localInput, tempDir, topTier, rotationDeg) {
     'bt709',
     '-color_trc',
     'bt709',
-    '-bsf:v',
-    'filter_units=remove_types=6',
     '-map_metadata',
     '-1',
     '-map_chapters',
@@ -655,7 +660,9 @@ async function normalizeSource(localInput, tempDir, topTier, rotationDeg) {
     ...ORIENTATION_OUTPUT_OPTS,
     '-movflags',
     '+faststart',
-  ]);
+    ],
+    ORIENTATION_INPUT_OPTS,
+  );
   console.log('[FFMPEG_END] normalize ok');
   return out;
 }
@@ -671,33 +678,43 @@ async function encodeRendition(inputPath, workDir, tier, rotationDeg = 0) {
   const videoOpts = baseVideoOptions(tier, rotationDeg);
 
   console.log(`[FFMPEG_START] tier=${tier.key} ${tier.width}x${tier.height}`);
-  await runFfmpeg(inputPath, mp4Out, [
-    ...videoOpts,
-    ...AUDIO_OPTIONS,
-    ...ORIENTATION_OUTPUT_OPTS,
-    '-movflags',
-    '+faststart',
-  ]);
+  await runFfmpeg(
+    inputPath,
+    mp4Out,
+    [
+      ...videoOpts,
+      ...AUDIO_OPTIONS,
+      ...ORIENTATION_OUTPUT_OPTS,
+      '-movflags',
+      '+faststart',
+    ],
+    ORIENTATION_INPUT_OPTS,
+  );
 
-  await runFfmpeg(inputPath, playlistPath, [
-    ...videoOpts,
-    ...AUDIO_OPTIONS,
-    ...ORIENTATION_OUTPUT_OPTS,
-    '-hls_time',
-    '1',
-    '-hls_playlist_type',
-    'vod',
-    '-hls_list_size',
-    '0',
-    '-hls_flags',
-    'independent_segments+temp_file',
-    '-hls_segment_type',
-    'mpegts',
-    '-hls_segment_filename',
-    segmentPattern,
-    '-f',
-    'hls',
-  ]);
+  await runFfmpeg(
+    inputPath,
+    playlistPath,
+    [
+      ...videoOpts,
+      ...AUDIO_OPTIONS,
+      ...ORIENTATION_OUTPUT_OPTS,
+      '-hls_time',
+      '1',
+      '-hls_playlist_type',
+      'vod',
+      '-hls_list_size',
+      '0',
+      '-hls_flags',
+      'independent_segments+temp_file',
+      '-hls_segment_type',
+      'mpegts',
+      '-hls_segment_filename',
+      segmentPattern,
+      '-f',
+      'hls',
+    ],
+    ORIENTATION_INPUT_OPTS,
+  );
 
   const localSegments = fs.existsSync(segDir)
     ? fs.readdirSync(segDir).filter((f) => f.endsWith('.ts'))
@@ -761,7 +778,7 @@ async function generatePreviewClip(localInput, workDir, isPortrait) {
     '1',
     '-an',
     '-vf',
-    `scale='${size}':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p`,
+    `scale=${size}:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p`,
     '-c:v',
     'libx264',
     '-profile:v',
@@ -976,10 +993,20 @@ async function updateReelDoc(videoId, urls, probe) {
     console.warn(`Reel doc missing: ${videoId}`);
     return;
   }
+
+  // Phase 6 denormalization: fetch the author once at transcode-finish time
+  // and stamp username / profilePic onto the reel doc, so the client never
+  // has to issue per-reel users/{uid}.get() requests. Best-effort: if the
+  // user lookup fails we still finalize the transcode.
+  const reelData = snap.data() || {};
+  const authorPatch = await buildAuthorPatch(reelData);
+
   await ref.update({
     processed: true,
     processing: false,
     transcodeError: admin.firestore.FieldValue.delete(),
+    transcodeErrorAt: admin.firestore.FieldValue.delete(),
+    transcodeErrorCategory: admin.firestore.FieldValue.delete(),
     legacyRawFallback: admin.firestore.FieldValue.delete(),
     videoUrl: urls.mp4,
     hlsUrl: urls.hls,
@@ -988,8 +1015,49 @@ async function updateReelDoc(videoId, urls, probe) {
     qualities: urls.qualities || {},
     processedAt: admin.firestore.FieldValue.serverTimestamp(),
     ...buildSourceMetadataPatch(probe),
+    ...authorPatch,
   });
   console.log(`[process finish] processed=true reelId=${videoId}`);
+}
+
+/**
+ * Returns a patch object with `username` / `displayName` / `profilePic` that
+ * should be merged into a reel doc. Skips fields that already exist on the
+ * reel (so a user renaming themselves doesn't retroactively rewrite old
+ * reels) and silently returns {} on any error.
+ */
+async function buildAuthorPatch(reelData) {
+  try {
+    const uid = (reelData.userId || reelData.uid || '').toString();
+    if (!uid) return {};
+
+    const userSnap = await admin
+      .firestore()
+      .collection('users')
+      .doc(uid)
+      .get();
+    if (!userSnap.exists) return {};
+
+    const u = userSnap.data() || {};
+    const username = (
+      u.username || u.userName || u.handle || ''
+    ).toString();
+    const displayName = (
+      u.displayName || u.name || u.full_name || u.fullName || ''
+    ).toString();
+    const profilePic = (
+      u.profilePhoto || u.photoUrl || u.photoURL || u.profilePic || u.avatar || ''
+    ).toString();
+
+    const patch = {};
+    if (username && !reelData.username) patch.username = username;
+    if (displayName && !reelData.displayName) patch.displayName = displayName;
+    if (profilePic && !reelData.profilePic) patch.profilePic = profilePic;
+    return patch;
+  } catch (e) {
+    console.warn('buildAuthorPatch failed:', e.message);
+    return {};
+  }
 }
 
 async function updatePostDoc(postId, videoKey, urls, rawStoragePath, probe) {
@@ -1076,6 +1144,7 @@ async function updatePostDoc(postId, videoKey, urls, rawStoragePath, probe) {
       processed: true,
       processing: false,
       transcodeError: admin.firestore.FieldValue.delete(),
+      transcodeErrorAt: admin.firestore.FieldValue.delete(),
       ...buildSourceMetadataPatch(probe),
     };
 
@@ -1091,6 +1160,9 @@ async function updatePostDoc(postId, videoKey, urls, rawStoragePath, probe) {
       processed: allProcessed,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
       legacyRawFallback: admin.firestore.FieldValue.delete(),
+      transcodeError: admin.firestore.FieldValue.delete(),
+      transcodeErrorAt: admin.firestore.FieldValue.delete(),
+      transcodeErrorCategory: admin.firestore.FieldValue.delete(),
       ...buildSourceMetadataPatch(probe),
     };
 
@@ -1130,6 +1202,184 @@ function getStorageBucket() {
   return 'halo-fb212.firebasestorage.app';
 }
 
+const MAX_TRANSCODE_ATTEMPTS = 3;
+const TRANSCODE_RETRY_DELAYS_MS = [0, 8000, 20000];
+/** Docs stuck in processing longer than this can be re-queued via migrateLegacyVideos. */
+const STUCK_PROCESSING_MS = 2 * 60 * 60 * 1000;
+
+function getProcessedBase(ctx) {
+  return ctx.kind === 'post'
+    ? `videos/processed/posts/${ctx.postId}/${ctx.videoKey}`
+    : `videos/processed/${ctx.jobId}`;
+}
+
+function ladderTiersFromKeys() {
+  return TIER_KEYS.map((k) => {
+    return (
+      LADDER_PORTRAIT.find((t) => t.key === k) ||
+      LADDER_LANDSCAPE.find((t) => t.key === k)
+    );
+  }).filter(Boolean);
+}
+
+function isTransientTranscodeError(err) {
+  const msg = (err && err.message ? err.message : String(err)).toLowerCase();
+  if (msg.includes('no space') || msg.includes('enospc')) return false;
+  if (msg.includes('invalid data') || msg.includes('codec not found')) {
+    return false;
+  }
+  if (msg.includes('filter not found') || msg.includes('error opening output')) {
+    return false;
+  }
+  return (
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('socket hang up') ||
+    msg.includes('503') ||
+    msg.includes('429') ||
+    msg.includes('unavailable') ||
+    msg.includes('deadline exceeded') ||
+    msg.includes('temporarily unavailable') ||
+    msg.includes('connection reset') ||
+    msg.includes('network')
+  );
+}
+
+/**
+ * If Storage already has master.m3u8, patch Firestore without re-encoding.
+ * @returns {Promise<boolean>} true when rehydration succeeded
+ */
+async function rehydrateFirestoreFromStorage(ctx, bucket, processedBase, storagePath) {
+  try {
+    const ref = ctx.kind === 'post'
+      ? admin.firestore().collection('posts').doc(ctx.postId)
+      : admin.firestore().collection('reels').doc(ctx.jobId);
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+
+    const d = snap.data() || {};
+    const needsRehydration = ctx.kind === 'post'
+      ? (Array.isArray(d.media) &&
+          d.media.some((m) => m && (m.processing === true || !m.processed)))
+      : (d.processing === true || !d.processed);
+
+    if (!needsRehydration) return true;
+
+    const [masterMeta] = await bucket
+      .file(`${processedBase}/master.m3u8`)
+      .getMetadata();
+    const sharedToken =
+      masterMeta &&
+      masterMeta.metadata &&
+      masterMeta.metadata.firebaseStorageDownloadTokens;
+    if (!sharedToken) {
+      console.warn(
+        `[rehydrate] missing download token on ${processedBase}/master.m3u8`,
+      );
+      return false;
+    }
+
+    const tiers = ladderTiersFromKeys();
+    const urls = await buildPublicUrls(
+      bucket, processedBase, tiers, sharedToken,
+    );
+    if (ctx.kind === 'reel') {
+      await updateReelDoc(ctx.jobId, urls, null);
+    } else {
+      await updatePostDoc(
+        ctx.postId, ctx.videoKey, urls, storagePath, null,
+      );
+    }
+    console.log(`[rehydrate] Firestore updated from ${processedBase}`);
+    return true;
+  } catch (rehydrateErr) {
+    console.warn(
+      '[rehydrate] failed:',
+      rehydrateErr && rehydrateErr.message,
+    );
+    return false;
+  }
+}
+
+async function markTranscodeStarted(ctx) {
+  const patch = {
+    processing: true,
+    transcodeStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+    transcodeError: admin.firestore.FieldValue.delete(),
+    transcodeErrorAt: admin.firestore.FieldValue.delete(),
+    transcodeErrorCategory: admin.firestore.FieldValue.delete(),
+  };
+  if (ctx.kind === 'post') {
+    await admin.firestore().collection('posts').doc(ctx.postId).set(
+      patch,
+      { merge: true },
+    );
+  } else {
+    await admin.firestore().collection('reels').doc(ctx.jobId).set(
+      patch,
+      { merge: true },
+    );
+  }
+}
+
+async function readTranscodeStartedMs(ctx) {
+  const ref = ctx.kind === 'post'
+    ? admin.firestore().collection('posts').doc(ctx.postId)
+    : admin.firestore().collection('reels').doc(ctx.jobId);
+  const snap = await ref.get();
+  if (!snap.exists) return null;
+  const ts = snap.data() && snap.data().transcodeStartedAt;
+  if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
+  return null;
+}
+
+async function recordTranscodeFailure(ctx, errMessage, { transient }) {
+  const failurePatch = {
+    processing: false,
+    processed: false,
+    transcodeError: errMessage,
+    transcodeErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+    transcodeErrorCategory: transient ? 'transient' : 'permanent',
+    transcodeAttemptCount: admin.firestore.FieldValue.increment(1),
+  };
+  // Stop the Firestore re-queue loop on permanent failures — user must re-run
+  // migration (writes a fresh requestedTranscodeAt) to retry.
+  if (!transient) {
+    failurePatch.requestedTranscodeAt = admin.firestore.FieldValue.delete();
+  }
+  if (ctx.kind === 'post') {
+    const ref = admin.firestore().collection('posts').doc(ctx.postId);
+    const snap = await ref.get();
+    if (!snap.exists) return;
+    const data = snap.data() || {};
+    const media = Array.isArray(data.media)
+      ? data.media.map((m) => ({ ...m }))
+      : [];
+    const videoIndex = parseVideoIndexFromKey(ctx.videoKey);
+    let videoOrdinal = 0;
+    for (let i = 0; i < media.length; i++) {
+      if ((media[i].type || '').toString() !== 'video') continue;
+      if (videoOrdinal === videoIndex) {
+        media[i] = {
+          ...media[i],
+          processing: false,
+          processed: false,
+          transcodeError: errMessage,
+        };
+        break;
+      }
+      videoOrdinal++;
+    }
+    await ref.update({ ...failurePatch, media });
+  } else {
+    await admin
+      .firestore()
+      .collection('reels')
+      .doc(ctx.jobId)
+      .update(failurePatch);
+  }
+}
+
 /**
  * Core transcode pipeline. Pulls a raw file from Storage, normalises +
  * adaptive-HLS-encodes it, uploads outputs, and updates Firestore.
@@ -1148,69 +1398,13 @@ async function runTranscodePipeline({
   try {
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-    const processedBase =
-      ctx.kind === 'post'
-        ? `videos/processed/posts/${ctx.postId}/${ctx.videoKey}`
-        : `videos/processed/${ctx.jobId}`;
+    const processedBase = getProcessedBase(ctx);
 
     if (await isAlreadyProcessed(bucket, processedBase)) {
       console.log(`[skip] duplicate transcode: ${processedBase}`);
-
-      // Rehydrate Firestore if processed files exist but the doc was never
-      // updated. This handles the case where the previous CF run crashed
-      // (or got killed) AFTER uploading processed files but BEFORE writing
-      // the Firestore doc — without this, that doc would stay
-      // `processing=true` forever.
-      try {
-        const ref = ctx.kind === 'post'
-          ? admin.firestore().collection('posts').doc(ctx.postId)
-          : admin.firestore().collection('reels').doc(ctx.jobId);
-        const snap = await ref.get();
-        if (snap.exists) {
-          const d = snap.data() || {};
-          const needsRehydration = ctx.kind === 'post'
-            ? (Array.isArray(d.media) &&
-               d.media.some((m) =>
-                 m && (m.processing === true || !m.processed)))
-            : (d.processing === true || !d.processed);
-
-          if (needsRehydration) {
-            console.log(
-              `[rehydrate] processedBase exists, Firestore stale — rehydrating`,
-            );
-            const [masterMeta] = await bucket
-              .file(`${processedBase}/master.m3u8`)
-              .getMetadata();
-            const sharedToken =
-              masterMeta && masterMeta.metadata &&
-              masterMeta.metadata.firebaseStorageDownloadTokens;
-            if (sharedToken) {
-              const tiers = TIER_KEYS
-                .map((k) => {
-                  const p = LADDER_PORTRAIT.find((t) => t.key === k);
-                  const l = LADDER_LANDSCAPE.find((t) => t.key === k);
-                  return p || l;
-                })
-                .filter(Boolean);
-              const urls = await buildPublicUrls(
-                bucket, processedBase, tiers, sharedToken,
-              );
-              if (ctx.kind === 'reel') {
-                await updateReelDoc(ctx.jobId, urls, null);
-              } else {
-                await updatePostDoc(
-                  ctx.postId, ctx.videoKey, urls, storagePath, null,
-                );
-              }
-            }
-          }
-        }
-      } catch (rehydrateErr) {
-        console.warn(
-          '[rehydrate] failed (non-fatal):',
-          rehydrateErr && rehydrateErr.message,
-        );
-      }
+      await rehydrateFirestoreFromStorage(
+        ctx, bucket, processedBase, storagePath,
+      );
       return null;
     }
 
@@ -1222,49 +1416,101 @@ async function runTranscodePipeline({
       console.log(`[process start] reelId=${ctx.jobId} src=${storagePath}`);
     }
 
-    const localInput = path.join(tempDir, ctx.fileName);
-    await bucket.file(storagePath).download({ destination: localInput });
-    console.log(`Downloaded ${storagePath} → ${processedBase}`);
+    await markTranscodeStarted(ctx);
+    const pipelineStartedAt = Date.now();
 
-    const { workDir, tiers, sourceProbe } = await transcodeToAdaptiveHls(
-      localInput,
-      tempDir,
-    );
+    let lastErr = null;
+    for (let attempt = 0; attempt < MAX_TRANSCODE_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        const delay = TRANSCODE_RETRY_DELAYS_MS[attempt] || 15000;
+        console.log(
+          `[PROCESS_RETRY] jobId=${ctx.jobId} attempt=${attempt + 1}/` +
+            `${MAX_TRANSCODE_ATTEMPTS} delayMs=${delay}`,
+        );
+        await sleep(delay);
+      }
 
-    const sharedToken = await uploadProcessedTree(
-      bucket,
-      processedBase,
-      workDir,
-    );
-    const urls = await buildPublicUrls(
-      bucket,
-      processedBase,
-      tiers,
-      sharedToken,
-    );
-    urls.thumb = await setDownloadUrl(
-      bucket,
-      `${processedBase}/thumb.jpg`,
-      'image/jpeg',
-      sharedToken,
-    );
+      try {
+        const localInput = path.join(tempDir, ctx.fileName);
+        await bucket.file(storagePath).download({ destination: localInput });
+        console.log(`Downloaded ${storagePath} → ${processedBase}`);
 
-    if (ctx.kind === 'reel') {
-      await updateReelDoc(ctx.jobId, urls, sourceProbe);
-    } else {
-      await updatePostDoc(
-        ctx.postId,
-        ctx.videoKey,
-        urls,
-        storagePath,
-        sourceProbe,
-      );
+        const { workDir, tiers, sourceProbe } = await transcodeToAdaptiveHls(
+          localInput,
+          tempDir,
+        );
+
+        const sharedToken = await uploadProcessedTree(
+          bucket,
+          processedBase,
+          workDir,
+        );
+        const urls = await buildPublicUrls(
+          bucket,
+          processedBase,
+          tiers,
+          sharedToken,
+        );
+        urls.thumb = await setDownloadUrl(
+          bucket,
+          `${processedBase}/thumb.jpg`,
+          'image/jpeg',
+          sharedToken,
+        );
+
+        if (ctx.kind === 'reel') {
+          await updateReelDoc(ctx.jobId, urls, sourceProbe);
+        } else {
+          await updatePostDoc(
+            ctx.postId,
+            ctx.videoKey,
+            urls,
+            storagePath,
+            sourceProbe,
+          );
+        }
+
+        const startedMs = await readTranscodeStartedMs(ctx);
+        const durationMs = startedMs != null
+          ? Date.now() - startedMs
+          : Date.now() - pipelineStartedAt;
+        console.log(
+          `[PROCESS_COMPLETE] jobId=${ctx.jobId} processed=true ` +
+            `processing=false transcode_duration_ms=${durationMs}`,
+        );
+        console.log(
+          `[METRIC] transcode_duration_ms=${durationMs} kind=${ctx.kind} ` +
+            `jobId=${ctx.jobId}`,
+        );
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        return null;
+      } catch (err) {
+        lastErr = err;
+        const errMessage = err && err.message ? err.message : 'Transcode failed';
+        const transient = isTransientTranscodeError(err);
+        console.error(
+          `[PROCESS_FAILED] jobId=${ctx.jobId} attempt=${attempt + 1} ` +
+            `transient=${transient} error=${errMessage}`,
+        );
+        if (transient && attempt < MAX_TRANSCODE_ATTEMPTS - 1) {
+          continue;
+        }
+        break;
+      }
     }
 
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    console.log(
-      `[PROCESS_COMPLETE] jobId=${ctx.jobId} processed=true processing=false`,
+    const errMessage =
+      lastErr && lastErr.message ? lastErr.message : 'Transcode failed';
+    const transient = isTransientTranscodeError(lastErr);
+    console.error(
+      `[PROCESS_FAILED_FINAL] jobId=${ctx.jobId} kind=${ctx.kind} ` +
+        `category=${transient ? 'transient' : 'permanent'} error=${errMessage}`,
     );
+    if (lastErr) console.error(lastErr);
+    await recordTranscodeFailure(ctx, errMessage, { transient });
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
     return null;
   } catch (err) {
     const errMessage = err && err.message ? err.message : 'Transcode failed';
@@ -1272,48 +1518,9 @@ async function runTranscodePipeline({
       `[PROCESS_FAILED] jobId=${ctx.jobId} kind=${ctx.kind} error=${errMessage}`,
     );
     console.error(err);
-    try {
-      const failurePatch = {
-        processing: false,
-        processed: false,
-        transcodeError: errMessage,
-        transcodeErrorAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-      if (ctx.kind === 'post') {
-        const ref = admin.firestore().collection('posts').doc(ctx.postId);
-        const snap = await ref.get();
-        if (snap.exists) {
-          const data = snap.data() || {};
-          const media = Array.isArray(data.media)
-            ? data.media.map((m) => ({ ...m }))
-            : [];
-          const videoIndex = parseVideoIndexFromKey(ctx.videoKey);
-          let videoOrdinal = 0;
-          for (let i = 0; i < media.length; i++) {
-            if ((media[i].type || '').toString() !== 'video') continue;
-            if (videoOrdinal === videoIndex) {
-              media[i] = {
-                ...media[i],
-                processing: false,
-                processed: false,
-                transcodeError: errMessage,
-              };
-              break;
-            }
-            videoOrdinal++;
-          }
-          await ref.update({ ...failurePatch, media });
-        }
-      } else if (ctx.kind === 'reel') {
-        const ref = admin.firestore().collection('reels').doc(ctx.jobId);
-        const snap = await ref.get();
-        if (snap.exists) {
-          await ref.update(failurePatch);
-        }
-      }
-    } catch (updateErr) {
-      console.error('[PROCESS_FAILED] Firestore update error:', updateErr);
-    }
+    await recordTranscodeFailure(ctx, errMessage, {
+      transient: isTransientTranscodeError(err),
+    });
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1400,9 +1607,20 @@ function buildCtxFromStoragePath(rawPath) {
 function shouldRequeueNow(after) {
   if (!after) return false;
 
-  // Never touch docs that are done or actively being transcoded.
-  if (after.processing === true) return false;
+  // Never touch docs that are already done.
   if (after.processed === true) return false;
+
+  // Permanent FFmpeg/config failures — do not auto-requeue (client migration only).
+  if (
+    after.transcodeError &&
+    after.transcodeErrorCategory === 'permanent' &&
+    !after.requestedTranscodeAt
+  ) {
+    return false;
+  }
+
+  const attempts = Number(after.transcodeAttemptCount || 0);
+  if (attempts >= 12) return false;
 
   // Must have a raw video URL to work from.
   const hasRawUrl =
@@ -1435,17 +1653,36 @@ function shouldRequeueNow(after) {
 
   if (!explicitlyFlagged && !isNewUpload) return false;
 
-  // Dedup window: don't re-trigger if we requeued recently — unless the
-  // last attempt failed (transcodeError is set), in which case the user
-  // should not have to wait 15 minutes to try again.
+  // Block in-flight transcodes UNLESS an explicit re-queue request is set.
+  // migrateStuckProcessing intentionally targets docs stuck at processing=true
+  // and writes requestedTranscodeAt to retry them — we must let those through.
+  // Concurrent self-triggers are still caught by the requeuedAt dedup window
+  // below (handleLegacyRequeue writes requeuedAt:serverTimestamp() at start).
+  if (after.processing === true && !explicitlyFlagged) return false;
+
+  // Dedup window: don't re-trigger if we requeued recently.
+  // Transient failures may retry sooner; permanent failures require a fresh
+  // requestedTranscodeAt (written by migrateLegacyVideos).
   const requeuedAt = after.requeuedAt;
   if (requeuedAt && typeof requeuedAt.toMillis === 'function') {
     const ageMs = Date.now() - requeuedAt.toMillis();
-    const hasFailed = !!after.transcodeError;
-    if (!hasFailed && ageMs >= 0 && ageMs < LEGACY_REQUEUE_DEDUP_MS) {
-      return false;
+    const isTransientFailure = after.transcodeErrorCategory === 'transient';
+    if (ageMs >= 0 && ageMs < LEGACY_REQUEUE_DEDUP_MS) {
+      if (!after.transcodeError || !isTransientFailure) {
+        return false;
+      }
     }
   }
+
+  // Permanent failure already recorded — do not auto-loop until migration re-flags.
+  if (
+    after.transcodeError &&
+    after.transcodeErrorCategory === 'permanent' &&
+    !after.requestedTranscodeAt
+  ) {
+    return false;
+  }
+
   return true;
 }
 
@@ -1501,10 +1738,7 @@ async function handleLegacyRequeue({ collection, docId, after }) {
   // doc was wiped/re-flagged later). Avoids paying for a re-transcode and
   // gets the reel playable immediately.
   const bucket = admin.storage().bucket(getStorageBucket());
-  const processedBase =
-    ctx.kind === 'post'
-      ? `videos/processed/posts/${ctx.postId}/${ctx.videoKey}`
-      : `videos/processed/${ctx.jobId}`;
+  const processedBase = getProcessedBase(ctx);
 
   const alreadyInStorage = await isAlreadyProcessed(bucket, processedBase);
   if (alreadyInStorage) {
@@ -1512,51 +1746,12 @@ async function handleLegacyRequeue({ collection, docId, after }) {
       `[LEGACY_REQUEUE] ${docId} already processed in Storage — ` +
         `rehydrating Firestore without re-transcoding`,
     );
-    try {
-      const [masterMeta] = await bucket
-        .file(`${processedBase}/master.m3u8`)
-        .getMetadata();
-      const sharedToken =
-        masterMeta &&
-        masterMeta.metadata &&
-        masterMeta.metadata.firebaseStorageDownloadTokens;
-      if (sharedToken) {
-        const tiers = TIER_KEYS
-          .map((k) => {
-            return (
-              LADDER_PORTRAIT.find((t) => t.key === k) ||
-              LADDER_LANDSCAPE.find((t) => t.key === k)
-            );
-          })
-          .filter(Boolean);
-        const urls = await buildPublicUrls(
-          bucket, processedBase, tiers, sharedToken,
-        );
-        if (ctx.kind === 'reel') {
-          await updateReelDoc(ctx.jobId, urls, null);
-        } else {
-          await updatePostDoc(
-            ctx.postId, ctx.videoKey, urls, storagePath, null,
-          );
-        }
-        console.log(`[LEGACY_REQUEUE] rehydrated ${docId} successfully`);
-      } else {
-        console.warn(
-          `[LEGACY_REQUEUE] ${docId} processed in Storage but master.m3u8 ` +
-            `has no firebaseStorageDownloadTokens — falling through to ` +
-            `re-transcode`,
-        );
-      }
-    } catch (err) {
-      console.warn(
-        `[LEGACY_REQUEUE] rehydrate failed for ${docId}:`,
-        err && err.message,
-      );
+    const ok = await rehydrateFirestoreFromStorage(
+      ctx, bucket, processedBase, storagePath,
+    );
+    if (ok) {
+      console.log(`[LEGACY_REQUEUE] rehydrated ${docId} successfully`);
     }
-    // If we got here with sharedToken, the doc was rehydrated. Otherwise
-    // the warn above logged the reason and we still return — re-running
-    // the pipeline now would only duplicate work; the next Firestore write
-    // will retry naturally via the trigger.
     return;
   }
   // ── end Storage-first check ──
@@ -1640,7 +1835,7 @@ const ADMIN_UIDS = new Set([
   // Add admin uids here if you want to restrict the callable. Empty = open.
 ]);
 
-async function migrateOneCollection(collection, maxDocs) {
+async function migrateOneCollection(collection, maxDocs, { retryPermanentFailures = false } = {}) {
   const fs = admin.firestore();
   const snap = await fs
     .collection(collection)
@@ -1659,9 +1854,88 @@ async function migrateOneCollection(collection, maxDocs) {
       skipped++;
       continue;
     }
+    const isPermanentFailure =
+      data.transcodeError && data.transcodeErrorCategory === 'permanent';
+    // Permanent FFmpeg failures need a code deploy / manual re-flag — not auto-loop.
+    if (isPermanentFailure && !retryPermanentFailures) {
+      skipped++;
+      continue;
+    }
+    if (Number(data.transcodeAttemptCount || 0) >= 12) {
+      skipped++;
+      continue;
+    }
     const candidates = collectRawCandidates(collection, data);
     const hasPath = candidates.some((u) => extractStoragePathFromUrl(u));
     if (!hasPath) {
+      skipped++;
+      continue;
+    }
+    const patch = {
+      legacyRawFallback: true,
+      requestedTranscodeAt: admin.firestore.FieldValue.serverTimestamp(),
+      requeuedAt: admin.firestore.FieldValue.delete(),
+    };
+    if (isPermanentFailure && retryPermanentFailures) {
+      patch.transcodeError = admin.firestore.FieldValue.delete();
+      patch.transcodeErrorCategory = admin.firestore.FieldValue.delete();
+      patch.transcodeErrorAt = admin.firestore.FieldValue.delete();
+    }
+    batch.set(doc.ref, patch, { merge: true });
+    queued++;
+    pending++;
+    if (pending >= 400) {
+      await batch.commit();
+      pending = 0;
+    }
+  }
+  if (pending > 0) {
+    await batch.commit();
+  }
+  return { scanned: snap.size, queued, skipped };
+}
+
+/**
+ * Re-queue docs stuck at processing=true (CF crash / stale Firestore).
+ */
+async function migrateStuckProcessing(collection, maxDocs) {
+  const fsDb = admin.firestore();
+  const snap = await fsDb
+    .collection(collection)
+    .where('processing', '==', true)
+    .limit(maxDocs)
+    .get();
+
+  const cutoffMs = Date.now() - STUCK_PROCESSING_MS;
+  let queued = 0;
+  let skipped = 0;
+  const batch = fsDb.batch();
+  let pending = 0;
+
+  for (const doc of snap.docs) {
+    const data = doc.data() || {};
+    if (data.processed === true) {
+      skipped++;
+      continue;
+    }
+    const started = data.transcodeStartedAt;
+    const startedMs =
+      started && typeof started.toMillis === 'function'
+        ? started.toMillis()
+        : null;
+    if (startedMs != null && startedMs > cutoffMs) {
+      skipped++;
+      continue;
+    }
+    if (
+      data.transcodeError &&
+      data.transcodeErrorCategory === 'permanent'
+    ) {
+      skipped++;
+      continue;
+    }
+    const candidates = collectRawCandidates(collection, data);
+    if (!candidates.some((u) => extractStoragePathFromUrl(u))) {
       skipped++;
       continue;
     }
@@ -1671,6 +1945,7 @@ async function migrateOneCollection(collection, maxDocs) {
         legacyRawFallback: true,
         requestedTranscodeAt: admin.firestore.FieldValue.serverTimestamp(),
         requeuedAt: admin.firestore.FieldValue.delete(),
+        transcodeError: admin.firestore.FieldValue.delete(),
       },
       { merge: true },
     );
@@ -1704,13 +1979,28 @@ exports.migrateLegacyVideos = onCall(
       500,
     );
     const which = (data.collection || 'both').toString();
+    const includeStuck = data.includeStuckProcessing === true;
+    const retryPermanentFailures = data.retryPermanentFailures === true;
 
-    const result = { posts: null, reels: null };
+    const result = { posts: null, reels: null, stuck: null };
     if (which === 'posts' || which === 'both') {
-      result.posts = await migrateOneCollection('posts', maxDocs);
+      result.posts = await migrateOneCollection('posts', maxDocs, {
+        retryPermanentFailures,
+      });
     }
     if (which === 'reels' || which === 'both') {
-      result.reels = await migrateOneCollection('reels', maxDocs);
+      result.reels = await migrateOneCollection('reels', maxDocs, {
+        retryPermanentFailures,
+      });
+    }
+    if (includeStuck) {
+      result.stuck = { posts: null, reels: null };
+      if (which === 'posts' || which === 'both') {
+        result.stuck.posts = await migrateStuckProcessing('posts', maxDocs);
+      }
+      if (which === 'reels' || which === 'both') {
+        result.stuck.reels = await migrateStuckProcessing('reels', maxDocs);
+      }
     }
     console.log('[MIGRATE_LEGACY_VIDEOS]', JSON.stringify(result));
     return result;

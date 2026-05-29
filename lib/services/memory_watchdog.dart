@@ -1,9 +1,12 @@
 /// Heap-pressure watchdog for the reels feed.
 ///
 /// Polls Dart VM RSS every second and emits three thresholds:
-///   * 180 MB  → pause new preloads
-///   * 220 MB  → force-dispose the oldest pooled player
-///   * 240 MB  → emergency: dispose everything except the current reel
+///   * 260 MB  → pause new preloads
+///   * 300 MB  → force-dispose the oldest pooled player
+///   * 360 MB  → emergency: dispose pooled players (if any)
+///
+/// Baseline RSS on a Firebase + Flutter cold start is often ~200–270 MB;
+/// lower thresholds caused false critical evictions before any reel opened.
 ///
 /// `MemoryWatchdog` is platform-portable (uses `ProcessInfo.currentRss`) and
 /// callers listen via [stream] or query the live [state] / [rssMb] fields.
@@ -12,7 +15,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:halo/services/app_logger.dart';
 
 enum MemoryPressure { ok, soft, hard, critical }
 
@@ -26,9 +29,9 @@ class MemoryWatchdog {
   MemoryWatchdog._();
   static final MemoryWatchdog instance = MemoryWatchdog._();
 
-  static const int kSoftMb = 180;
-  static const int kHardMb = 220;
-  static const int kCriticalMb = 240;
+  static const int kSoftMb = 260;
+  static const int kHardMb = 300;
+  static const int kCriticalMb = 360;
 
   final StreamController<MemoryWatchdogEvent> _controller =
       StreamController<MemoryWatchdogEvent>.broadcast();
@@ -63,8 +66,9 @@ class MemoryWatchdog {
     final next = _classify(_rssMb);
     if (next != _state) {
       _state = next;
-      debugPrint(
-        '[MemoryWatchdog] state=$next rss=${_rssMb}MB '
+      AppLogger.warning(
+        LogCategory.memory,
+        'state=$next rss=${_rssMb}MB '
         '(soft=$kSoftMb hard=$kHardMb critical=$kCriticalMb)',
       );
       _controller.add(MemoryWatchdogEvent(next, _rssMb));

@@ -1770,6 +1770,10 @@ class _PostMedia extends StatelessWidget {
 
 // ---------------------- Network Video ----------------------
 
+/// Clears every decoder in the home-feed static cache (memory watchdog).
+void evictHomeFeedVideoCache() =>
+    _NetworkVideoState.evictAllUnderMemoryPressure();
+
 class _NetworkVideo extends StatefulWidget {
   final String url;
   final String fallbackUrl;
@@ -1788,8 +1792,10 @@ class _NetworkVideo extends StatefulWidget {
 }
 
 class _NetworkVideoState extends State<_NetworkVideo> {
-  static int get _maxCachedControllers =>
-      ReelPlatformPolicy.isIOS ? 2 : 3;
+  // Honor the central policy (currently 2 on every platform). Was 3 on
+  // Android, which contributed to the 256 MB heap OOM when a 4K HEVC clip
+  // and a 1080p clip were decoded simultaneously.
+  static int get _maxCachedControllers => ReelPlatformPolicy.maxPoolSlots;
   static final LinkedHashMap<String, VideoPlayerController> _videoCache =
       LinkedHashMap<String, VideoPlayerController>();
   static final Set<String> _visibleKeys = <String>{};
@@ -1929,6 +1935,35 @@ class _NetworkVideoState extends State<_NetworkVideo> {
     _controller?.pause();
   }
 
+  /// Drops this widget's hold on the shared cache entry. Disposes the decoder
+  /// when no other [_NetworkVideo] still marks the URL visible.
+  void _releaseCacheEntry() {
+    final key = _cacheKey;
+    if (key == null) return;
+    _visibleKeys.remove(key);
+    _controller?.removeListener(_enforceTrimWindow);
+    _controller = null;
+    _initStarted = false;
+    _initialized = false;
+    _cacheKey = null;
+
+    if (_visibleKeys.contains(key)) return;
+
+    final cached = _videoCache.remove(key);
+    if (cached != null) {
+      unawaited(cached.dispose());
+    }
+  }
+
+  /// Called from [MemoryWatchdog] on critical RSS — frees every home-feed decoder.
+  static void evictAllUnderMemoryPressure() {
+    for (final c in _videoCache.values) {
+      unawaited(c.dispose());
+    }
+    _videoCache.clear();
+    _visibleKeys.clear();
+  }
+
   void _syncPlayback() {
     final c = _controller;
     if (c == null || !c.value.isInitialized || !mounted) return;
@@ -1984,8 +2019,7 @@ class _NetworkVideoState extends State<_NetworkVideo> {
     _initDebounce?.cancel();
     _initGeneration++;
     ReelLifecycleLog.dispose(widget.url, reason: 'home_network_video');
-    _controller?.removeListener(_enforceTrimWindow);
-    _pauseAndHide();
+    _releaseCacheEntry();
     super.dispose();
   }
 
@@ -2014,6 +2048,10 @@ class _NetworkVideoState extends State<_NetworkVideo> {
               _visibleKeys.add(key);
             } else {
               _visibleKeys.remove(key);
+              if (!_visibleKeys.contains(key)) {
+                _releaseCacheEntry();
+                if (mounted) setState(() {});
+              }
             }
           }
           _syncPlayback();
