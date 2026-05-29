@@ -90,7 +90,6 @@ flutter_launcher_icons:
   remove_alpha_ios: true
 
 dependency_overrides:
-  web: ^0.5.1
   google_sign_in_ios: 5.7.1
 
 

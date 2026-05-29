@@ -10,22 +10,22 @@ import 'package:halo/services/app_logger.dart';
 /// Full-screen vertical reels feed ranked by virality score.
 ///
 /// Architecture notes:
-/// - Uses `better_player` (ExoPlayer / AVPlayer) so it handles MP4, WebM, MOV,
+/// - Uses `better_player` (ExoPlayer / AVPlayer) — handles MP4, WebM, MOV,
 ///   MKV, HLS (.m3u8), DASH (.mpd) and most codecs out of the box.
-/// - Keeps at most [ReelPlatformPolicy.maxPoolSlots] = 2 controllers alive
-///   ([current, current + 1]). Going wider triggers 256 MB-heap OOM on
-///   Android when sources are 4K HEVC. Previous page is re-created from
-///   cache on backward scroll — better_player's disk cache makes that cheap.
-/// - Uses a tight buffering window (3–8 s) so ExoPlayer's allocator footprint
-///   stays small for high-bitrate sources. Real resolution capping is
-///   deferred to Stage 4 (server-side transcoding).
+/// - Controller pool is bounded to [ReelPlatformPolicy.maxPoolSlots]:
+///     Android = 3 (current + 2 ahead + 1 behind)
+///     iOS     = 2 (current + 1 ahead + 1 behind)
+///   All exotic HEVC / HDR uploads are now transcoded server-side to H.264 SDR
+///   by the Cloud Function, so the tighter pool is safe at 720p.
+/// - Thumbnail poster frames (from `thumbnailUrl` field) are shown while the
+///   video buffers — eliminates the blank-spinner flash on swipe.
+/// - Pagination: loads [_pageSize] reels at a time; triggers next page when
+///   the user is [_prefetchThreshold] items from the end.
 /// - Plays only the currently visible page; pauses every other controller.
-/// - Reacts to app-lifecycle changes via [WidgetsBindingObserver] so audio
-///   does not leak when the app is backgrounded.
-/// - Listens to [didHaveMemoryPressure] and evicts every controller except
-///   the current one when the OS warns of low memory.
-/// - Adds [VisibilityDetector] as a second safety net for when the feed is
-///   pushed under another route.
+/// - Reacts to app-lifecycle via [WidgetsBindingObserver] (audio leak guard).
+/// - Evicts every controller except current on [didHaveMemoryPressure].
+/// - [VisibilityDetector] as a second safety net when the feed is under
+///   another route.
 class ReelsFeed extends StatefulWidget {
   const ReelsFeed({super.key});
 
@@ -37,14 +37,20 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
   final ReelService _reelService = ReelService();
   final PageController _pageController = PageController();
 
-  /// Live controllers keyed by reelId. Bounded to [ReelPlatformPolicy.maxPoolSlots]
-  /// entries (currently 2): the controllers for currentIndex and currentIndex + 1.
+  /// Live controllers keyed by reelId. Bounded to
+  /// [ReelPlatformPolicy.maxPoolSlots] entries.
   final Map<String, BetterPlayerController> _controllers = {};
 
   int _currentIndex = 0;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _reels = const [];
   bool _appBackgrounded = false;
   int _lastLoggedReelCount = -1;
+
+  // ── Pagination state ───────────────────────────────────────────────────────
+  static const int _pageSize = 20;
+  static const int _prefetchThreshold = 5; // load next page this many before end
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
 
   @override
   void initState() {
@@ -97,6 +103,8 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
     }
   }
 
+  // ── Data extraction helpers ────────────────────────────────────────────────
+
   /// Reads the video URL from a reel document. Tolerates several field names
   /// that have been used historically by uploaders.
   String _extractVideoUrl(Map<String, dynamic> data) {
@@ -109,7 +117,26 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
         .trim();
   }
 
-  BetterPlayerController _getOrCreateController(String reelId, String url) {
+  /// Reads the thumbnail URL from a reel document (poster frame shown while
+  /// video buffers). Checks Cloudinary, Firebase Storage, and legacy fields.
+  String _extractThumbnailUrl(Map<String, dynamic> data) {
+    return (data['thumbnailUrl'] ??
+            data['thumbnail'] ??
+            data['posterUrl'] ??
+            data['coverUrl'] ??
+            data['thumbUrl'] ??
+            '')
+        .toString()
+        .trim();
+  }
+
+  // ── Controller pool ────────────────────────────────────────────────────────
+
+  BetterPlayerController _getOrCreateController(
+    String reelId,
+    String url,
+    String thumbnailUrl,
+  ) {
     final existing = _controllers[reelId];
     if (existing != null) return existing;
 
@@ -123,16 +150,31 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
         maxCacheFileSize: 50 * 1024 * 1024,
         key: reelId,
       ),
-      // Tight buffer window — primary memory mitigation for high-bitrate
-      // sources on Android (256–512 MB heap). Cuts ExoPlayer's allocator
-      // footprint significantly versus the defaults of 15 s / 50 s.
+      // Tight buffer window — keeps ExoPlayer's allocator footprint small for
+      // the 3-slot pool on Android. Cloud Function now ensures all videos are
+      // H.264 720p, so this is sufficient for smooth playback.
       bufferingConfiguration: const BetterPlayerBufferingConfiguration(
         minBufferMs: 3000,
         maxBufferMs: 8000,
-        bufferForPlaybackMs: 1000,
-        bufferForPlaybackAfterRebufferMs: 2000,
+        bufferForPlaybackMs: 800,
+        bufferForPlaybackAfterRebufferMs: 1500,
       ),
     );
+
+    // Build placeholder widget: thumbnail poster frame if available,
+    // otherwise a minimal dark spinner. This gives the Instagram "instant
+    // content" feel — users see something while the video segment downloads.
+    final Widget placeholderWidget = thumbnailUrl.isNotEmpty
+        ? _ThumbnailPoster(url: thumbnailUrl)
+        : const ColoredBox(
+            color: Colors.black,
+            child: Center(
+              child: CircularProgressIndicator(
+                color: Colors.white38,
+                strokeWidth: 2,
+              ),
+            ),
+          );
 
     final configuration = BetterPlayerConfiguration(
       autoPlay: false,
@@ -159,12 +201,7 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
           ),
         );
       },
-      placeholder: const ColoredBox(
-        color: Colors.black,
-        child: Center(
-          child: CircularProgressIndicator(color: Colors.white54),
-        ),
-      ),
+      placeholder: placeholderWidget,
       showPlaceholderUntilPlay: true,
     );
 
@@ -172,12 +209,6 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
       configuration,
       betterPlayerDataSource: dataSource,
     );
-
-    // TODO(stage4): once uploads are transcoded to 720p H.264 via a Firebase
-    // Cloud Function, source clips will already be sized for mobile and the
-    // tight buffering above is sufficient. better_player 0.0.84 does not
-    // expose ExoPlayer's setMaxVideoSize, so explicit client-side resolution
-    // capping is deferred to Stage 4.
 
     _controllers[reelId] = controller;
     AppLogger.perf('reels_controller_created', fields: {
@@ -188,8 +219,8 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
   }
 
   /// Ensures only the controllers chosen by [ReelPlatformPolicy.warmIndices]
-  /// (current and current + 1) are alive, then plays the current one and
-  /// pauses the rest.
+  /// are alive, then plays the current one and pauses the rest.
+  /// Pool is evicted if it exceeds [ReelPlatformPolicy.maxPoolSlots].
   void _syncControllers() {
     if (_reels.isEmpty) {
       for (final c in _controllers.values) {
@@ -210,10 +241,12 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
       _reels.length,
     )) {
       final doc = _reels[i];
-      final url = _extractVideoUrl(doc.data());
+      final data = doc.data();
+      final url = _extractVideoUrl(data);
+      final thumbnailUrl = _extractThumbnailUrl(data);
       if (url.isEmpty) continue;
       keep.add(doc.id);
-      _getOrCreateController(doc.id, url);
+      _getOrCreateController(doc.id, url, thumbnailUrl);
     }
 
     final stale = _controllers.keys.where((id) => !keep.contains(id)).toList();
@@ -245,6 +278,52 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
     });
     setState(() => _currentIndex = index);
     _syncControllers();
+
+    // Trigger pagination when approaching the end.
+    if (_hasMore &&
+        !_isLoadingMore &&
+        _reels.isNotEmpty &&
+        index >= _reels.length - _prefetchThreshold) {
+      _loadMoreReels();
+    }
+  }
+
+  // ── Pagination ─────────────────────────────────────────────────────────────
+
+  Future<void> _loadMoreReels() async {
+    if (_isLoadingMore || !_hasMore || _reels.isEmpty) return;
+    setState(() => _isLoadingMore = true);
+
+    try {
+      final lastDoc = _reels.last;
+      final nextBatch = await _reelService.getNextReelsPage(
+        lastDocument: lastDoc,
+        limit: _pageSize,
+      );
+
+      if (!mounted) return;
+
+      if (nextBatch.isEmpty) {
+        setState(() {
+          _hasMore = false;
+          _isLoadingMore = false;
+        });
+        return;
+      }
+
+      // Merge new docs (ranked list from service) into existing list.
+      setState(() {
+        _reels = [..._reels, ...nextBatch];
+        _isLoadingMore = false;
+        AppLogger.perf('reels_page_loaded', fields: {
+          'total': _reels.length,
+          'newBatch': nextBatch.length,
+        });
+      });
+    } catch (e) {
+      AppLogger.error(LogCategory.reel, 'pagination error: $e');
+      if (mounted) setState(() => _isLoadingMore = false);
+    }
   }
 
   @override
@@ -252,7 +331,7 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
     return Scaffold(
       backgroundColor: Colors.black,
       body: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-        stream: _reelService.getRankedReelsStream(),
+        stream: _reelService.getRankedReelsStream(limit: _pageSize),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {
@@ -277,15 +356,28 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
 
           // The reels list reference changed (new doc, deletion, reorder).
           // Schedule a sync for after this frame so we don't mutate the
-          // controller map mid-build.
+          // controller map mid-build. Only update from the stream if the user
+          // hasn't paginated beyond the initial batch (to avoid clobbering).
           if (!identical(_reels, reels)) {
-            _reels = reels;
+            // If we're at the beginning, always sync with the live stream.
+            // If the user has paginated, only update if it's a content change
+            // in the first batch (new reel uploaded, etc.).
+            if (_reels.length <= _pageSize) {
+              _reels = reels;
+            } else {
+              // Merge: update the first `_pageSize` entries from the stream,
+              // keep the rest from pagination.
+              _reels = [
+                ...reels,
+                ..._reels.sublist(_reels.length > _pageSize ? _pageSize : _reels.length),
+              ];
+            }
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) _syncControllers();
             });
           }
 
-          if (reels.isEmpty) {
+          if (_reels.isEmpty) {
             return const Center(
               child: Text(
                 'No reels yet',
@@ -299,18 +391,19 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
           // momentarily exceed [ReelPlatformPolicy.maxPoolSlots] and risk OOM.
           final warmSet = ReelPlatformPolicy.warmIndices(
             _currentIndex,
-            reels.length,
+            _reels.length,
           ).toSet();
 
           return PageView.builder(
             controller: _pageController,
             scrollDirection: Axis.vertical,
-            itemCount: reels.length,
+            itemCount: _reels.length,
             onPageChanged: _onPageChanged,
             itemBuilder: (context, index) {
-              final doc = reels[index];
+              final doc = _reels[index];
               final data = doc.data();
               final videoUrl = _extractVideoUrl(data);
+              final thumbnailUrl = _extractThumbnailUrl(data);
               final caption = (data['caption'] ?? '').toString();
               final userId = (data['userId'] ?? '').toString();
 
@@ -333,12 +426,13 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
 
               BetterPlayerController? controller;
               if (videoUrl.isNotEmpty && warmSet.contains(index)) {
-                controller = _getOrCreateController(doc.id, videoUrl);
+                controller = _getOrCreateController(doc.id, videoUrl, thumbnailUrl);
               }
 
               return _ReelPage(
                 reelId: doc.id,
                 controller: controller,
+                thumbnailUrl: thumbnailUrl,
                 caption: caption,
                 userId: userId,
                 username: denormUsername,
@@ -353,9 +447,43 @@ class _ReelsFeedState extends State<ReelsFeed> with WidgetsBindingObserver {
   }
 }
 
+// ── _ThumbnailPoster ──────────────────────────────────────────────────────────
+
+/// Shown as the BetterPlayer placeholder while the video segment downloads.
+/// Displays the reel thumbnail (from Cloudinary or Firebase Storage) so the
+/// user sees content immediately instead of a blank screen or spinner.
+class _ThumbnailPoster extends StatelessWidget {
+  final String url;
+
+  const _ThumbnailPoster({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black,
+      child: CachedNetworkImage(
+        imageUrl: url,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        placeholder: (_, __) => const ColoredBox(color: Colors.black),
+        errorWidget: (_, __, ___) => const ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: Icon(Icons.play_circle_outline, color: Colors.white24, size: 48),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── _ReelPage ─────────────────────────────────────────────────────────────────
+
 class _ReelPage extends StatelessWidget {
   final String reelId;
   final BetterPlayerController? controller;
+  final String thumbnailUrl;
   final String caption;
   final String userId;
   final String username;
@@ -365,6 +493,7 @@ class _ReelPage extends StatelessWidget {
   const _ReelPage({
     required this.reelId,
     required this.controller,
+    required this.thumbnailUrl,
     required this.caption,
     required this.userId,
     required this.username,
@@ -383,6 +512,10 @@ class _ReelPage extends StatelessWidget {
             controller: controller!,
             isActive: isActive,
           )
+        else if (thumbnailUrl.isNotEmpty)
+          // Warm-up slot not yet assigned a controller: show thumbnail so
+          // we never show an empty black frame to the user.
+          _ThumbnailPoster(url: thumbnailUrl)
         else
           const Center(
             child: Icon(Icons.videocam_off, color: Colors.white38, size: 64),

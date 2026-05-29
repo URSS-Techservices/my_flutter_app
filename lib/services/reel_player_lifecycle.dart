@@ -52,25 +52,37 @@ class ReelPlatformPolicy {
 
 
 
-  /// Hard cap: **2 simultaneous ExoPlayer / AVPlayer** instances (current + next).
+  /// Hard cap on simultaneous controller instances.
+  ///
+  /// Android: 3 (current + 2 ahead) — safe for transcoded 720p H.264.
+  ///           ExoPlayer's allocator footprint is manageable at this size.
+  /// iOS:     2 (current + 1 ahead) — AVPlayer is heavier per instance;
+  ///           keeping at 2 avoids audio session conflicts on older iPhones.
+  /// Web:     2 — conservative default.
+  static int get maxPoolSlots {
+    if (isAndroid) return 3;
+    if (isIOS) return 2;
+    return 2; // web / desktop
+  }
 
-  /// Anything above is LRU-evicted by [ReelPlaybackPool] to prevent
-
-  /// `pipelineFull: too many frames in pipeline` and 256 MB heap OOM.
-
-  static int get maxPoolSlots => 2;
 
 
-
-  /// Warm window: ONLY `[center, center+1]`. We never warm `center+2`
-
-  /// (that was the source of pipeline-overload + frame-pump churn).
-
+  /// Warm window: prefetch ahead so swipe is instant (Instagram-style).
+  ///
+  /// Android: [center-1, center, center+1, center+2] — 1 back + 2 ahead.
+  ///   Watching reel N → reels N+1 and N+2 are already buffering.
+  /// iOS:     [center-1, center, center+1] — 1 back + 1 ahead.
+  ///
+  /// We intentionally keep 1 slot *behind* so backward scroll also feels
+  /// instant without the controller needing to re-initialize from scratch.
   static Iterable<int> warmIndices(int centerIndex, int length) sync* {
 
     if (length <= 0) return;
 
-    for (final i in [centerIndex, centerIndex + 1]) {
+    final aheadSlots = isAndroid ? 2 : 1; // slots to warm ahead
+    const behindSlots = 1; // always keep 1 behind for backward swipe
+
+    for (int i = centerIndex - behindSlots; i <= centerIndex + aheadSlots; i++) {
 
       if (i >= 0 && i < length) yield i;
 
@@ -80,7 +92,7 @@ class ReelPlatformPolicy {
 
 
 
-  /// We no longer pre-render an extra scroll-ahead surface — Instagram doesn't.
+  /// We no longer pre-render an extra scroll-ahead surface.
 
   static int? scrollAheadIndex(double page, int length) => null;
 

@@ -128,10 +128,14 @@ class UploadService {
       throw VideoUploadRejectedException(rejection);
     }
 
+    // Use the correct MIME type for the file extension.
+    // iOS records .mov files (video/quicktime), not .mp4 — using the wrong
+    // content-type causes Firebase Storage to misidentify the container.
+    final mimeType = VideoUploadProbe.mimeTypeForPath(videoFile.path);
     await videoRef.putFile(
       videoFile,
       SettableMetadata(
-        contentType: 'video/mp4',
+        contentType: mimeType,
         cacheControl: 'public,max-age=31536000,immutable',
         customMetadata: {
           'postId': postId,
@@ -155,17 +159,29 @@ class UploadService {
       thumbnailUrl = await thumbRef.getDownloadURL();
     }
 
-    // Safe profile only (validated above): raw URL is playable while HLS transcodes.
+    // Raw URL is playable while the Cloud Function transcodes the video.
+    // For HEVC / HDR / Dolby Vision uploads (common on iOS), the resolver
+    // will gate raw playback using the exotic codec flags below and wait
+    // for the processed HLS to be ready instead of trying to play raw.
     return {
       'type': 'video',
 
+      // Primary playback URL — set to raw until Cloud Function writes hlsUrl.
       'videoUrl': videoUrl,
       'url': videoUrl,
 
+      // Raw source — resolver always prefers HLS/processed over this.
       'rawVideoUrl': videoUrl,
 
+      // Transcoding lifecycle flags
       'processing': true,
       'processed': false,
+
+      // Codec hints — let resolver and playback_resolver skip raw playback
+      // for exotic codecs that won't play on all devices until transcoded.
+      if (probe.isHevc) 'isHevc': true,
+      if (probe.isHdr) 'isHdr': true,
+      if (probe.isDolbyVision) 'isDolbyVision': true,
 
       if (probe.width != null)
         'intrinsicWidth': probe.width,

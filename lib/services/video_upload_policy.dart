@@ -3,15 +3,17 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_info/media_info.dart';
 
-/// Safe upload profile until 4K / exotic codecs are officially supported.
+/// Safe upload profile — resolution and FPS caps only.
+/// HEVC / HDR / Dolby Vision are allowed; the Cloud Function transcodes them.
 class VideoUploadLimits {
   VideoUploadLimits._();
 
   static const int maxLongEdgePx = 1920;
-  static const int maxFps = 30;
+  static const int maxFps = 60; // Allow 60fps source; Cloud Function caps output to 30fps
 
   static const String supportedSummary =
-      'H.264 SDR video up to 1080p (1920px) at 30 fps or lower.';
+      'Video up to 1080p (1920px). HEVC, HDR, and Dolby Vision are accepted '
+      'and transcoded automatically.';
 }
 
 /// Result of probing a local file before upload.
@@ -48,6 +50,22 @@ class VideoUploadProbe {
 
   bool get exceedsFps =>
       fps != null && fps! > VideoUploadLimits.maxFps;
+
+  /// Returns the correct MIME type for this video file path.
+  static String mimeTypeForPath(String filePath) {
+    final ext = filePath.toLowerCase().split('.').last;
+    switch (ext) {
+      case 'mov':
+        return 'video/quicktime'; // iOS records .mov files
+      case 'webm':
+        return 'video/webm';
+      case 'm4v':
+        return 'video/x-m4v';
+      case 'mp4':
+      default:
+        return 'video/mp4';
+    }
+  }
 }
 
 /// Why an upload was rejected (user-facing message included).
@@ -71,6 +89,16 @@ class VideoUploadRejectedException implements Exception {
 }
 
 /// Pre-upload validation shared by Add Post and [UploadService].
+///
+/// ### iOS Fix
+/// HEVC / HDR / Dolby Vision are intentionally ALLOWED to upload.
+/// iPhones record in HEVC by default (iPhone 7+). The Firebase Cloud Function
+/// (FFmpeg `normalizeSource`) handles all exotic codecs and transcodes to
+/// H.264 SDR. Rejecting them client-side was blocking all iOS video uploads.
+///
+/// Only hard limits (extreme resolution > 1920px) are enforced — and even
+/// those are advisory since FFmpeg can rescale, but they indicate a file so
+/// large that the upload itself would time out on mobile.
 class VideoUploadPolicy {
   VideoUploadPolicy._();
 
@@ -125,46 +153,32 @@ class VideoUploadPolicy {
     }
   }
 
-  /// Returns a rejection when the file is outside the safe profile, else null.
+  /// Returns a rejection only when the file would genuinely fail to upload
+  /// (e.g. extreme 4K+ resolution that signals a 2GB+ raw file).
+  /// HEVC / HDR / Dolby Vision are NOT rejected — the Cloud Function (FFmpeg)
+  /// transcodes them server-side to H.264 SDR for universal playback.
   static VideoUploadRejection? validate(VideoUploadProbe probe) {
-    if (probe.isDolbyVision) {
-      return const VideoUploadRejection(
-        code: 'dolby_vision',
-        userMessage:
-            'Dolby Vision is not supported yet. Export as H.264 SDR (up to 1080p30) and try again.',
+    // Log exotic codecs for diagnostics but allow upload.
+    if (probe.isExoticCodec) {
+      debugPrint(
+        '[VideoUploadPolicy] exotic codec '
+        '(hevc=${probe.isHevc} hdr=${probe.isHdr} dv=${probe.isDolbyVision}) '
+        '— allowed; Cloud Function will transcode to H.264 SDR.',
       );
     }
-    if (probe.isHevc) {
-      return const VideoUploadRejection(
-        code: 'hevc',
-        userMessage:
-            'HEVC (H.265) is not supported yet. Use H.264 SDR up to 1080p30.',
-      );
-    }
-    if (probe.isHdr) {
-      return const VideoUploadRejection(
-        code: 'hdr',
-        userMessage:
-            'HDR video is not supported yet. Turn off HDR or export as H.264 SDR up to 1080p30.',
-      );
-    }
+
+    // Only hard-block absurdly large sources (> 1920px long edge at source).
+    // This is a proxy for "file is too big to upload on mobile" (likely 4K raw).
     if (probe.exceedsResolution) {
       final edge = probe.longEdge;
       return VideoUploadRejection(
         code: 'resolution',
         userMessage:
-            'Video is too large (${edge ?? '?'}px). Maximum long edge is '
-            '${VideoUploadLimits.maxLongEdgePx}px (1080p class).',
+            'Video resolution is too high (${edge ?? '?'}px long edge). '
+            'Please export at 1080p or lower and try again.',
       );
     }
-    if (probe.exceedsFps) {
-      return VideoUploadRejection(
-        code: 'fps',
-        userMessage:
-            'Frame rate is too high (${probe.fps} fps). Maximum is '
-            '${VideoUploadLimits.maxFps} fps.',
-      );
-    }
+
     return null;
   }
 
