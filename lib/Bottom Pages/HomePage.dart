@@ -24,6 +24,7 @@ import 'package:halo/services/story_service.dart';
 import 'package:halo/services/app_cache_manager.dart';
 import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/video_playback_resolver.dart';
+import 'package:halo/services/video_transcode_queue_service.dart';
 import 'package:halo/models/story_model.dart';
 import 'package:halo/models/media_model.dart';
 import 'package:halo/utils/story_ranking.dart';
@@ -1680,6 +1681,17 @@ class _PostMedia extends StatelessWidget {
         postData: postData,
         mediaItem: first,
       );
+      if (playback.legacyRawFallback) {
+        final postId = (postData['postId'] ?? '').toString();
+        if (postId.isNotEmpty) {
+          unawaited(
+            VideoTranscodeQueueService.instance.maybeRequestTranscode(
+              postId: postId,
+              playback: playback,
+            ),
+          );
+        }
+      }
       final url = playback.primaryUrl;
 
       if (playback.showProcessingOverlay || url.isEmpty) {
@@ -2303,6 +2315,7 @@ class _PostItem extends StatelessWidget {
                   ? _PostMedia(
                 media: mediaForPost,
                 postData: {
+                  'postId': postDoc.id,
                   'processed': data['processed'] == true,
                   'processing': data['processing'] == true,
                   'videoUrl': videoUrl,

@@ -106,6 +106,7 @@ function shouldSkipPath(filePath) {
 
 /**
  * Post uploads: users/{uid}/posts/{postId}/video.mp4 | video_1.mp4 | video_2.mp4
+ * Legacy flat: users/{uid}/posts/{postId}-{timestamp}.mp4  OR  posts/{postId}-{timestamp}.mp4
  * Reels: videos/raw/{id}.mp4
  */
 function parseUploadContext(rawPath) {
@@ -154,6 +155,45 @@ function parseUploadContext(rawPath) {
       storagePath: filePath,
       fileName,
       jobId: `${postId}_${videoKey}`,
+    };
+  }
+
+  const legacyFlatUserMatch = filePath.match(
+    /^users\/([^/]+)\/posts\/(.+)-(\d+)\.(mp4|mov|m4v|webm)$/i,
+  );
+  if (legacyFlatUserMatch) {
+    const uid = legacyFlatUserMatch[1];
+    const postId = legacyFlatUserMatch[2];
+    const ts = legacyFlatUserMatch[3];
+    const ext = legacyFlatUserMatch[4];
+    const fileName = `${postId}-${ts}.${ext}`;
+    return {
+      kind: 'post',
+      uid,
+      postId,
+      videoKey: '0',
+      storagePath: filePath,
+      fileName,
+      jobId: `${postId}_0`,
+    };
+  }
+
+  const legacyFlatRootMatch = filePath.match(
+    /^posts\/(.+)-(\d+)\.(mp4|mov|m4v|webm)$/i,
+  );
+  if (legacyFlatRootMatch) {
+    const postId = legacyFlatRootMatch[1];
+    const ts = legacyFlatRootMatch[2];
+    const ext = legacyFlatRootMatch[3];
+    const fileName = `${postId}-${ts}.${ext}`;
+    return {
+      kind: 'post',
+      uid: '',
+      postId,
+      videoKey: '0',
+      storagePath: filePath,
+      fileName,
+      jobId: `${postId}_0`,
     };
   }
 
@@ -1227,6 +1267,10 @@ function getStorageBucket() {
 
 const MAX_TRANSCODE_ATTEMPTS = 3;
 const TRANSCODE_RETRY_DELAYS_MS = [0, 8000, 20000];
+/** Max Firestore-triggered requeue cycles per doc (distinct from in-pipeline retries). */
+const MAX_REQUEUE_ATTEMPTS = 12;
+/** Ignore duplicate requeue triggers while a transcode is in flight (CF timeout is 540s). */
+const TRANSCODE_IN_FLIGHT_MS = 11 * 60 * 1000;
 /** Docs stuck in processing longer than this can be re-queued via migrateLegacyVideos. */
 const STUCK_PROCESSING_MS = 2 * 60 * 60 * 1000;
 
@@ -1357,6 +1401,14 @@ async function readTranscodeStartedMs(ctx) {
 }
 
 async function recordTranscodeFailure(ctx, errMessage, { transient }) {
+  const docRef = ctx.kind === 'post'
+    ? admin.firestore().collection('posts').doc(ctx.postId)
+    : admin.firestore().collection('reels').doc(ctx.jobId);
+  const priorSnap = await docRef.get();
+  const priorData = priorSnap.exists ? (priorSnap.data() || {}) : {};
+  const nextAttempts = Number(priorData.transcodeAttemptCount || 0) + 1;
+  const exhausted = nextAttempts >= MAX_REQUEUE_ATTEMPTS;
+
   const failurePatch = {
     processing: false,
     processed: false,
@@ -1369,12 +1421,18 @@ async function recordTranscodeFailure(ctx, errMessage, { transient }) {
   // migration (writes a fresh requestedTranscodeAt) to retry.
   if (!transient) {
     failurePatch.requestedTranscodeAt = admin.firestore.FieldValue.delete();
+    failurePatch.legacyRawFallback = admin.firestore.FieldValue.delete();
+  }
+  if (exhausted) {
+    failurePatch.transcodeRequeueExhausted = true;
+    failurePatch.requestedTranscodeAt = admin.firestore.FieldValue.delete();
+    failurePatch.legacyRawFallback = admin.firestore.FieldValue.delete();
   }
   if (ctx.kind === 'post') {
-    const ref = admin.firestore().collection('posts').doc(ctx.postId);
-    const snap = await ref.get();
+    const ref = docRef;
+    const snap = priorSnap;
     if (!snap.exists) return;
-    const data = snap.data() || {};
+    const data = priorData;
     const media = Array.isArray(data.media)
       ? data.media.map((m) => ({ ...m }))
       : [];
@@ -1414,6 +1472,7 @@ async function runTranscodePipeline({
   ctx,
   bucketName,
   storagePath,
+  skipMarkStarted = false,
 }) {
   const bucket = admin.storage().bucket(bucketName);
   const tempDir = path.join(os.tmpdir(), ctx.jobId);
@@ -1439,7 +1498,9 @@ async function runTranscodePipeline({
       console.log(`[process start] reelId=${ctx.jobId} src=${storagePath}`);
     }
 
-    await markTranscodeStarted(ctx);
+    if (!skipMarkStarted) {
+      await markTranscodeStarted(ctx);
+    }
     const pipelineStartedAt = Date.now();
 
     let lastErr = null;
@@ -1609,6 +1670,36 @@ exports.processVideo = onObjectFinalized(
 
 const LEGACY_REQUEUE_DEDUP_MS = 15 * 60 * 1000; // 15 minutes
 
+function readTimestampMs(ts) {
+  if (ts && typeof ts.toMillis === 'function') return ts.toMillis();
+  return null;
+}
+
+function isPermanentTranscodeDoc(doc) {
+  if (!doc || !doc.transcodeError) return false;
+  if (doc.transcodeErrorCategory === 'permanent') return true;
+  if (doc.transcodeErrorCategory === 'transient') return false;
+  // Legacy docs may lack category — infer from the error text.
+  return !isTransientTranscodeError({ message: String(doc.transcodeError) });
+}
+
+function hasFreshTranscodeRequest(doc) {
+  if (!doc || !doc.requestedTranscodeAt) return false;
+  const requestedMs = readTimestampMs(doc.requestedTranscodeAt);
+  if (requestedMs == null) return true;
+  const requeuedMs = readTimestampMs(doc.requeuedAt);
+  const startedMs = readTimestampMs(doc.transcodeStartedAt);
+  const baseline = Math.max(requeuedMs || 0, startedMs || 0);
+  return requestedMs > baseline;
+}
+
+function isTranscodeInFlight(doc) {
+  if (!doc || doc.processing !== true) return false;
+  const startedMs = readTimestampMs(doc.transcodeStartedAt);
+  if (startedMs == null) return true;
+  return Date.now() - startedMs < TRANSCODE_IN_FLIGHT_MS;
+}
+
 function extractStoragePathFromUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return null;
   try {
@@ -1627,88 +1718,6 @@ function buildCtxFromStoragePath(rawPath) {
   return parseUploadContext(rawPath);
 }
 
-function shouldRequeueNow(after) {
-  if (!after) return false;
-
-  // Never touch docs that are already done.
-  if (after.processed === true) return false;
-
-  // Permanent FFmpeg/config failures — do not auto-requeue (client migration only).
-  if (
-    after.transcodeError &&
-    after.transcodeErrorCategory === 'permanent' &&
-    !after.requestedTranscodeAt
-  ) {
-    return false;
-  }
-
-  const attempts = Number(after.transcodeAttemptCount || 0);
-  if (attempts >= 12) return false;
-
-  // Must have a raw video URL to work from.
-  const hasRawUrl =
-    typeof after.rawVideoUrl === 'string' && after.rawVideoUrl.length > 0;
-  const hasVideoUrl =
-    typeof after.videoUrl === 'string' && after.videoUrl.length > 0;
-  const hasMediaRaw =
-    Array.isArray(after.media) &&
-    after.media.some(
-      (m) => m && typeof m.rawVideoUrl === 'string' && m.rawVideoUrl.length > 0,
-    );
-  if (!hasRawUrl && !hasVideoUrl && !hasMediaRaw) return false;
-
-  // CASE A — explicit re-queue request (legacy doc or capability error).
-  const explicitlyFlagged =
-    after.legacyRawFallback === true ||
-    after.transcodeError === 'exceeds_capabilities' ||
-    !!after.requestedTranscodeAt;
-
-  // CASE B — brand-new upload that was never transcoded:
-  // processing=false, processed=false, raw URL present, no HLS URL yet.
-  // This is the path for upload_service's new "videoUrl='' but rawVideoUrl
-  // set" exotic uploads — the Storage onObjectFinalized trigger normally
-  // catches these, but this Firestore trigger is the safety net.
-  const isNewUpload =
-    !after.processing &&
-    !after.processed &&
-    !after.hlsUrl &&
-    (hasRawUrl || hasMediaRaw);
-
-  if (!explicitlyFlagged && !isNewUpload) return false;
-
-  // Block in-flight transcodes UNLESS an explicit re-queue request is set.
-  // migrateStuckProcessing intentionally targets docs stuck at processing=true
-  // and writes requestedTranscodeAt to retry them — we must let those through.
-  // Concurrent self-triggers are still caught by the requeuedAt dedup window
-  // below (handleLegacyRequeue writes requeuedAt:serverTimestamp() at start).
-  if (after.processing === true && !explicitlyFlagged) return false;
-
-  // Dedup window: don't re-trigger if we requeued recently.
-  // Transient failures may retry sooner; permanent failures require a fresh
-  // requestedTranscodeAt (written by migrateLegacyVideos).
-  const requeuedAt = after.requeuedAt;
-  if (requeuedAt && typeof requeuedAt.toMillis === 'function') {
-    const ageMs = Date.now() - requeuedAt.toMillis();
-    const isTransientFailure = after.transcodeErrorCategory === 'transient';
-    if (ageMs >= 0 && ageMs < LEGACY_REQUEUE_DEDUP_MS) {
-      if (!after.transcodeError || !isTransientFailure) {
-        return false;
-      }
-    }
-  }
-
-  // Permanent failure already recorded — do not auto-loop until migration re-flags.
-  if (
-    after.transcodeError &&
-    after.transcodeErrorCategory === 'permanent' &&
-    !after.requestedTranscodeAt
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
 function collectRawCandidates(collection, doc) {
   const candidates = [];
   if (!doc) return candidates;
@@ -1725,8 +1734,143 @@ function collectRawCandidates(collection, doc) {
   return candidates.filter((u) => typeof u === 'string' && u.length > 0);
 }
 
+function hasAdaptiveProcessedHls(doc) {
+  const isMaster = (u) =>
+    typeof u === 'string' &&
+    u.length > 0 &&
+    u.toLowerCase().includes('master.m3u8');
+  if (isMaster(doc.hlsUrl)) return true;
+  const media = Array.isArray(doc.media) ? doc.media : [];
+  for (const m of media) {
+    if (m && isMaster(m.hlsUrl)) return true;
+  }
+  return false;
+}
+
+function isLegacyInvalidHlsUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const lower = url.toLowerCase();
+  if (lower.includes('index.m3u8')) return true;
+  if (lower.includes('/hls/playlist.m3u8')) return true;
+  if (lower.includes('playlist.m3u8') && !lower.includes('master.m3u8')) {
+    return true;
+  }
+  return false;
+}
+
+function docHasVideoMedia(doc) {
+  if (!Array.isArray(doc.media)) return false;
+  return doc.media.some(
+    (m) => m && (m.type || '').toString() === 'video',
+  );
+}
+
+/** True when a Firebase Storage URL on the doc maps to a transcode trigger path. */
+function hasTranscodableRawSource(doc, collection) {
+  const candidates = collectRawCandidates(collection, doc);
+  return candidates.some((u) => {
+    const p = extractStoragePathFromUrl(u);
+    if (!p || shouldSkipPath(p)) return false;
+    return parseUploadContext(p) != null;
+  });
+}
+
+function shouldRequeueNow(after, collection = 'posts') {
+  if (!after) return false;
+
+  if (after.processed === true) return false;
+  if (after.transcodeRequeueExhausted === true) return false;
+
+  const attempts = Number(after.transcodeAttemptCount || 0);
+  if (attempts >= MAX_REQUEUE_ATTEMPTS) return false;
+
+  if (isTranscodeInFlight(after)) return false;
+
+  const freshRequest = hasFreshTranscodeRequest(after);
+  if (isPermanentTranscodeDoc(after) && !freshRequest) return false;
+
+  if (!hasTranscodableRawSource(after, collection)) return false;
+
+  const explicitlyFlagged =
+    after.legacyRawFallback === true ||
+    after.transcodeError === 'exceeds_capabilities' ||
+    !!after.requestedTranscodeAt;
+
+  // Legacy posts often have media.videoUrl but no rawVideoUrl / processed flags.
+  const isNewUpload =
+    !after.processing &&
+    after.processed !== true &&
+    !hasAdaptiveProcessedHls(after) &&
+    hasTranscodableRawSource(after, collection);
+
+  if (!explicitlyFlagged && !isNewUpload) return false;
+
+  if (after.processing === true && !freshRequest) return false;
+
+  const requeuedMs = readTimestampMs(after.requeuedAt);
+  if (requeuedMs != null && !freshRequest) {
+    const ageMs = Date.now() - requeuedMs;
+    if (ageMs >= 0 && ageMs < LEGACY_REQUEUE_DEDUP_MS) {
+      const isTransientFailure = after.transcodeErrorCategory === 'transient';
+      if (!after.transcodeError || !isTransientFailure) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Atomically claim a legacy requeue job so concurrent onDocumentWritten
+ * invocations cannot start parallel transcode pipelines on the same doc.
+ */
+async function claimLegacyTranscodeJob({ collection, docId }) {
+  const ref = admin.firestore().collection(collection).doc(docId);
+  try {
+    return await admin.firestore().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) {
+        return { claimed: false, reason: 'missing' };
+      }
+      const after = snap.data() || {};
+
+      if (!shouldRequeueNow(after, collection)) {
+        return { claimed: false, reason: 'should_not_requeue' };
+      }
+
+      const attempts = Number(after.transcodeAttemptCount || 0);
+      if (attempts >= MAX_REQUEUE_ATTEMPTS) {
+        tx.set(ref, { transcodeRequeueExhausted: true }, { merge: true });
+        return { claimed: false, reason: 'max_attempts' };
+      }
+
+      tx.set(
+        ref,
+        {
+          processing: true,
+          transcodeStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+          requeuedAt: admin.firestore.FieldValue.serverTimestamp(),
+          transcodeError: admin.firestore.FieldValue.delete(),
+          transcodeErrorAt: admin.firestore.FieldValue.delete(),
+          transcodeErrorCategory: admin.firestore.FieldValue.delete(),
+        },
+        { merge: true },
+      );
+
+      return { claimed: true };
+    });
+  } catch (err) {
+    console.warn(
+      `[LEGACY_REQUEUE] claim failed ${collection}/${docId}:`,
+      err && err.message ? err.message : err,
+    );
+    return { claimed: false, reason: 'transaction_failed' };
+  }
+}
+
 async function handleLegacyRequeue({ collection, docId, after }) {
-  if (!shouldRequeueNow(after)) return;
+  if (!shouldRequeueNow(after, collection)) return;
 
   const candidates = collectRawCandidates(collection, after);
   let storagePath = null;
@@ -1779,27 +1923,21 @@ async function handleLegacyRequeue({ collection, docId, after }) {
   }
   // ── end Storage-first check ──
 
-  try {
-    await admin
-      .firestore()
-      .collection(collection)
-      .doc(docId)
-      .set(
-        {
-          processing: true,
-          transcodeError: admin.firestore.FieldValue.delete(),
-          requeuedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true },
+  const claim = await claimLegacyTranscodeJob({ collection, docId });
+  if (!claim.claimed) {
+    if (claim.reason !== 'should_not_requeue') {
+      console.log(
+        `[LEGACY_REQUEUE] skip ${collection}/${docId} reason=${claim.reason}`,
       );
-  } catch (err) {
-    console.error('[LEGACY_REQUEUE] failed to set processing=true:', err);
+    }
+    return;
   }
 
   await runTranscodePipeline({
     ctx,
     bucketName: getStorageBucket(),
     storagePath,
+    skipMarkStarted: true,
   });
 }
 
@@ -1860,62 +1998,126 @@ const ADMIN_UIDS = new Set([
 
 async function migrateOneCollection(collection, maxDocs, { retryPermanentFailures = false } = {}) {
   const fs = admin.firestore();
-  const snap = await fs
+  const seen = new Set();
+  let scanned = 0;
+  let queued = 0;
+  let skipped = 0;
+  let batch = fs.batch();
+  let pending = 0;
+
+  const tryQueueDoc = (docRef, data) => {
+    if (seen.has(docRef.id)) return;
+    seen.add(docRef.id);
+    scanned++;
+
+    if (data.processing === true) {
+      skipped++;
+      return;
+    }
+    const isPermanentFailure =
+      data.transcodeError && data.transcodeErrorCategory === 'permanent';
+    if (isPermanentFailure && !retryPermanentFailures) {
+      skipped++;
+      return;
+    }
+    if (Number(data.transcodeAttemptCount || 0) >= MAX_REQUEUE_ATTEMPTS) {
+      skipped++;
+      return;
+    }
+    if (data.transcodeRequeueExhausted === true) {
+      skipped++;
+      return;
+    }
+    if (data.processed === true || hasAdaptiveProcessedHls(data)) {
+      skipped++;
+      return;
+    }
+    if (!hasTranscodableRawSource(data, collection)) {
+      skipped++;
+      return;
+    }
+
+    const patch = {
+      legacyRawFallback: true,
+      requestedTranscodeAt: admin.firestore.FieldValue.serverTimestamp(),
+      requeuedAt: admin.firestore.FieldValue.delete(),
+      processed: false,
+    };
+    if (docHasVideoMedia(data) || hasTranscodableRawSource(data, collection)) {
+      patch.isVideo = true;
+      patch.hasMedia = true;
+    }
+    if (isLegacyInvalidHlsUrl(data.hlsUrl)) {
+      patch.hlsUrl = admin.firestore.FieldValue.delete();
+    }
+    if (isPermanentFailure && retryPermanentFailures) {
+      patch.transcodeError = admin.firestore.FieldValue.delete();
+      patch.transcodeErrorCategory = admin.firestore.FieldValue.delete();
+      patch.transcodeErrorAt = admin.firestore.FieldValue.delete();
+      patch.transcodeRequeueExhausted = admin.firestore.FieldValue.delete();
+      patch.transcodeAttemptCount = 0;
+    }
+    batch.set(docRef, patch, { merge: true });
+    queued++;
+    pending++;
+  };
+
+  const commitIfNeeded = async (force = false) => {
+    if (pending >= 400 || (force && pending > 0)) {
+      await batch.commit();
+      batch = fs.batch();
+      pending = 0;
+    }
+  };
+
+  const snapProcessedFalse = await fs
     .collection(collection)
     .where('processed', '==', false)
     .limit(maxDocs)
     .get();
 
-  let queued = 0;
-  let skipped = 0;
-  const batch = fs.batch();
-  let pending = 0;
+  for (const doc of snapProcessedFalse.docs) {
+    tryQueueDoc(doc.ref, doc.data() || {});
+    if (pending >= 400) await commitIfNeeded(true);
+  }
 
-  for (const doc of snap.docs) {
-    const data = doc.data() || {};
-    if (data.processing === true) {
-      skipped++;
-      continue;
-    }
-    const isPermanentFailure =
-      data.transcodeError && data.transcodeErrorCategory === 'permanent';
-    // Permanent FFmpeg failures need a code deploy / manual re-flag — not auto-loop.
-    if (isPermanentFailure && !retryPermanentFailures) {
-      skipped++;
-      continue;
-    }
-    if (Number(data.transcodeAttemptCount || 0) >= 12) {
-      skipped++;
-      continue;
-    }
-    const candidates = collectRawCandidates(collection, data);
-    const hasPath = candidates.some((u) => extractStoragePathFromUrl(u));
-    if (!hasPath) {
-      skipped++;
-      continue;
-    }
-    const patch = {
-      legacyRawFallback: true,
-      requestedTranscodeAt: admin.firestore.FieldValue.serverTimestamp(),
-      requeuedAt: admin.firestore.FieldValue.delete(),
-    };
-    if (isPermanentFailure && retryPermanentFailures) {
-      patch.transcodeError = admin.firestore.FieldValue.delete();
-      patch.transcodeErrorCategory = admin.firestore.FieldValue.delete();
-      patch.transcodeErrorAt = admin.firestore.FieldValue.delete();
-    }
-    batch.set(doc.ref, patch, { merge: true });
-    queued++;
-    pending++;
-    if (pending >= 400) {
-      await batch.commit();
-      pending = 0;
+  // Pass 2: docs missing `processed` (common on May 2026 uploads).
+  if (seen.size < maxDocs) {
+    const snapIsVideo = await fs
+      .collection(collection)
+      .where('isVideo', '==', true)
+      .limit(maxDocs)
+      .get();
+    for (const doc of snapIsVideo.docs) {
+      if (seen.size >= maxDocs) break;
+      tryQueueDoc(doc.ref, doc.data() || {});
+      if (pending >= 400) await commitIfNeeded(true);
     }
   }
-  if (pending > 0) {
-    await batch.commit();
+
+  // Pass 3: Feb–Apr legacy flat-path uploads (often missing isVideo/processed).
+  if (seen.size < maxDocs) {
+    for (const orderField of ['timestamp', 'createdAt']) {
+      try {
+        const snapRecent = await fs
+          .collection(collection)
+          .orderBy(orderField, 'desc')
+          .limit(maxDocs)
+          .get();
+        for (const doc of snapRecent.docs) {
+          if (seen.size >= maxDocs) break;
+          tryQueueDoc(doc.ref, doc.data() || {});
+          if (pending >= 400) await commitIfNeeded(true);
+        }
+        break;
+      } catch (_) {
+        /* try next order field */
+      }
+    }
   }
-  return { scanned: snap.size, queued, skipped };
+
+  await commitIfNeeded(true);
+  return { scanned, queued, skipped };
 }
 
 /**

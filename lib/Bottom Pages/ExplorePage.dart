@@ -28,6 +28,7 @@ import 'package:halo/models/media_model.dart';
 import 'package:halo/services/app_cache_manager.dart';
 import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/video_playback_resolver.dart';
+import 'package:halo/services/video_transcode_queue_service.dart';
 import 'package:halo/services/blocked_url_memory.dart';
 import 'package:halo/services/reel_cache_policy.dart';
 import 'package:halo/services/reel_streaming_coordinator.dart';
@@ -554,7 +555,15 @@ class PostModel {
     required this.locationLower,
   });
 
-  bool get hasTranscodeFailure => transcodeError.isNotEmpty;
+  bool get hasTranscodeFailure {
+    if (transcodeError.isEmpty) return false;
+    if (transcodeError == 'exceeds_capabilities' &&
+        processed &&
+        hlsUrl.contains('master.m3u8')) {
+      return false;
+    }
+    return true;
+  }
 
   Map<String, dynamic> get _playbackPostData => {
         'processed': processed,
@@ -587,6 +596,14 @@ class PostModel {
     final item = firstVideoItem;
     if (item == null) return firstVideoUrl;
     final playback = playbackFor(item);
+    if (playback.legacyRawFallback) {
+      unawaited(
+        VideoTranscodeQueueService.instance.maybeRequestTranscode(
+          postId: id,
+          playback: playback,
+        ),
+      );
+    }
     // Short Cloud Function preview (~few MB) beats multi‑MB raw uploads on cold start.
     if (playback.status == ReelStatus.processing ||
         playback.legacyRawFallback) {
@@ -598,7 +615,10 @@ class PostModel {
       }
     }
     if (playback.status == ReelStatus.failedTranscode) return '';
-    final url = playback.primaryUrl;
+    var url = playback.primaryUrl;
+    if (url.isNotEmpty && BlockedUrlMemory.instance.contains(url)) {
+      url = playback.fallbackUrl;
+    }
     return url.isNotEmpty ? url : firstVideoUrl;
   }
 
@@ -615,12 +635,17 @@ class PostModel {
     final item = firstVideoItem;
     if (item == null) return false;
     final playback = playbackFor(item);
-    if (!playback.isPlayable) return false;
-    if (BlockedUrlMemory.instance.contains(playback.primaryUrl)) {
-      return false;
-    }
+    final primary = playback.primaryUrl;
+    final fallback = playback.fallbackUrl;
+    final primaryBlocked =
+        primary.isNotEmpty && BlockedUrlMemory.instance.contains(primary);
+    final fallbackPlayable = fallback.isNotEmpty &&
+        !BlockedUrlMemory.instance.contains(fallback);
+    if (!playback.isPlayable && !fallbackPlayable) return false;
+    if (primaryBlocked && !fallbackPlayable) return false;
     if (playback.status == ReelStatus.readyHls ||
-        playback.status == ReelStatus.readyMp4) {
+        playback.status == ReelStatus.readyMp4 ||
+        (primaryBlocked && fallbackPlayable)) {
       return true;
     }
     if (playback.status == ReelStatus.processing &&
@@ -1295,32 +1320,70 @@ class _ExplorePageState extends State<ExplorePage> {
   }
 
   Future<void> _showVideoMigrationDialog() async {
-    final confirmed = await showDialog<bool>(
+    final action = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Migrate legacy videos'),
-        content: const Text(
-          'Re-queue transcode for up to 200 legacy / stuck posts and reels. '
-          'Skips posts with permanent transcode errors. '
-          'Deploy updated Cloud Functions before running.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+      useRootNavigator: true,
+      isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: true,
+      showDragHandle: true,
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Migrate legacy videos',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 18,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Re-queue transcode for up to 200 legacy / stuck posts. '
+                  'Run skips permanent failures; Retry failed resets those '
+                  'after Cloud Functions are deployed.',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.black54,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: () => Navigator.pop(sheetCtx, 'run'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kPrimary,
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  child: const Text('Run migration'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  onPressed: () => Navigator.pop(sheetCtx, 'retry_failed'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  child: const Text('Retry failed transcodes'),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => Navigator.pop(sheetCtx, 'cancel'),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'retry_failed'),
-            child: const Text('Retry failed'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, 'run'),
-            child: const Text('Run'),
-          ),
-        ],
-      ),
+        );
+      },
     );
-    if (confirmed != 'run' && confirmed != 'retry_failed' || !mounted) return;
+
+    if (!mounted) return;
+    if (action != 'run' && action != 'retry_failed') return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Migration started…')),
@@ -1331,11 +1394,14 @@ class _ExplorePageState extends State<ExplorePage> {
         maxDocs: 200,
         collection: 'both',
         includeStuckProcessing: true,
-        retryPermanentFailures: confirmed == 'retry_failed',
+        retryPermanentFailures: action == 'retry_failed',
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Migration done: $result')),
+        SnackBar(
+          content: Text('Migration done: $result'),
+          duration: const Duration(seconds: 6),
+        ),
       );
       AppLogger.info(LogCategory.explore, 'MIGRATE_LEGACY_VIDEOS $result');
       await _refresh();
@@ -1348,7 +1414,10 @@ class _ExplorePageState extends State<ExplorePage> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Migration failed: $e')),
+        SnackBar(
+          content: Text('Migration failed: $e'),
+          duration: const Duration(seconds: 8),
+        ),
       );
     }
   }
@@ -1369,18 +1438,23 @@ class _ExplorePageState extends State<ExplorePage> {
             onPressed: () => Navigator.pop(context),
           ),
           const SizedBox(width: 8),
-          GestureDetector(
-            onLongPress: (kDebugMode || kProfileMode)
-                ? () => _showVideoMigrationDialog()
-                : null,
-            child: Text(
-              'Explore',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w700,
-                fontSize: 22,
-                color: const Color(0xFF1F1033),
+          Expanded(
+            child: GestureDetector(
+              onLongPress: _showVideoMigrationDialog,
+              child: Text(
+                'Explore',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 22,
+                  color: const Color(0xFF1F1033),
+                ),
               ),
             ),
+          ),
+          IconButton(
+            tooltip: 'Migrate legacy videos',
+            icon: const Icon(Icons.sync_rounded, color: _kPrimary),
+            onPressed: _showVideoMigrationDialog,
           ),
         ]),
       ),
@@ -4006,10 +4080,11 @@ class _VideoCellState extends State<_VideoCell> {
         lower.contains('format_supported=no') ||
         lower.contains('illegalargumentexception');
 
-    // For very early errors (e.g. controller surfaces `hasError` with no
-    // description because initialize() never produced a format), still treat
-    // as a decoder failure — otherwise the user is stuck on a blank cell.
-    final shouldRecord = looksLikeDecoderFailure || lower.isEmpty;
+    // Transient player errors (empty description, HLS hiccups) are not permanent
+    // decoder failures — do not poison processed posts in Firestore.
+    final isHls = url.toLowerCase().contains('.m3u8');
+    final shouldRecord =
+        looksLikeDecoderFailure || (lower.isEmpty && !isHls);
     if (!shouldRecord) return;
 
     _capabilityErrorFlagged = true;
@@ -4022,16 +4097,26 @@ class _VideoCellState extends State<_VideoCell> {
 
     final postId = widget.postId;
     if (postId != null && postId.isNotEmpty) {
-      unawaited(_writeBackendRequeueFlag(postId));
+      unawaited(_writeBackendRequeueFlag(postId, failedUrl: url));
     }
   }
 
-  static Future<void> _writeBackendRequeueFlag(String postId) async {
+  static Future<void> _writeBackendRequeueFlag(
+    String postId, {
+    String? failedUrl,
+  }) async {
     try {
       final fs = FirebaseFirestore.instance;
       final snap = await fs.collection('posts').doc(postId).get();
       final data = snap.data();
       if (data != null) {
+        if (data['processed'] == true) {
+          return;
+        }
+        final hls = (data['hlsUrl'] ?? '').toString();
+        if (hls.contains('master.m3u8')) {
+          return;
+        }
         final category =
             (data['transcodeErrorCategory'] ?? '').toString().trim();
         final existing = (data['transcodeError'] ?? '').toString().trim();
@@ -4044,6 +4129,20 @@ class _VideoCellState extends State<_VideoCell> {
         'legacyRawFallback': true,
         'requestedTranscodeAt': FieldValue.serverTimestamp(),
       };
+      // Never re-flag a post that already has processed outputs in media.
+      final media = data?['media'];
+      if (media is List) {
+        for (final m in media) {
+          if (m is! Map) continue;
+          final mHls = (m['hlsUrl'] ?? '').toString();
+          if (m['processed'] == true || mHls.contains('master.m3u8')) {
+            return;
+          }
+        }
+      }
+      if (failedUrl != null && failedUrl.contains('/videos/processed/')) {
+        return;
+      }
       await Future.wait([
         fs.collection('reels').doc(postId).set(payload, SetOptions(merge: true)),
         fs.collection('posts').doc(postId).set(payload, SetOptions(merge: true)),

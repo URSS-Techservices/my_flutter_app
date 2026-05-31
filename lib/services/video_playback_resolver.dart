@@ -232,11 +232,16 @@ bool _hasExoticCodecHints(Map<String, dynamic> item, Map<String, dynamic> post) 
 bool isRawUploadStorageUrl(String url) {
   if (url.isEmpty) return false;
   final lower = url.toLowerCase();
-  return lower.contains('videos/raw/') ||
-      lower.contains('/videos/raw/') ||
-      (lower.contains('/posts/') &&
-          (lower.contains('/video.mp4') ||
-              (lower.contains('/video_') && lower.contains('.mp4'))));
+  if (lower.contains('videos/raw/') || lower.contains('/videos/raw/')) {
+    return true;
+  }
+  if (!lower.contains('/posts/') || !lower.contains('.mp4')) return false;
+  if (lower.contains('/video.mp4') ||
+      (lower.contains('/video_') && lower.contains('.mp4'))) {
+    return true;
+  }
+  // Legacy flat upload: users/{uid}/posts/{postId}-{timestamp}.mp4
+  return RegExp(r'/posts/[^/]+-\d+\.mp4').hasMatch(lower);
 }
 
 bool isProcessedOutputUrl(String url) {
@@ -286,6 +291,7 @@ String? pickProcessedHls(
   for (final u in [itemHls, docHls]) {
     if (u.isEmpty || !u.contains('.m3u8')) continue;
     if (isLegacyOrInvalidHlsUrl(u)) continue;
+    if (BlockedUrlMemory.instance.contains(u)) continue;
     if (isAdaptiveMasterHls(u)) return u;
     fallbackVariant ??= u;
   }
@@ -373,10 +379,18 @@ ResolvedVideoPlayback _resolveChain({
   final transcodeError =
       _str(item['transcodeError']).isNotEmpty ||
           _str(postData['transcodeError']).isNotEmpty;
+  final transcodeErrStr = _str(item['transcodeError']).isNotEmpty
+      ? _str(item['transcodeError'])
+      : _str(postData['transcodeError']);
+  final hasProcessedOutput =
+      processed && ((hls != null && hls.isNotEmpty) || (mp4 != null && mp4.isNotEmpty));
+  // Client-only `exceeds_capabilities` must not hide a successfully transcoded post.
+  final isRealTranscodeFailure = transcodeError &&
+      !(transcodeErrStr == 'exceeds_capabilities' && hasProcessedOutput);
 
   // Failed transcode must win over raw fallback — otherwise posts like
   // f7kHhVNJ (ffmpeg permanent error, 302 requeues) still open as playable raw MP4.
-  if (transcodeError) {
+  if (isRealTranscodeFailure) {
     AppLogger.debug(LogCategory.resolver, 'FAILED_TRANSCODE $context');
 
     return ResolvedVideoPlayback(
