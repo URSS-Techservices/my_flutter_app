@@ -262,6 +262,20 @@ async function rewriteM3u8Playlists(bucket, processedBase, sharedToken) {
   }
 }
 
+/** Relative `seg_000.ts` or Firebase URL `.../seg_000.ts?alt=media&token=`. */
+function isHlsSegmentRef(line) {
+  const trimmed = (line || '').trim();
+  if (!trimmed || trimmed.startsWith('#')) return false;
+  return /\.ts(\?|$)/i.test(trimmed);
+}
+
+/** Relative `720p.m3u8` or Firebase URL `.../720p.m3u8?alt=media&token=`. */
+function isHlsPlaylistRef(line) {
+  const trimmed = (line || '').trim();
+  if (!trimmed || trimmed.startsWith('#')) return false;
+  return /\.m3u8(\?|$)/i.test(trimmed);
+}
+
 async function httpStatusForUrl(url) {
   try {
     const head = await fetch(url, { method: 'HEAD', redirect: 'follow' });
@@ -299,7 +313,7 @@ async function validateHlsOutput(bucket, processedBase, sharedToken) {
   const [masterBuf] = await bucket.file(masterPath).download();
   for (const line of masterBuf.toString().split('\n')) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || !trimmed.endsWith('.m3u8')) {
+    if (!isHlsPlaylistRef(trimmed)) {
       continue;
     }
     if (!trimmed.startsWith('http')) {
@@ -326,8 +340,7 @@ async function validateHlsOutput(bucket, processedBase, sharedToken) {
     let segmentCount = 0;
     for (const line of buf.toString().split('\n')) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      if (!trimmed.endsWith('.ts')) continue;
+      if (!isHlsSegmentRef(trimmed)) continue;
       segmentCount++;
       if (!trimmed.startsWith('http')) {
         failures.push({
@@ -526,25 +539,27 @@ function selectRenditions(sourceW, sourceH, ladder) {
   return ladder.filter((r) => keys.has(r.key));
 }
 
-/** Apply display-matrix / tag rotation before scale (paired with -noautorotate on input). */
-function rotationFilterPrefix(rotationDeg) {
+/** Rotation filters applied before scale (paired with -noautorotate on input). */
+function rotationFilters(rotationDeg) {
   const rot = ((Math.round(rotationDeg) % 360) + 360) % 360;
-  if (rot === 90) return 'transpose=1,';
-  if (rot === 270) return 'transpose=2,';
-  if (rot === 180) return 'hflip,vflip,';
-  return '';
+  if (rot === 90) return ['transpose=1'];
+  if (rot === 270) return ['transpose=2'];
+  if (rot === 180) return ['hflip', 'vflip'];
+  return [];
 }
 
-/** Fit inside max box; letterbox pad to even size only — no stretch, no square forcing. */
+/**
+ * Fit inside tier box; letterbox pad — no stretch.
+ * Each filter is a separate array entry so join(',') never produces empty
+ * filter names (leading/trailing/double commas → "Filter not found").
+ */
 function scalePadFilter(tier, rotationDeg = 0) {
-  // No shell quoting — fluent-ffmpeg spawns without a shell; literal quotes break FFmpeg.
   return [
-    rotationFilterPrefix(rotationDeg),
-    `scale=w=min(${tier.width}\\,iw):h=min(${tier.height}\\,ih):force_original_aspect_ratio=decrease`,
-    `pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:color=black`,
+    ...rotationFilters(rotationDeg),
+    `scale=${tier.width}:${tier.height}:force_original_aspect_ratio=decrease`,
+    `pad=${tier.width}:${tier.height}:(ow-iw)/2:(oh-ih)/2:color=black`,
     'fps=30',
     'format=yuv420p',
-    'setsar=1',
   ].join(',');
 }
 
@@ -650,8 +665,6 @@ async function normalizeSource(localInput, tempDir, topTier, rotationDeg) {
     '-1',
     '-map_chapters',
     '-1',
-    '-metadata:s:v',
-    'side_data=',
     '-avoid_negative_ts',
     'make_zero',
     '-fflags',
@@ -1060,6 +1073,18 @@ async function buildAuthorPatch(reelData) {
   }
 }
 
+/** Firestore rejects FieldValue.delete() inside array elements — omit keys instead. */
+function omitTranscodeErrorFields(item) {
+  if (!item || typeof item !== 'object') return item;
+  const {
+    transcodeError: _te,
+    transcodeErrorAt: _tea,
+    transcodeErrorCategory: _tec,
+    ...rest
+  } = item;
+  return rest;
+}
+
 async function updatePostDoc(postId, videoKey, urls, rawStoragePath, probe) {
   const ref = admin.firestore().collection('posts').doc(postId);
   const videoIndex = parseVideoIndexFromKey(videoKey);
@@ -1131,7 +1156,7 @@ async function updatePostDoc(postId, videoKey, urls, rawStoragePath, probe) {
     const rawUrl = (prev.rawVideoUrl || prev.videoUrl || prev.url || '').toString();
 
     media[targetIdx] = {
-      ...prev,
+      ...omitTranscodeErrorFields(prev),
       type: 'video',
       videoUrl: urls.mp4,
       url: urls.mp4,
@@ -1143,8 +1168,6 @@ async function updatePostDoc(postId, videoKey, urls, rawStoragePath, probe) {
       thumbnailUrl: urls.thumb || prev.thumbnailUrl || prev.thumbnail || '',
       processed: true,
       processing: false,
-      transcodeError: admin.firestore.FieldValue.delete(),
-      transcodeErrorAt: admin.firestore.FieldValue.delete(),
       ...buildSourceMetadataPatch(probe),
     };
 
