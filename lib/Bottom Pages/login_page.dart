@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../widgets/google_sign_in_button.dart';
 import '../signuppage.dart';
+import '../forgotpasswordpage.dart';
 
 // THEME CONSTANTS FOR THIS PAGE
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -370,7 +371,12 @@ class _LoginPageState extends State<LoginPage> {
                                     MaterialTapTargetSize.shrinkWrap,
                                   ),
                                   onPressed: () {
-                                    // TODO: Forgot password action
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ForgotPasswordPage(),
+                                      ),
+                                    );
                                   },
                                   child: Text(
                                     "Forgot password?",

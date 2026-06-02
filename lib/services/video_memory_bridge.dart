@@ -16,16 +16,19 @@ class VideoMemoryBridge {
   static void install() {
     if (_installed || kIsWeb) return;
     _installed = true;
-    if (!kDebugMode && !kProfileMode) return;
 
     // Defer polling until after Firebase/GMS init — avoids critical RSS at ~220MB
     // on cold start with no video pool entries yet.
-    Future<void>.delayed(const Duration(seconds: 20), () {
+    Future<void>.delayed(const Duration(seconds: 30), () {
       if (!_installed) return;
       MemoryWatchdog.instance.start();
       _sub?.cancel();
       _sub = MemoryWatchdog.instance.stream.listen(_onEvent);
-      AppLogger.perf('video_memory_bridge_installed');
+      AppLogger.perf('video_memory_bridge_installed', fields: {
+        'mode': kDebugMode
+            ? 'debug'
+            : (kProfileMode ? 'profile' : 'release'),
+      });
     });
   }
 

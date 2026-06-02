@@ -58,24 +58,19 @@ class ReelPlatformPolicy {
 
   /// `pipelineFull: too many frames in pipeline` and 256 MB heap OOM.
 
-  static int get maxPoolSlots => 2;
+  /// 3 slots: current + next 2. The pool is LRU so the oldest is evicted
+  /// when a 4th would be added. 3 is safe on modern iOS/Android (≥3 GB RAM).
+  static int get maxPoolSlots => 3;
 
 
 
-  /// Warm window: ONLY `[center, center+1]`. We never warm `center+2`
-
-  /// (that was the source of pipeline-overload + frame-pump churn).
-
+  /// Warm window: current + next 2. Matches the 3-slot pool so reels
+  /// 2 and 3 are decoded and ready before the user swipes to them.
   static Iterable<int> warmIndices(int centerIndex, int length) sync* {
-
     if (length <= 0) return;
-
-    for (final i in [centerIndex, centerIndex + 1]) {
-
+    for (final i in [centerIndex, centerIndex + 1, centerIndex + 2]) {
       if (i >= 0 && i < length) yield i;
-
     }
-
   }
 
 

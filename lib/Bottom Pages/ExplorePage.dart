@@ -35,6 +35,7 @@ import 'package:halo/services/reel_streaming_coordinator.dart';
 import 'package:halo/services/video_migration_service.dart';
 import 'package:halo/services/app_logger.dart';
 import 'package:halo/services/perf_session_log.dart';
+import 'package:halo/services/video_decoder_budget.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GRID LAYOUT CONFIG
@@ -124,11 +125,13 @@ class _PooledController {
 class VideoControllerPool {
   VideoControllerPool._();
   static final VideoControllerPool instance = VideoControllerPool._();
+  static const String _budgetOwner = 'explore_pool';
 
   static int get _maxPoolSize => ReelPlatformPolicy.maxPoolSlots;
   final Map<String, _PooledController> _pool = {};
   final List<String> _lruOrder = [];
   final Map<String, Future<VideoPlayerController?>> _preloadInflight = {};
+  Future<void> _pendingDispose = Future<void>.value();
 
   /// Set by [VideoMemoryBridge] when RSS crosses soft threshold.
   bool pauseNewPreloads = false;
@@ -188,6 +191,7 @@ class VideoControllerPool {
       !entry.isDisposed && entry.generation == generation;
 
   Future<VideoPlayerController?> _preloadBody(String url) async {
+    await _pendingDispose;
     if (_pool.containsKey(url)) {
       _touch(url);
       final entry = _pool[url]!;
@@ -210,6 +214,9 @@ class VideoControllerPool {
     }
 
     await _evictIfNeeded();
+    if (!VideoDecoderBudget.instance.tryAcquire(_budgetOwner)) {
+      return null;
+    }
 
     final ctrl = VideoPlayerController.networkUrl(
       Uri.parse(url),
@@ -294,10 +301,11 @@ class VideoControllerPool {
       entry.generation++;
       ReelLifecycleLog.dispose(url, generation: entry.generation, reason: 'pool_remove');
       final ctrl = entry.controller;
-      unawaited(() async {
+      _pendingDispose = _pendingDispose.then((_) async {
         await _pauseAndMute(ctrl);
-        ctrl.dispose();
-      }());
+        await ctrl.dispose();
+        VideoDecoderBudget.instance.release(_budgetOwner);
+      });
     }
   }
 
@@ -322,6 +330,7 @@ class VideoControllerPool {
     for (final url in List.of(_pool.keys)) {
       _remove(url);
     }
+    VideoDecoderBudget.instance.releaseAll(_budgetOwner);
   }
 
   /// Hard memory pressure: drop the oldest pooled decoder (LRU head).
@@ -352,7 +361,7 @@ class ReelPrefetchManager {
   ReelPrefetchManager._();
   static final ReelPrefetchManager instance = ReelPrefetchManager._();
 
-  static const int _kPrefetchAhead = 1;
+  static const int _kPrefetchAhead = 2;
 
   int _lastIndex = -1;
   int _generation = 0;
@@ -989,15 +998,31 @@ class _ExplorePageState extends State<ExplorePage> {
   }
 
   void _rebuildFilteredPostsCache() {
-    var list = _posts;
+    // Filter out posts that have no displayable content:
+    // 1. Permanently failed transcode (shows "Unavailable").
+    // 2. No image URL AND no video thumbnail — would show broken image icon.
+    var list = _posts.where((p) {
+      if (p.hasTranscodeFailure) return false;
+      // For images: must have a non-empty image URL
+      if (!p.isVideo && p.firstImageUrl.trim().isEmpty) return false;
+      // For videos: must have a thumbnail/poster OR a playable URL
+      if (p.isVideo) {
+        final item = p.firstVideoItem;
+        final hasThumbnail = p.thumbnailUrl.isNotEmpty ||
+            (item != null && item.thumbnail.isNotEmpty) ||
+            (item != null && item.thumb.isNotEmpty);
+        final hasPlayable = p.firstVideoUrl.isNotEmpty;
+        if (!hasThumbnail && !hasPlayable) return false;
+      }
+      return true;
+    }).toList();
+
     final q = _searchQuery.trim().toLowerCase();
     if (q.isNotEmpty) {
       list = list.where((p) =>
       p.captionLower.contains(q) ||
           p.locationLower.contains(q) ||
           p.tagsLower.any((t) => t.contains(q))).toList();
-    } else {
-      list = list.toList(growable: false);
     }
 
     switch (_filter) {
@@ -3077,6 +3102,19 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer>
     final url = widget.videoPosts[idx].exploreReelPlaybackUrl();
     if (url.isEmpty) return;
     final t0 = DateTime.now();
+
+    // Start prefetching reels N+1 and N+2 IMMEDIATELY in parallel with the
+    // current reel — don't wait. They load in the background while reel 1 plays.
+    for (int offset = 1; offset <= 2; offset++) {
+      final nextIdx = idx + offset;
+      if (nextIdx < widget.videoPosts.length) {
+        final nextUrl = widget.videoPosts[nextIdx].exploreReelPlaybackUrl();
+        if (nextUrl.isNotEmpty && !VideoControllerPool.instance.isReady(nextUrl)) {
+          unawaited(VideoControllerPool.instance.preload(nextUrl));
+        }
+      }
+    }
+
     await VideoControllerPool.instance.prepareExclusive(url);
     if (!mounted) return;
     AppLogger.perf('reels_prime_done', fields: {
@@ -3084,6 +3122,20 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer>
       'ms': DateTime.now().difference(t0).inMilliseconds,
       'poolReady': VideoControllerPool.instance.isReady(url),
     });
+
+    // Pool preloads with pause()+volume=0 — explicitly start playback now.
+    final ctrl = VideoControllerPool.instance.get(url);
+    if (ctrl != null && ctrl.value.isInitialized) {
+      try {
+        await ctrl.setVolume(_globalMuted ? 0 : 1);
+        await ctrl.play();
+      } catch (_) {}
+    }
+
+    // Allow ahead-prefetch flag (was used by startupOnly gate, now always true)
+    if (!_allowAheadPrefetch && mounted) {
+      setState(() => _allowAheadPrefetch = true);
+    }
   }
 
   @override
@@ -3116,11 +3168,13 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer>
     if (entries.isEmpty) return;
 
     final safeIndex = index.clamp(0, entries.length - 1);
+    // Always prefetch 2 ahead — never delay until first frame.
+    // The 3-slot pool limit prevents OOM even on older devices.
     final decision = _streamingCoordinator.onViewportChanged(
       entries: entries,
       currentIndex: safeIndex,
       lowMemoryMode: _lowMemoryMode,
-      startupOnly: !_allowAheadPrefetch,
+      startupOnly: false,
     );
 
     _cachePolicy.replaceHotSet(decision.hotIds);
@@ -3231,7 +3285,8 @@ class _ExploreReelsViewerState extends State<_ExploreReelsViewer>
         },
         itemBuilder: (_, index) {
           final post = widget.videoPosts[index];
-          final warmUp = (index - _currentIndex).abs() <= 1;
+          // Warm up current + next 2 so they are decoded before swipe
+          final warmUp = (index - _currentIndex).abs() <= 2 && index >= _currentIndex;
           return _ReelItem(
             key: ValueKey(post.id),
             post: post,
@@ -3921,7 +3976,9 @@ class _VideoCellState extends State<_VideoCell> {
 
     if (_videoReady) {
       if (old.autoPlay != widget.autoPlay ||
-          old.muted != widget.muted) {
+          old.muted != widget.muted ||
+          // Re-apply if we're supposed to be playing but aren't (e.g. pool primed then paused)
+          (widget.autoPlay && !_ctrl!.value.isPlaying)) {
         _applyMuteAndPlayback();
       }
     }
@@ -4013,6 +4070,9 @@ class _VideoCellState extends State<_VideoCell> {
       _attachedUrl = url;
     }
 
+    // Always update _attachedUrl so _applyMuteAndPlayback guard passes
+    _attachedUrl = url;
+
     if (!_listenerAttached) {
       _ctrl!.addListener(_onControllerUpdate);
       _listenerAttached = true;
@@ -4020,8 +4080,10 @@ class _VideoCellState extends State<_VideoCell> {
 
     if (_ctrl!.value.isInitialized) {
       _updateTrimBounds();
+      // Always re-apply play/pause even if controller was already attached —
+      // the pool preloads in paused state so we must kick playback here.
+      _applyMuteAndPlayback();
     }
-    _applyMuteAndPlayback();
     setState(() {});
   }
 
@@ -4048,6 +4110,10 @@ class _VideoCellState extends State<_VideoCell> {
         _firstFrameNotified = true;
         widget.onFirstFrame?.call();
         ReelLifecycleLog.firstFrameRendered(widget.url);
+        // Controller just became ready — start playback immediately if needed
+        if (widget.autoPlay && !c.value.isPlaying) {
+          _applyMuteAndPlayback();
+        }
       }
       if (_effectiveTrimStart == Duration.zero &&
           _effectiveTrimEnd == null &&

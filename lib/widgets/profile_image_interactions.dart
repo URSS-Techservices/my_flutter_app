@@ -2,26 +2,26 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:pro_image_editor/pro_image_editor.dart';
+import 'package:image_picker/image_picker.dart';
 
+/// Opens a simple crop/preview page for profile images.
+/// Returns the edited file or null if cancelled.
+/// (pro_image_editor removed — requires Dart ≥3.11, we run 3.10)
 Future<File?> editProfileImageWithInstagramStyle(
   BuildContext context, {
   required String imagePath,
   required String outputNamePrefix,
 }) async {
-  final Uint8List? editedBytes = await Navigator.push<Uint8List>(
+  // Lightweight preview — user can retake if they don't like it.
+  // A full crop editor will be added once the project upgrades to Flutter 3.44+.
+  final confirmed = await Navigator.push<bool>(
     context,
     MaterialPageRoute(
-      builder: (_) => _ProfileImageEditorPage(imagePath: imagePath),
+      builder: (_) => _ProfileImagePreviewPage(imagePath: imagePath),
     ),
   );
-
-  if (editedBytes == null) return null;
-
-  final file = File(
-    '${Directory.systemTemp.path}${Platform.pathSeparator}${outputNamePrefix}_${DateTime.now().millisecondsSinceEpoch}.jpg',
-  );
-  return file.writeAsBytes(editedBytes, flush: true);
+  if (confirmed != true) return null;
+  return File(imagePath);
 }
 
 void openProfileMediaPreview(
@@ -32,37 +32,71 @@ void openProfileMediaPreview(
   Navigator.push(
     context,
     MaterialPageRoute(
-      builder: (_) => _ProfileMediaPreviewPage(
-        image: image,
-        heroTag: heroTag,
-      ),
+      builder: (_) => _ProfileMediaPreviewPage(image: image, heroTag: heroTag),
     ),
   );
 }
 
-class _ProfileImageEditorPage extends StatelessWidget {
-  final String imagePath;
+// ── Simple preview + confirm/retake page ────────────────────────────────────
 
-  const _ProfileImageEditorPage({required this.imagePath});
+class _ProfileImagePreviewPage extends StatelessWidget {
+  final String imagePath;
+  const _ProfileImagePreviewPage({required this.imagePath});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: ProImageEditor.file(
-        File(imagePath),
-        configs: const ProImageEditorConfigs(
-          imageGeneration: ImageGenerationConfigs(
-            outputFormat: OutputFormat.jpg,
-            maxOutputSize: Size(1600, 1600),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          InteractiveViewer(
+            minScale: 1,
+            maxScale: 4,
+            child: Image.file(File(imagePath), fit: BoxFit.contain),
           ),
-        ),
-        callbacks: ProImageEditorCallbacks(
-          onImageEditingComplete: (Uint8List bytes) async {
-            if (!context.mounted) return;
-            Navigator.pop(context, bytes);
-          },
-        ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Retake
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context, false),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: const Text('Retake',
+                          style: TextStyle(color: Colors.white, fontSize: 15)),
+                    ),
+                  ),
+                  // Use photo
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context, true),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFA58CE3),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: const Text('Use Photo',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -89,10 +123,7 @@ class _ProfileMediaPreviewPage extends StatelessWidget {
               child: InteractiveViewer(
                 minScale: 1,
                 maxScale: 4,
-                child: Image(
-                  image: image,
-                  fit: BoxFit.contain,
-                ),
+                child: Image(image: image, fit: BoxFit.contain),
               ),
             ),
           ),

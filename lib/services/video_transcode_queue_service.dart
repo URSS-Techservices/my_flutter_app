@@ -12,6 +12,7 @@ class VideoTranscodeQueueService {
 
   static const int _maxAttempts = 12;
   static final Set<String> _sessionRequested = {};
+  static const Duration _stuckProcessingThreshold = Duration(minutes: 8);
 
   Future<void> maybeRequestTranscode({
     required String postId,
@@ -56,6 +57,67 @@ class VideoTranscodeQueueService {
       AppLogger.warning(
         LogCategory.explore,
         'TRANSCODE_QUEUE_REQUEST failed postId=$postId: $e',
+      );
+    }
+  }
+
+  /// Best-effort Firestore flag so [requeueLegacyReel] can transcode reels
+  /// that are legacy/raw-only or stuck in processing (common for large iOS 4K).
+  Future<void> maybeRequestReelTranscode({
+    required String reelId,
+    required ResolvedVideoPlayback playback,
+  }) async {
+    if (reelId.isEmpty) return;
+    if (_sessionRequested.contains('reel:$reelId')) return;
+    _sessionRequested.add('reel:$reelId');
+
+    try {
+      final ref = FirebaseFirestore.instance.collection('reels').doc(reelId);
+      final snap = await ref.get();
+      final data = snap.data();
+      if (data == null) return;
+      if (data['processed'] == true) return;
+      if (data['transcodeRequeueExhausted'] == true) return;
+
+      final category =
+          (data['transcodeErrorCategory'] ?? '').toString().trim();
+      final existingError = (data['transcodeError'] ?? '').toString().trim();
+      if (category == 'permanent' && existingError.isNotEmpty) return;
+
+      final attempts = (data['transcodeAttemptCount'] as num?)?.toInt() ?? 0;
+      if (attempts >= _maxAttempts) return;
+
+      final processing = data['processing'] == true;
+      var shouldQueue = playback.legacyRawFallback || playback.status == ReelStatus.processing;
+
+      if (processing) {
+        final started = data['transcodeStartedAt'];
+        final startedAt = started is Timestamp ? started.toDate() : null;
+        if (startedAt != null) {
+          final age = DateTime.now().difference(startedAt);
+          // Re-nudge only when clearly stale.
+          shouldQueue = shouldQueue || age > _stuckProcessingThreshold;
+        }
+      }
+
+      if (!shouldQueue) return;
+
+      await ref.set(
+        {
+          'legacyRawFallback': true,
+          'requestedTranscodeAt': FieldValue.serverTimestamp(),
+          'processed': false,
+        },
+        SetOptions(merge: true),
+      );
+      AppLogger.info(
+        LogCategory.explore,
+        'TRANSCODE_QUEUE_REQUEST reelId=$reelId',
+      );
+    } catch (e) {
+      AppLogger.warning(
+        LogCategory.explore,
+        'TRANSCODE_QUEUE_REQUEST failed reelId=$reelId: $e',
       );
     }
   }

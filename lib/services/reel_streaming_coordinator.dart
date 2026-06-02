@@ -27,10 +27,10 @@ class ReelViewportDecision {
 }
 
 class ReelStreamingCoordinator {
-  /// Aligned with [ReelPlatformPolicy.maxPoolSlots]: warm only current + next.
+  /// Prefetch 2 ahead so reels N+1 and N+2 are ready before the user swipes.
   ReelStreamingCoordinator({
-    this.defaultAhead = 1,
-    this.fastSwipeAhead = 1,
+    this.defaultAhead = 2,
+    this.fastSwipeAhead = 2,
     this.behind = 0,
   });
 

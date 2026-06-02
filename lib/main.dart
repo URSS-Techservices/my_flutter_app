@@ -65,16 +65,30 @@ class _AppRootState extends State<_AppRoot> {
     final app = await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+
+    // Enable persistent offline cache (100 MB). Posts, likes, comments all
+    // load from disk on next launch — no network round-trip needed.
+    FirebaseFirestore.instance.settings = const Settings(
+      persistenceEnabled: true,
+      cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+    );
     try {
+      // Always use debug provider in debug mode.
+      // On iOS, appAttest requires the app bundle to be registered in the
+      // Firebase Console under App Check → Apps. Until that is done, appAttest
+      // returns 400 "App not registered" and blocks all Firestore requests.
+      // Use debug on iOS for now; swap to appAttest once the bundle ID is
+      // registered at console.firebase.google.com → App Check.
       await FirebaseAppCheck.instance.activate(
         androidProvider:
             kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
-        appleProvider:
-            kDebugMode ? AppleProvider.debug : AppleProvider.appAttest,
+        appleProvider: AppleProvider.debug, // TODO: switch to appAttest after registering in Firebase Console
       );
       AppLogger.info(LogCategory.general, 'AppCheck activated debug=$kDebugMode');
     } catch (e) {
-      AppLogger.warning(LogCategory.general, 'AppCheck activation failed: $e');
+      // AppCheck activation failing must not block the app — Firestore will
+      // still work if the project has enforcement disabled or set to monitoring mode.
+      AppLogger.warning(LogCategory.general, 'AppCheck activation failed (non-fatal): $e');
     }
     return app;
   }
@@ -85,11 +99,9 @@ class _AppRootState extends State<_AppRoot> {
       future: _firebaseInit,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
-          return const MaterialApp(
+          return MaterialApp(
             debugShowCheckedModeBanner: false,
-            home: Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            ),
+            home: const _SplashScreen(),
           );
         }
         return MyApp();
@@ -210,8 +222,150 @@ class MyApp extends StatelessWidget {
     );
   }
 }
+// ===================== SPLASH SCREEN =====================
+// Shown while Firebase / SharedPreferences are initialising.
+// No timer — it stays until the async work is actually done.
+
+class _SplashScreen extends StatefulWidget {
+  const _SplashScreen();
+  @override
+  State<_SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<_SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+    _scale = Tween<double>(begin: 0.88, end: 1.0).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: FadeTransition(
+          opacity: _fade,
+          child: ScaleTransition(
+            scale: _scale,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Logo image
+                Image.asset(
+                  'assets/images/Halo.png',
+                  height: 120,
+                  width: 120,
+                  fit: BoxFit.contain,
+                ),
+                const SizedBox(height: 20),
+                // App name
+                Text(
+                  'Halo',
+                  style: GoogleFonts.pacifico(
+                    fontSize: 40,
+                    color: kSecondaryColor,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Your wellness community',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.black38,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                const SizedBox(height: 48),
+                // Subtle loading dots
+                _LoadingDots(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Three bouncing dots like WhatsApp / Telegram loading
+class _LoadingDots extends StatefulWidget {
+  @override
+  State<_LoadingDots> createState() => _LoadingDotsState();
+}
+
+class _LoadingDotsState extends State<_LoadingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (i) {
+            // Each dot is offset by 0.2 of the cycle
+            final offset = i * 0.25;
+            final t = ((_ctrl.value - offset) % 1.0 + 1.0) % 1.0;
+            // bounce: up at t=0.3, back at t=0.6
+            final dy = t < 0.3
+                ? -8.0 * (t / 0.3)
+                : t < 0.6
+                    ? -8.0 * (1 - (t - 0.3) / 0.3)
+                    : 0.0;
+            return Transform.translate(
+              offset: Offset(0, dy),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: kPrimaryColor.withOpacity(0.7),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            );
+          }),
+        );
+      },
+    );
+  }
+}
+
 // ===================== AUTH GATE =====================
-// 🔑 This fixes login being asked every time
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
@@ -221,10 +375,9 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
+        // Show logo splash while Firebase determines auth state
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const _SplashScreen();
         }
 
         if (snapshot.hasData) {
@@ -238,7 +391,6 @@ class AuthGate extends StatelessWidget {
 }
 
 // ===================== STARTUP ROUTER =====================
-// Decides Home vs Interest on reopen
 
 class StartupRouter extends StatelessWidget {
   const StartupRouter({super.key});
@@ -265,15 +417,12 @@ class StartupRouter extends StatelessWidget {
     return FutureBuilder<bool>(
       future: _cachedInterestsFuture ??= _interestsCompleted(),
       builder: (context, snapshot) {
+        // Keep showing splash while reading SharedPreferences
         if (!snapshot.hasData) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const _SplashScreen();
         }
 
-        return snapshot.data!
-            ? HomePage()
-            : const InterestSelectionPage();
+        return snapshot.data! ? HomePage() : const InterestSelectionPage();
       },
     );
   }
