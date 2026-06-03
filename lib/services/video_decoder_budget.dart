@@ -8,8 +8,9 @@ class VideoDecoderBudget {
   VideoDecoderBudget._();
   static final VideoDecoderBudget instance = VideoDecoderBudget._();
 
-  static const int _androidMax = 2;
-  static const int _iosMax = 3;
+  // Fullscreen reels: [ReelPreloadPolicy] — Android 4 slots (1 back + 2 ahead + current).
+  static const int _androidMax = 4;
+  static const int _iosMax = 5;
   static const int _fallbackMax = 2;
 
   final Map<String, int> _leasesByOwner = <String, int>{};
@@ -52,5 +53,11 @@ class VideoDecoderBudget {
 
   void releaseAll(String owner) {
     _leasesByOwner.remove(owner);
+  }
+
+  /// Drop lease counters for feed surfaces before fullscreen reels start.
+  void releaseFeedLeases() {
+    releaseAll('home_inline');
+    releaseAll('feed_reel_viewer');
   }
 }

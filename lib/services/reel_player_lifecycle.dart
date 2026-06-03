@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 
 import 'app_logger.dart';
+import 'reel_preload_policy.dart';
 
 
 
@@ -60,16 +61,15 @@ class ReelPlatformPolicy {
 
   /// 3 slots: current + next 2. The pool is LRU so the oldest is evicted
   /// when a 4th would be added. 3 is safe on modern iOS/Android (≥3 GB RAM).
-  static int get maxPoolSlots => 3;
+  static int get maxPoolSlots => isAndroid ? 4 : 5;
 
 
 
-  /// Warm window: current + next 2. Matches the 3-slot pool so reels
-  /// 2 and 3 are decoded and ready before the user swipes to them.
+  /// Warm window: 1 back + 3 ahead (see [ReelPreloadPolicy]).
   static Iterable<int> warmIndices(int centerIndex, int length) sync* {
     if (length <= 0) return;
-    for (final i in [centerIndex, centerIndex + 1, centerIndex + 2]) {
-      if (i >= 0 && i < length) yield i;
+    for (final i in ReelPreloadPolicy.warmIndices(centerIndex, length)) {
+      yield i;
     }
   }
 

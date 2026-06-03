@@ -7,12 +7,11 @@ class ExploreService {
   static final Map<String, _TimedListCache> _followingCache = {};
   static final Map<String, _TimedListCache> _interestsCache = {};
 
-  /// Posts from last 3 days, ordered by createdAt descending, limit 200.
+  /// All posts ordered by createdAt descending, limit 200.
+  /// No date filter — we want to show all existing content on Explore.
   Stream<QuerySnapshot<Map<String, dynamic>>> getRecentPosts() {
-    final threeDaysAgo = DateTime.now().subtract(const Duration(days: 3));
     return _firestore
         .collection('posts')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(threeDaysAgo))
         .orderBy('createdAt', descending: true)
         .limit(200)
         .snapshots();
@@ -67,14 +66,11 @@ class ExploreService {
     }
   }
 
-  /// Explore feed: exclude followed users, rank by exploreScore, diversity (max 2 per user).
+  /// Explore feed: ranked by exploreScore, diversity (max 3 per user).
+  /// Shows ALL posts — not filtering by following so the grid is always full.
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> getExplorePostsStream(String currentUserId) {
     return getRecentPosts().asyncMap((snapshot) async {
-      final following = await getFollowingIds(currentUserId);
-      final followingSet = following.toSet();
-      var docs = snapshot.docs
-          .where((d) => !followingSet.contains((d.data()['userId'] as String?) ?? ''))
-          .toList();
+      var docs = snapshot.docs;
 
       final userInterests = await getUserInterests(currentUserId);
 
@@ -100,7 +96,7 @@ class ExploreService {
       scored.sort((a, b) => b.score.compareTo(a.score));
 
       final perUserCount = <String, int>{};
-      const maxPerUser = 2;
+      const maxPerUser = 3;
       final result = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
       for (final s in scored) {
         final uid = (s.doc.data()['userId'] as String?) ?? '';

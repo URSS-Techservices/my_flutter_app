@@ -1,12 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:halo/Bottom Pages/ExplorePage.dart';
-import 'package:halo/Bottom Pages/HomePage.dart';
 import 'package:halo/services/app_logger.dart';
 import 'package:halo/services/memory_watchdog.dart';
+import 'package:halo/services/video_controller_pool.dart';
 
-/// Subscribes to [MemoryWatchdog] and applies pressure actions across video pools.
+/// Subscribes to [MemoryWatchdog] and applies pressure actions across all
+/// registered video pools via [VideoPoolCoordinator].
 class VideoMemoryBridge {
   VideoMemoryBridge._();
 
@@ -17,8 +17,8 @@ class VideoMemoryBridge {
     if (_installed || kIsWeb) return;
     _installed = true;
 
-    // Defer polling until after Firebase/GMS init — avoids critical RSS at ~220MB
-    // on cold start with no video pool entries yet.
+    // Defer polling until after Firebase/GMS init — avoids critical RSS at
+    // ~220 MB on cold start with no video pool entries yet.
     Future<void>.delayed(const Duration(seconds: 30), () {
       if (!_installed) return;
       MemoryWatchdog.instance.start();
@@ -40,7 +40,7 @@ class VideoMemoryBridge {
   }
 
   static void _onEvent(MemoryWatchdogEvent event) {
-    final pool = VideoControllerPool.instance;
+    final pool = VideoPoolCoordinator.instance;
     switch (event.pressure) {
       case MemoryPressure.ok:
         pool.pauseNewPreloads = false;
@@ -58,7 +58,6 @@ class VideoMemoryBridge {
         pool.pauseNewPreloads = true;
         if (pool.pooledCount > 0) {
           pool.disposeAll();
-          evictHomeFeedVideoCache();
         }
         AppLogger.perf('memory_critical', fields: {
           'rssMb': event.rssMb,
