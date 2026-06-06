@@ -1533,6 +1533,9 @@ PODS:
     - Flutter
   - permission_handler_apple (9.4.8):
     - Flutter
+  - pro_image_editor (12.0.8):
+    - Flutter
+    - FlutterMacOS
   - PromisesObjC (2.4.0)
   - RecaptchaInterop (101.0.0)
   - SDWebImage (5.21.7):
@@ -1579,6 +1582,7 @@ DEPENDENCIES:
   - media_info (from `.symlinks/plugins/media_info/ios`)
   - open_filex (from `.symlinks/plugins/open_filex/ios`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+  - pro_image_editor (from `.symlinks/plugins/pro_image_editor/darwin`)
   - share_plus (from `.symlinks/plugins/share_plus/ios`)
   - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
   - sqflite_darwin (from `.symlinks/plugins/sqflite_darwin/darwin`)
@@ -1666,6 +1670,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/open_filex/ios"
   permission_handler_apple:
     :path: ".symlinks/plugins/permission_handler_apple/ios"
+  pro_image_editor:
+    :path: ".symlinks/plugins/pro_image_editor/darwin"
   share_plus:
     :path: ".symlinks/plugins/share_plus/ios"
   shared_preferences_foundation:
@@ -1732,6 +1738,7 @@ SPEC CHECKSUMS:
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   open_filex: 432f3cd11432da3e39f47fcc0df2b1603854eff1
   permission_handler_apple: 92d754bbaa7361d436db2d6c3c1c2a0fdcec462e
+  pro_image_editor: e57a76b305fd8c2e06d57f92aec82b9c6a6e8d9f
   PromisesObjC: f5707f49cb48b9636751c5b2e7d227e43fba9f47
   RecaptchaInterop: 11e0b637842dfb48308d242afc3f448062325aba
   SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf

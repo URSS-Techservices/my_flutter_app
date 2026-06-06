@@ -43,6 +43,8 @@ import 'package:halo/widgets/save_button.dart';
 
 const Color kPrimaryColor   = Color(0xFFA58CE3);
 const Color kSecondaryColor = Color(0xFF5B3FA3);
+const Color _kBgColor       = Color(0xFFF4F1FB); // app lavender background
+const Color _kCardBg        = Colors.white;
 const Color _kLikeRed       = Color(0xFFED4956);
 const Color _kText          = Color(0xFF262626);
 const Color _kSubText       = Color(0xFF8E8E8E);
@@ -450,11 +452,13 @@ class _HomePageState extends State<HomePage> {
       },
       child: Scaffold(
       key: _scaffoldKey,
-      backgroundColor: Colors.white,
+      backgroundColor: _kBgColor,
       drawer: _Drawer(onSelect: _onDrawer),
       appBar: _navIndex == 0 ? AppBar(
         elevation: 0,
-        backgroundColor: Colors.white,
+        scrolledUnderElevation: 0,
+        backgroundColor: _kBgColor,
+        surfaceTintColor: Colors.transparent,
         leading: IconButton(
           icon: const Icon(Icons.menu, color: Colors.black87),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
@@ -495,7 +499,7 @@ class _HomePageState extends State<HomePage> {
                 child: Column(
                   children: [
                     _StoriesStrip(),
-                    const Divider(height: 0.5, thickness: 0.5, color: Color(0xFFEBEBEB)),
+                    Divider(height: 0.5, thickness: 0.5, color: kPrimaryColor.withValues(alpha: 0.15)),
                     _buildFeed(),
                   ],
                 ),
@@ -516,11 +520,12 @@ class _HomePageState extends State<HomePage> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
-        backgroundColor: Colors.white,
+        backgroundColor: _kCardBg,
         elevation: 12,
         selectedItemColor: kSecondaryColor,
         unselectedItemColor: Colors.grey.shade500,
-        showUnselectedLabels: true,
+        showSelectedLabels: false,
+        showUnselectedLabels: false,
         currentIndex: _navIndex,
         onTap: (i) async {
           if (i == 3) {
@@ -543,15 +548,15 @@ class _HomePageState extends State<HomePage> {
           }
         },
         items: [
-          const BottomNavigationBarItem(icon: Icon(Icons.home_rounded),          label: 'Home'),
-          const BottomNavigationBarItem(icon: Icon(Icons.search_rounded),         label: 'Search'),
-          const BottomNavigationBarItem(icon: Icon(Icons.explore_rounded),        label: 'Explore'),
-          const BottomNavigationBarItem(icon: Icon(Icons.add_box_outlined),       label: 'Add Post'),
-          const BottomNavigationBarItem(icon: Icon(Icons.favorite_border_rounded),label: 'Activity'),
-          BottomNavigationBarItem(
-            icon: const _ProfileNavAvatar(selected: false),
-            activeIcon: const _ProfileNavAvatar(selected: true),
-            label: 'Profile',
+          const BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: ''),
+          const BottomNavigationBarItem(icon: Icon(Icons.search_rounded), label: ''),
+          const BottomNavigationBarItem(icon: Icon(Icons.explore_rounded), label: ''),
+          const BottomNavigationBarItem(icon: Icon(Icons.add_box_outlined), label: ''),
+          const BottomNavigationBarItem(icon: Icon(Icons.favorite_border_rounded), label: ''),
+          const BottomNavigationBarItem(
+            icon: _ProfileNavAvatar(selected: false),
+            activeIcon: _ProfileNavAvatar(selected: true),
+            label: '',
           ),
         ],
       ),
@@ -858,7 +863,8 @@ class _PostCardState extends State<_PostCard> {
     final createdAt = (d['createdAt'] as Timestamp?)?.toDate().toLocal();
 
     return Container(
-      color: Colors.white,
+      margin: const EdgeInsets.only(bottom: 8),
+      color: _kCardBg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -921,7 +927,6 @@ class _PostCardState extends State<_PostCard> {
                 style: const TextStyle(color: _kSubText, fontSize: 10)),
             ),
 
-          const Divider(height: 0.5, thickness: 0.5, color: Color(0xFFEBEBEB)),
         ],
       ),
     );
