@@ -542,18 +542,68 @@ class _HomePageState extends State<HomePage> {
             unawaited(_refreshFeed());
           }
         },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home_rounded),          label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.search_rounded),         label: 'Search'),
-          BottomNavigationBarItem(icon: Icon(Icons.explore_rounded),        label: 'Explore'),
-          BottomNavigationBarItem(icon: Icon(Icons.add_box_outlined),       label: 'Add Post'),
-          BottomNavigationBarItem(icon: Icon(Icons.favorite_border_rounded),label: 'Activity'),
+        items: [
+          const BottomNavigationBarItem(icon: Icon(Icons.home_rounded),          label: 'Home'),
+          const BottomNavigationBarItem(icon: Icon(Icons.search_rounded),         label: 'Search'),
+          const BottomNavigationBarItem(icon: Icon(Icons.explore_rounded),        label: 'Explore'),
+          const BottomNavigationBarItem(icon: Icon(Icons.add_box_outlined),       label: 'Add Post'),
+          const BottomNavigationBarItem(icon: Icon(Icons.favorite_border_rounded),label: 'Activity'),
           BottomNavigationBarItem(
-            icon: CircleAvatar(radius: 12, backgroundImage: AssetImage('assets/images/Profile.png')),
-            label: 'Profile'),
+            icon: const _ProfileNavAvatar(selected: false),
+            activeIcon: const _ProfileNavAvatar(selected: true),
+            label: 'Profile',
+          ),
         ],
       ),
     ),
+    );
+  }
+}
+
+// ─── Bottom-nav profile avatar (live user photo) ─────────────────────────────
+
+class _ProfileNavAvatar extends StatelessWidget {
+  final bool selected;
+  const _ProfileNavAvatar({this.selected = false});
+
+  static const _fallback = AssetImage('assets/images/Profile.png');
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return _wrap(_avatar(null));
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      builder: (_, snap) {
+        final photo = _profilePhotoUrl(snap.data?.data());
+        return _wrap(_avatar(photo));
+      },
+    );
+  }
+
+  Widget _avatar(String? photoUrl) {
+    final url = photoUrl?.trim() ?? '';
+    return CircleAvatar(
+      radius: 12,
+      backgroundColor: Colors.grey.shade200,
+      backgroundImage: url.isNotEmpty
+          ? CachedNetworkImageProvider(url)
+          : _fallback,
+    );
+  }
+
+  Widget _wrap(Widget avatar) {
+    if (!selected) return avatar;
+    return Container(
+      padding: const EdgeInsets.all(1.5),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: kSecondaryColor, width: 2),
+      ),
+      child: avatar,
     );
   }
 }
@@ -2111,6 +2161,7 @@ class _Drawer extends StatelessWidget {
                     final label  = item[1] as String;
                     final action = item[2] as _DrawerAction;
                     return ListTile(
+                      textColor: Colors.black,
                       leading: Container(
                         padding: const EdgeInsets.all(6),
                         decoration: BoxDecoration(
@@ -2119,7 +2170,14 @@ class _Drawer extends StatelessWidget {
                         ),
                         child: Icon(icon, color: kSecondaryColor, size: 20),
                       ),
-                      title: Text(label, style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
+                      title: Text(
+                        label,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.black,
+                        ),
+                      ),
                       onTap: () { Navigator.pop(context); onSelect(action); },
                     );
                   }).toList(),

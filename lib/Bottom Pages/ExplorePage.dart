@@ -12,6 +12,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:halo/models/media_model.dart';
@@ -23,12 +24,16 @@ import 'package:halo/services/video_controller_pool.dart';
 import 'package:halo/services/video_decoder_budget.dart';
 import 'package:halo/services/video_dispose_serial.dart';
 import 'package:halo/services/video_playback_resolver.dart';
+import 'package:halo/screens/profile/profile_router_screen.dart';
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
 const Color _kPrimary   = Color(0xFF5B3FA3);
 const Color _kAccent    = Color(0xFFA58CE3);
-const double _kGap      = 1.5;
+const Color _kBg        = Color(0xFFFAFAFC);
+const Color _kSurface   = Color(0xFFF4F1FB);
+const Color _kChipBg    = Color(0xFFEFECF8);
+const double _kGap      = 2.0;
 const int    _kCols     = 3;
 const int    _kFeatEvery = 7;   // every 7th item is a featured (2×2) tile
 
@@ -200,6 +205,15 @@ extension _FilterLabel on _Filter {
       case _Filter.trending:  return 'Trending';
     }
   }
+
+  IconData get icon {
+    switch (this) {
+      case _Filter.forYou:   return Icons.auto_awesome_rounded;
+      case _Filter.videos:   return Icons.play_circle_outline_rounded;
+      case _Filter.photos:   return Icons.photo_library_outlined;
+      case _Filter.trending: return Icons.local_fire_department_rounded;
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -320,8 +334,22 @@ class _ExplorePageState extends State<ExplorePage> {
           posts: videos,
           initialIndex: idx < 0 ? 0 : idx,
         ),
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: const Duration(milliseconds: 200),
+        transitionDuration: const Duration(milliseconds: 280),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
+        transitionsBuilder: (_, animation, __, child) {
+          final curve = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return FadeTransition(
+            opacity: curve,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1.0).animate(curve),
+              child: child,
+            ),
+          );
+        },
       ),
     ).whenComplete(AppVideoFocus.instance.exitFullscreenReel);
   }
@@ -342,65 +370,40 @@ class _ExplorePageState extends State<ExplorePage> {
     _load();
   }
 
-  // Trending tags from current posts
-  List<String> get _trendingTags {
-    final freq = <String, int>{};
-    for (final p in _all) {
-      // Re-fetch tags from raw is unnecessary — caption words as proxy
-    }
-    return freq.entries
-        .where((e) => e.value > 1)
-        .take(8)
-        .map((e) => e.key)
-        .toList();
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: _kBg,
       body: SafeArea(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Search bar ─────────────────────────────────────────────────
+            const _ExploreHeader(),
             _SearchBar(ctrl: _searchCtrl),
-
-            // ── Filter chips ───────────────────────────────────────────────
+            const SizedBox(height: 10),
             SizedBox(
-              height: 38,
+              height: 40,
               child: ListView(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 children: _Filter.values.map((f) {
                   final selected = _filter == f;
-                  return GestureDetector(
-                    onTap: () => setState(() { _filter = f; _applyFilter(); }),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: selected ? _kPrimary : const Color(0xFFEFEFEF),
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: Text(
-                        f.label,
-                        style: TextStyle(
-                          color: selected ? Colors.white : const Color(0xFF444444),
-                          fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                          fontSize: 13,
-                        ),
-                      ),
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _FilterChip(
+                      label: f.label,
+                      icon: f.icon,
+                      selected: selected,
+                      onTap: () => setState(() {
+                        _filter = f;
+                        _applyFilter();
+                      }),
                     ),
                   );
                 }).toList(),
               ),
             ),
-
-            const SizedBox(height: 4),
-
-            // ── Grid ───────────────────────────────────────────────────────
+            const SizedBox(height: 8),
             Expanded(
               child: _error
                   ? _ErrorView(onRetry: _refresh)
@@ -411,12 +414,146 @@ class _ExplorePageState extends State<ExplorePage> {
                           : RefreshIndicator(
                               onRefresh: _refresh,
                               color: _kPrimary,
+                              backgroundColor: Colors.white,
                               child: _Grid(
                                 posts: _shown,
                                 scrollCtrl: _scrollCtrl,
                                 onTap: _openDetail,
                               ),
                             ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Explore header ────────────────────────────────────────────────────────────
+
+class _ExploreHeader extends StatelessWidget {
+  const _ExploreHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Explore',
+                  style: GoogleFonts.poppins(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF1A1A2E),
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                Text(
+                  'Discover videos & photos',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12.5,
+                    color: const Color(0xFF888899),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [_kPrimary, _kAccent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                  color: _kPrimary.withValues(alpha: 0.28),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.explore_rounded, color: Colors.white, size: 22),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          gradient: selected
+              ? const LinearGradient(
+                  colors: [_kPrimary, Color(0xFF7B5FC7)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
+              : null,
+          color: selected ? null : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? Colors.transparent : const Color(0xFFE8E4F0),
+            width: 1,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: _kPrimary.withValues(alpha: 0.22),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: selected ? Colors.white : _kPrimary),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: GoogleFonts.poppins(
+                color: selected ? Colors.white : const Color(0xFF444455),
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                fontSize: 13,
+              ),
             ),
           ],
         ),
@@ -434,33 +571,59 @@ class _SearchBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       child: Container(
-        height: 38,
+        height: 46,
         decoration: BoxDecoration(
-          color: const Color(0xFFEFEFEF),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: TextField(
-          controller: ctrl,
-          textAlignVertical: TextAlignVertical.center,
-          style: const TextStyle(fontSize: 14, color: Color(0xFF262626)),
-          decoration: InputDecoration(
-            hintText: 'Search',
-            hintStyle: const TextStyle(color: Color(0xFF8E8E8E), fontSize: 14),
-            prefixIcon: const Icon(Icons.search_rounded, color: Color(0xFF8E8E8E), size: 20),
-            suffixIcon: ListenableBuilder(
-              listenable: ctrl,
-              builder: (_, __) => ctrl.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.cancel, color: Color(0xFF8E8E8E), size: 18),
-                      onPressed: ctrl.clear,
-                    )
-                  : const SizedBox.shrink(),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFE8E4F0)),
+          boxShadow: [
+            BoxShadow(
+              color: _kPrimary.withValues(alpha: 0.06),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
             ),
-            border: InputBorder.none,
-            contentPadding: EdgeInsets.zero,
-            isDense: true,
+          ],
+        ),
+        child: Theme(
+          data: Theme.of(context).copyWith(
+            textSelectionTheme: const TextSelectionThemeData(
+              cursorColor: Colors.black,
+              selectionColor: Color(0x33000000),
+            ),
+          ),
+          child: TextField(
+            controller: ctrl,
+            textAlignVertical: TextAlignVertical.center,
+            keyboardAppearance: Brightness.light,
+            style: const TextStyle(
+              color: Colors.black,
+              fontSize: 15,
+              fontWeight: FontWeight.w400,
+            ),
+            cursorColor: Colors.black,
+            decoration: InputDecoration(
+              hintText: 'Search posts, people, tags…',
+              hintStyle: TextStyle(
+                color: Colors.grey.shade500,
+                fontSize: 15,
+                fontWeight: FontWeight.w400,
+              ),
+              prefixIcon: Icon(Icons.search_rounded, color: Colors.grey.shade600, size: 22),
+              suffixIcon: ListenableBuilder(
+                listenable: ctrl,
+                builder: (_, __) => ctrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: Icon(Icons.cancel_rounded, color: Colors.grey.shade400, size: 20),
+                        onPressed: ctrl.clear,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+              isDense: true,
+            ),
           ),
         ),
       ),
@@ -482,8 +645,8 @@ class _ShimmerState extends State<_Shimmer> with SingleTickerProviderStateMixin 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))
-      ..repeat(reverse: true);
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))
+      ..repeat();
   }
   @override
   void dispose() { _ctrl.dispose(); super.dispose(); }
@@ -491,10 +654,25 @@ class _ShimmerState extends State<_Shimmer> with SingleTickerProviderStateMixin 
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _ctrl,
-      builder: (_, __) => Container(
-        width: widget.width, height: widget.height,
-        color: Color.lerp(const Color(0xFFE8E8E8), const Color(0xFFF4F4F4), _ctrl.value),
-      ),
+      builder: (_, __) {
+        final t = _ctrl.value;
+        return Container(
+          width: widget.width,
+          height: widget.height,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment(-1.0 + t * 2, 0),
+              end: Alignment(-0.5 + t * 2, 0),
+              colors: const [
+                Color(0xFFE8E4F0),
+                Color(0xFFF8F6FC),
+                Color(0xFFE8E4F0),
+              ],
+              stops: const [0.0, 0.5, 1.0],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -548,6 +726,12 @@ class _Grid extends StatelessWidget {
         final sm2 = posts[i + 2];
         final bigSize = cell * 2 + _kGap;
         sections.add(
+          const Padding(
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 6),
+            child: _FeaturedSectionHeader(),
+          ),
+        );
+        sections.add(
           RepaintBoundary(
             child: SizedBox(
               height: bigSize,
@@ -591,15 +775,50 @@ class _Grid extends StatelessWidget {
     return ListView(
       controller: scrollCtrl,
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.zero,
+      padding: const EdgeInsets.only(bottom: 16),
       children: sections,
+    );
+  }
+}
+
+class _FeaturedSectionHeader extends StatelessWidget {
+  const _FeaturedSectionHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 18,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [_kAccent, _kPrimary],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          'Trending now',
+          style: GoogleFonts.poppins(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: const Color(0xFF1A1A2E),
+          ),
+        ),
+        const Spacer(),
+        Icon(Icons.trending_up_rounded, size: 18, color: _kPrimary.withValues(alpha: 0.7)),
+      ],
     );
   }
 }
 
 // ─── Grid cell ───────────────────────────────────────────────────────────────
 
-class _Cell extends StatelessWidget {
+class _Cell extends StatefulWidget {
   final _Post post;
   final double size;
   final bool isFeatured;
@@ -613,90 +832,177 @@ class _Cell extends StatelessWidget {
   });
 
   @override
+  State<_Cell> createState() => _CellState();
+}
+
+class _CellState extends State<_Cell> with SingleTickerProviderStateMixin {
+  late AnimationController _pressCtrl;
+  late Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _pressCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 120),
+      reverseDuration: const Duration(milliseconds: 180),
+    );
+    _scale = Tween<double>(begin: 1, end: 0.96).animate(
+      CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOutCubic),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pressCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final post = widget.post;
+    final size = widget.size;
+    final isFeatured = widget.isFeatured;
     final displayUrl = post.isVideo
         ? post.thumbUrl
         : (post.imageUrl.isNotEmpty ? post.imageUrl : post.thumbUrl);
     final badgeIcon = post.isVideo
         ? Icons.play_arrow_rounded
         : (post.isMulti ? Icons.collections_rounded : null);
-    final badgeSize = isFeatured ? 20.0 : 16.0;
+    final badgeSize = isFeatured ? 18.0 : 14.0;
+    final showEngagement = post.isVideo && (post.likeCount > 0 || post.commentCount > 0);
 
     return GestureDetector(
       onTapDown: post.isVideo && post.videoUrl.isNotEmpty
-          ? (_) => ExploreReelPrefetch.instance.start(
+          ? (_) {
+              _pressCtrl.forward();
+              ExploreReelPrefetch.instance.start(
                 postId: post.id,
                 videoUrl: post.videoUrl,
                 fallbackUrl: post.fallbackVideoUrl,
-              )
-          : null,
-      onTap: () => onTap(post),
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // Thumbnail
-            displayUrl.isNotEmpty
-                ? CachedNetworkImage(
-                    imageUrl: displayUrl,
-                    fit: BoxFit.cover,
-                    placeholder: (_, __) => _Shimmer(width: size, height: size),
-                    errorWidget: (_, __, ___) => const ColoredBox(color: Color(0xFFDDDDDD)),
-                  )
-                : _Shimmer(width: size, height: size),
+              );
+            }
+          : (_) => _pressCtrl.forward(),
+      onTapUp: (_) => _pressCtrl.reverse(),
+      onTapCancel: () => _pressCtrl.reverse(),
+      onTap: () => widget.onTap(post),
+      child: ScaleTransition(
+        scale: _scale,
+        child: Hero(
+          tag: 'explore_thumb_${post.id}',
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(isFeatured ? 12 : 4),
+            child: SizedBox(
+              width: size,
+              height: size,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  displayUrl.isNotEmpty
+                      ? CachedNetworkImage(
+                          imageUrl: displayUrl,
+                          fit: BoxFit.cover,
+                          fadeInDuration: Duration.zero,
+                          placeholder: (_, __) => _Shimmer(width: size, height: size),
+                          errorWidget: (_, __, ___) =>
+                              ColoredBox(color: _kChipBg),
+                        )
+                      : _Shimmer(width: size, height: size),
 
-            // Featured tile: subtle bottom gradient + like/comment count
-            if (isFeatured && (post.likeCount > 0 || post.commentCount > 0)) ...[
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, Colors.black.withOpacity(0.5)],
-                      stops: const [0.55, 1.0],
+                  if (showEngagement || isFeatured)
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.black.withValues(alpha: 0.55),
+                            ],
+                            stops: const [0.5, 1.0],
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 10, bottom: 10,
-                child: Row(children: [
-                  const Icon(Icons.favorite, color: Colors.white, size: 14),
-                  const SizedBox(width: 3),
-                  Text(_fmtCount(post.likeCount),
-                    style: const TextStyle(color: Colors.white, fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        shadows: [Shadow(blurRadius: 3, color: Colors.black54)])),
-                  if (post.commentCount > 0) ...[
-                    const SizedBox(width: 10),
-                    const Icon(Icons.chat_bubble, color: Colors.white, size: 13),
-                    const SizedBox(width: 3),
-                    Text(_fmtCount(post.commentCount),
-                      style: const TextStyle(color: Colors.white, fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          shadows: [Shadow(blurRadius: 3, color: Colors.black54)])),
-                  ],
-                ]),
-              ),
-            ],
 
-            // Badge top-right
-            if (badgeIcon != null)
-              Positioned(
-                top: 6, right: 6,
-                child: Container(
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.45),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Icon(badgeIcon, color: Colors.white, size: badgeSize),
-                ),
+                  if (post.isVideo)
+                    Positioned(
+                      left: 8,
+                      bottom: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 14),
+                            if (isFeatured) ...[
+                              const SizedBox(width: 2),
+                              Text(
+                                'Reel',
+                                style: GoogleFonts.poppins(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  if (showEngagement)
+                    Positioned(
+                      left: 8,
+                      right: 8,
+                      bottom: post.isVideo ? 36 : 8,
+                      child: Row(
+                        children: [
+                          if (post.likeCount > 0) ...[
+                            const Icon(Icons.favorite_rounded, color: Colors.white, size: 12),
+                            const SizedBox(width: 3),
+                            Text(
+                              _CellState._fmtCount(post.likeCount),
+                              style: GoogleFonts.poppins(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                          if (post.commentCount > 0) ...[
+                            const SizedBox(width: 10),
+                            const Icon(Icons.chat_bubble_rounded, color: Colors.white, size: 11),
+                            const SizedBox(width: 3),
+                            Text(
+                              _CellState._fmtCount(post.commentCount),
+                              style: GoogleFonts.poppins(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+
+                  if (badgeIcon != null && !post.isVideo)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: _FrostedBadge(icon: badgeIcon, size: badgeSize),
+                    ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
       ),
     );
@@ -704,8 +1010,28 @@ class _Cell extends StatelessWidget {
 
   static String _fmtCount(int n) {
     if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-    if (n >= 1000)    return '${(n / 1000).toStringAsFixed(1)}K';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
     return '$n';
+  }
+}
+
+class _FrostedBadge extends StatelessWidget {
+  final IconData icon;
+  final double size;
+
+  const _FrostedBadge({required this.icon, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Icon(icon, color: Colors.white, size: size),
+    );
   }
 }
 
@@ -759,14 +1085,19 @@ class _ReelCircleIconBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.black26,
+      color: Colors.white.withValues(alpha: 0.14),
       shape: const CircleBorder(),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: SizedBox(
-          width: 40,
-          height: 40,
+        splashColor: Colors.white24,
+        child: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
+          ),
           child: Icon(icon, color: Colors.white, size: size),
         ),
       ),
@@ -778,16 +1109,19 @@ class _ReelCircleIconBtn extends StatelessWidget {
 class _ReelPoster extends StatelessWidget {
   final String posterUrl;
   final bool showLoading;
+  final String? heroTag;
 
   const _ReelPoster({
     required this.posterUrl,
     this.showLoading = false,
+    this.heroTag,
   });
 
   @override
   Widget build(BuildContext context) {
+    Widget child;
     if (posterUrl.isNotEmpty) {
-      return CachedNetworkImage(
+      child = CachedNetworkImage(
         imageUrl: posterUrl,
         fit: BoxFit.cover,
         width: double.infinity,
@@ -798,8 +1132,13 @@ class _ReelPoster extends StatelessWidget {
         placeholder: (_, __) => _ReelPosterFallback(loading: true),
         errorWidget: (_, __, ___) => _ReelPosterFallback(loading: showLoading),
       );
+    } else {
+      child = _ReelPosterFallback(loading: showLoading);
     }
-    return _ReelPosterFallback(loading: showLoading);
+    if (heroTag != null) {
+      return Hero(tag: heroTag!, child: child);
+    }
+    return child;
   }
 }
 
@@ -840,6 +1179,16 @@ class _ReelAuthorStrip extends StatelessWidget {
     this.currentUid,
   });
 
+  void _openProfile(BuildContext context) {
+    if (userId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfileRouterScreen(profileUserId: userId),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (userId.isEmpty && fallbackUsername.isEmpty) {
@@ -854,6 +1203,7 @@ class _ReelAuthorStrip extends StatelessWidget {
             ? fallbackUsername
             : (meta?.name.isNotEmpty == true ? meta!.name : 'User');
         final photo = meta?.photo ?? '';
+        final handle = name.startsWith('@') ? name : '@$name';
 
         return Row(
           mainAxisSize: MainAxisSize.min,
@@ -876,15 +1226,19 @@ class _ReelAuthorStrip extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Flexible(
-              child: Text(
-                name.startsWith('@') ? name : '@$name',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  shadows: _kReelTextShadow,
+              child: GestureDetector(
+                onTap: userId.isNotEmpty ? () => _openProfile(context) : null,
+                behavior: HitTestBehavior.opaque,
+                child: Text(
+                  handle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    shadows: _kReelTextShadow,
+                  ),
                 ),
               ),
             ),
@@ -969,39 +1323,67 @@ class _ReelCaptionState extends State<_ReelCaption> {
   }
 }
 
-class _ReelMusicChip extends StatelessWidget {
-  const _ReelMusicChip();
+class _ReelAudioDisc extends StatefulWidget {
+  final String imageUrl;
+
+  const _ReelAudioDisc({required this.imageUrl});
+
+  @override
+  State<_ReelAudioDisc> createState() => _ReelAudioDiscState();
+}
+
+class _ReelAudioDiscState extends State<_ReelAudioDisc>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _spin;
+
+  @override
+  void initState() {
+    super.initState();
+    _spin = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 24,
-          height: 24,
-          decoration: BoxDecoration(
-            color: Colors.white24,
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: Colors.white38),
-          ),
-          child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 14),
+    const size = 36.0;
+    return RotationTransition(
+      turns: _spin,
+      child: Container(
+        width: size,
+        height: size,
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white, width: 2),
         ),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            'Original audio',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w500,
-              shadows: _kReelTextShadow,
-            ),
-          ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(5),
+          child: widget.imageUrl.isNotEmpty
+              ? CachedNetworkImage(
+                  imageUrl: widget.imageUrl,
+                  fit: BoxFit.cover,
+                  width: size,
+                  height: size,
+                  errorWidget: (_, __, ___) => _discFallback(),
+                )
+              : _discFallback(),
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _discFallback() {
+    return Container(
+      color: const Color(0xFF3A3A3C),
+      child: const Icon(Icons.music_note_rounded, color: Colors.white70, size: 18),
     );
   }
 }
@@ -1100,6 +1482,7 @@ class _ReelViewerState extends State<_ReelViewer> {
   final Set<int> _initing = {};
   final Set<int> _surfacesReady = {};
   bool _syncing = false;
+  final ValueNotifier<bool> _chromeVisible = ValueNotifier(true);
 
   late final void Function() _memoryEvictOldest;
   late final void Function() _memoryDisposeAll;
@@ -1196,6 +1579,7 @@ class _ReelViewerState extends State<_ReelViewer> {
     VideoPoolCoordinator.instance.unregisterCount(_memoryCount);
     AppVideoFocus.instance.exitFullscreenReel();
     unawaited(ExploreReelPrefetch.instance.cancel());
+    _chromeVisible.dispose();
     _pc.dispose();
     for (final c in _ctrls.values) {
       try {
@@ -1422,6 +1806,7 @@ class _ReelViewerState extends State<_ReelViewer> {
             allowImplicitScrolling: true,
             itemCount: widget.posts.length,
             onPageChanged: (i) {
+              _chromeVisible.value = true;
               setState(() => _page = i);
               _applyPlayback();
               unawaited(_sync());
@@ -1430,28 +1815,58 @@ class _ReelViewerState extends State<_ReelViewer> {
               final post = widget.posts[i];
               final c = _ctrls[i];
               final ready = c != null && c.value.isInitialized;
-              return _ReelPage(
-                key: ValueKey(post.id),
-                post: post,
-                isActive: i == _page,
-                preloadSurface: i == _page || i == _page + 1,
-                ctrl: c,
-                ready: ready,
-                loading: _initing.contains(i),
-                onSurfaceReady: () => _onSurfaceReady(i),
+              return AnimatedBuilder(
+                animation: _pc,
+                builder: (context, child) {
+                  var scale = 1.0;
+                  if (_pc.position.haveDimensions) {
+                    final delta = (_pc.page ?? _page.toDouble()) - i;
+                    scale = (1 - delta.abs() * 0.08).clamp(0.92, 1.0);
+                  }
+                  return Transform.scale(
+                    scale: scale,
+                    child: child,
+                  );
+                },
+                child: _ReelPage(
+                  key: ValueKey(post.id),
+                  post: post,
+                  reelIndex: i,
+                  reelTotal: widget.posts.length,
+                  isActive: i == _page,
+                  preloadSurface: i == _page || i == _page + 1,
+                  ctrl: c,
+                  ready: ready,
+                  loading: _initing.contains(i),
+                  onSurfaceReady: () => _onSurfaceReady(i),
+                  onChromeVisibilityChanged: i == _page
+                      ? (visible) => _chromeVisible.value = visible
+                      : null,
+                ),
               );
             },
           ),
-          // Top-left back to Explore grid (no title)
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.only(left: 8, top: 4),
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: _ReelCircleIconBtn(
-                  icon: Icons.arrow_back_ios_new_rounded,
-                  size: 18,
-                  onTap: () => Navigator.pop(context),
+          // Back — always top-left (never hidden)
+          Positioned(
+            top: 0,
+            left: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 2, top: 2),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => Navigator.pop(context),
+                    borderRadius: BorderRadius.circular(24),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -1466,21 +1881,27 @@ class _ReelViewerState extends State<_ReelViewer> {
 
 class _ReelPage extends StatefulWidget {
   final _Post post;
+  final int reelIndex;
+  final int reelTotal;
   final bool isActive;
   final bool preloadSurface;
   final VideoPlayerController? ctrl;
   final bool ready;
   final bool loading;
   final VoidCallback? onSurfaceReady;
+  final ValueChanged<bool>? onChromeVisibilityChanged;
   const _ReelPage({
     super.key,
     required this.post,
+    required this.reelIndex,
+    required this.reelTotal,
     required this.isActive,
     this.preloadSurface = false,
     required this.ctrl,
     required this.ready,
     required this.loading,
     this.onSurfaceReady,
+    this.onChromeVisibilityChanged,
   });
   @override
   State<_ReelPage> createState() => _ReelPageState();
@@ -1491,6 +1912,8 @@ class _ReelPageState extends State<_ReelPage> {
   bool _showHeart = false;
   bool _muted = false;
   bool _hidePoster = false;
+  bool _chromeVisible = true;
+  Timer? _chromeTimer;
   final String? _uid = FirebaseAuth.instance.currentUser?.uid;
 
   @override
@@ -1498,12 +1921,56 @@ class _ReelPageState extends State<_ReelPage> {
     super.initState();
     _syncPosterVisibility();
     _attachVideoListener();
+    if (widget.isActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onChromeVisibilityChanged?.call(_chromeVisible);
+      });
+      _scheduleChromeHide();
+    }
   }
 
   @override
   void dispose() {
+    _chromeTimer?.cancel();
     _detachVideoListener(widget.ctrl);
     super.dispose();
+  }
+
+  void _setChromeVisible(bool visible) {
+    if (_chromeVisible == visible) return;
+    _chromeVisible = visible;
+    if (widget.isActive) {
+      widget.onChromeVisibilityChanged?.call(visible);
+    }
+  }
+
+  void _scheduleChromeHide() {
+    _chromeTimer?.cancel();
+    if (!widget.isActive || _userPaused) return;
+    _chromeTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && widget.isActive && !_userPaused) {
+        setState(() => _setChromeVisible(false));
+      }
+    });
+  }
+
+  void _revealChrome() {
+    setState(() => _setChromeVisible(true));
+    _scheduleChromeHide();
+  }
+
+  Widget _chromeLayer(Widget child, {Offset hideOffset = const Offset(0, 0.08)}) {
+    return AnimatedOpacity(
+      opacity: _chromeVisible ? 1 : 0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      child: AnimatedSlide(
+        offset: _chromeVisible ? Offset.zero : hideOffset,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        child: IgnorePointer(ignoring: !_chromeVisible, child: child),
+      ),
+    );
   }
 
   void _attachVideoListener() {
@@ -1537,6 +2004,7 @@ class _ReelPageState extends State<_ReelPage> {
           !c.value.hasError &&
           _hasVisibleFrame(c.value)) {
         setState(() => _hidePoster = true);
+        if (widget.isActive && _chromeVisible) _scheduleChromeHide();
       }
     }
   }
@@ -1557,6 +2025,8 @@ class _ReelPageState extends State<_ReelPage> {
     if (widget.isActive && !oldWidget.isActive) {
       _userPaused = false;
       _muted = false;
+      _setChromeVisible(true);
+      _scheduleChromeHide();
       final c = widget.ctrl;
       if (c != null && c.value.isInitialized) {
         try {
@@ -1596,11 +2066,30 @@ class _ReelPageState extends State<_ReelPage> {
       if (c.value.isPlaying) {
         c.pause();
         _userPaused = true;
+        _setChromeVisible(true);
+        _chromeTimer?.cancel();
       } else {
         c.play();
         _userPaused = false;
+        _scheduleChromeHide();
       }
     });
+  }
+
+  void _openComments() {
+    _revealChrome();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ExploreReelCommentsSheet(postId: widget.post.id),
+    );
+  }
+
+  void _shareReel() {
+    _revealChrome();
+    final name = widget.post.username.isNotEmpty ? widget.post.username : 'Halo';
+    Share.share('Check out this reel from $name on Halo');
   }
 
   Future<void> _doubleTapLike() async {
@@ -1620,12 +2109,16 @@ class _ReelPageState extends State<_ReelPage> {
 
   Future<void> _toggleLike() async {
     if (_uid == null) return;
+    HapticFeedback.lightImpact();
     final ref = FirebaseFirestore.instance
         .collection('posts').doc(widget.post.id)
         .collection('likes').doc(_uid);
     final doc = await ref.get();
-    doc.exists ? await ref.delete()
-               : await ref.set({'userId': _uid, 'likedAt': FieldValue.serverTimestamp()});
+    if (doc.exists) {
+      await ref.delete();
+    } else {
+      await ref.set({'userId': _uid, 'likedAt': FieldValue.serverTimestamp()});
+    }
   }
 
   @override
@@ -1667,6 +2160,7 @@ class _ReelPageState extends State<_ReelPage> {
                 child: _ReelPoster(
                   posterUrl: posterUrl,
                   showLoading: (loading || !ready) && !_hidePoster,
+                  heroTag: 'explore_thumb_${post.id}',
                 ),
               ),
             ),
@@ -1690,10 +2184,11 @@ class _ReelPageState extends State<_ReelPage> {
                 opacity: _userPaused ? 1 : 0,
                 duration: const Duration(milliseconds: 180),
                 child: Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: Colors.black38,
+                    color: Colors.black.withValues(alpha: 0.35),
                     shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white24),
                   ),
                   child: const Icon(
                     Icons.play_arrow_rounded,
@@ -1704,7 +2199,7 @@ class _ReelPageState extends State<_ReelPage> {
               ),
             ),
 
-          // Bottom gradient for caption legibility (Instagram-style)
+          // Bottom gradient — always visible for legibility
           Positioned.fill(
             child: IgnorePointer(
               child: DecoratedBox(
@@ -1713,11 +2208,11 @@ class _ReelPageState extends State<_ReelPage> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
+                      Colors.black.withValues(alpha: 0.12),
                       Colors.transparent,
-                      Colors.black.withOpacity(0.15),
-                      Colors.black.withOpacity(0.82),
+                      Colors.black.withValues(alpha: 0.88),
                     ],
-                    stops: const [0.45, 0.72, 1],
+                    stops: const [0, 0.35, 1],
                   ),
                 ),
               ),
@@ -1741,134 +2236,135 @@ class _ReelPageState extends State<_ReelPage> {
               ),
             ),
 
-          // Mute toggle — top-right overlay
+          // Mute — fades with chrome
           if (widget.isActive)
             Positioned(
               top: MediaQuery.of(context).padding.top + 52,
               right: 14,
-              child: _ReelCircleIconBtn(
-                icon: _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                size: 20,
-                onTap: _toggleMute,
+              child: _chromeLayer(
+                _ReelCircleIconBtn(
+                  icon: _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                  size: 20,
+                  onTap: () {
+                    _revealChrome();
+                    _toggleMute();
+                  },
+                ),
+                hideOffset: const Offset(0.12, 0),
               ),
             ),
 
-          // ── LEFT: avatar + username + follow + caption + audio chip ───────
+          // Left info — username, caption (Instagram-style)
           Positioned(
             left: 14,
-            right: 72,
-            bottom: MediaQuery.of(context).padding.bottom + 18,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _ReelAuthorStrip(
-                  userId: post.userId,
-                  fallbackUsername: post.username,
-                  currentUid: _uid,
-                ),
-                if (post.caption.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  _ReelCaption(caption: post.caption),
+            right: 80,
+            bottom: MediaQuery.of(context).padding.bottom + 16,
+            child: _chromeLayer(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ReelAuthorStrip(
+                    userId: post.userId,
+                    fallbackUsername: post.username,
+                    currentUid: _uid,
+                  ),
+                  if (post.caption.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _ReelCaption(caption: post.caption),
+                  ],
                 ],
-                const SizedBox(height: 10),
-                const _ReelMusicChip(),
-              ],
+              ),
             ),
           ),
 
-          // ── RIGHT: action rail (Instagram-style) ──────────────────────────
+          // Right action rail — like, comment, share + audio disc (no profile avatar)
           Positioned(
-            right: 10,
-            bottom: MediaQuery.of(context).padding.bottom + 24,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (post.userId.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 18),
-                    child: FutureBuilder<({String name, String photo})>(
-                      future: _ReelUserLookup.load(post.userId),
-                      builder: (_, snap) {
-                        final photo = snap.data?.photo ?? '';
-                        return Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 2),
+            right: 12,
+            bottom: MediaQuery.of(context).padding.bottom + 16,
+            child: _chromeLayer(
+              StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('posts')
+                    .doc(post.id)
+                    .snapshots(),
+                builder: (_, postSnap) {
+                  final data = postSnap.data?.data() ?? {};
+                  final likeCount = _postCount(data['likeCount'] ?? data['likesCount']);
+                  final commentCount =
+                      _postCount(data['commentCount'] ?? data['commentsCount']);
+
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _SideBtn(
+                        icon: StreamBuilder<DocumentSnapshot>(
+                          stream: _uid != null
+                              ? FirebaseFirestore.instance
+                                  .collection('posts')
+                                  .doc(post.id)
+                                  .collection('likes')
+                                  .doc(_uid)
+                                  .snapshots()
+                              : const Stream.empty(),
+                          builder: (_, snap) {
+                            final liked = snap.data?.exists ?? false;
+                            return Icon(
+                              liked ? Icons.favorite : Icons.favorite_border,
+                              color: liked ? const Color(0xFFED4956) : Colors.white,
+                              size: 32,
+                            );
+                          },
+                        ),
+                        label: likeCount > 0 ? _fmtN(likeCount) : '',
+                        onTap: () {
+                          _revealChrome();
+                          _toggleLike();
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      _SideBtn(
+                        icon: const Icon(
+                          Icons.mode_comment_outlined,
+                          color: Colors.white,
+                          size: 30,
+                        ),
+                        label: commentCount > 0 ? _fmtN(commentCount) : '',
+                        onTap: _openComments,
+                      ),
+                      const SizedBox(height: 20),
+                      _SideBtn(
+                        icon: Transform.rotate(
+                          angle: -0.35,
+                          child: const Icon(
+                            Icons.send_rounded,
+                            color: Colors.white,
+                            size: 28,
                           ),
-                          child: CircleAvatar(
-                            radius: 18,
-                            backgroundColor: Colors.white24,
-                            backgroundImage: photo.isNotEmpty
-                                ? CachedNetworkImageProvider(photo)
-                                : null,
-                            child: photo.isEmpty
-                                ? const Icon(Icons.person,
-                                    color: Colors.white70, size: 20)
-                                : null,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                _SideBtn(
-                  icon: StreamBuilder<DocumentSnapshot>(
-                    stream: _uid != null
-                        ? FirebaseFirestore.instance
-                            .collection('posts')
-                            .doc(post.id)
-                            .collection('likes')
-                            .doc(_uid!)
-                            .snapshots()
-                        : const Stream.empty(),
-                    builder: (_, snap) {
-                      final liked = snap.data?.exists ?? false;
-                      return Icon(
-                        liked ? Icons.favorite : Icons.favorite_border,
-                        color: liked ? const Color(0xFFED4956) : Colors.white,
-                        size: 32,
-                      );
-                    },
-                  ),
-                  label: post.likeCount > 0 ? _fmtN(post.likeCount) : '',
-                  onTap: _toggleLike,
-                ),
-                const SizedBox(height: 20),
-                _SideBtn(
-                  icon: const Icon(Icons.mode_comment_outlined,
-                      color: Colors.white, size: 30),
-                  label: post.commentCount > 0 ? _fmtN(post.commentCount) : '',
-                  onTap: () {},
-                ),
-                const SizedBox(height: 20),
-                _SideBtn(
-                  icon: Transform.rotate(
-                    angle: -0.35,
-                    child: const Icon(Icons.send_rounded,
-                        color: Colors.white, size: 28),
-                  ),
-                  label: '',
-                  onTap: () {},
-                ),
-                const SizedBox(height: 20),
-                _SideBtn(
-                  icon: const Icon(Icons.more_horiz_rounded,
-                      color: Colors.white, size: 30),
-                  label: '',
-                  onTap: () {},
-                ),
-              ],
+                        ),
+                        label: '',
+                        onTap: _shareReel,
+                      ),
+                      const SizedBox(height: 22),
+                      _ReelAudioDisc(imageUrl: posterUrl),
+                    ],
+                  );
+                },
+              ),
+              hideOffset: const Offset(0.12, 0),
             ),
           ),
 
-          // Thin progress bar at the very bottom
+          // Progress — hides with chrome
           if (widget.isActive && ready && c != null)
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
-              child: _ReelThinProgress(controller: c),
+              child: _chromeLayer(
+                _ReelThinProgress(controller: c),
+                hideOffset: const Offset(0, 1),
+              ),
             ),
         ],
       ),
@@ -1876,38 +2372,291 @@ class _ReelPageState extends State<_ReelPage> {
   }
 }
 
+// ─── Instagram-style comments sheet ───────────────────────────────────────────
+
+class _ExploreReelCommentsSheet extends StatefulWidget {
+  final String postId;
+  const _ExploreReelCommentsSheet({required this.postId});
+
+  @override
+  State<_ExploreReelCommentsSheet> createState() =>
+      _ExploreReelCommentsSheetState();
+}
+
+class _ExploreReelCommentsSheetState extends State<_ExploreReelCommentsSheet> {
+  final TextEditingController _ctrl = TextEditingController();
+  final String? _uid = FirebaseAuth.instance.currentUser?.uid;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _postComment() async {
+    final text = _ctrl.text.trim();
+    if (text.isEmpty || _uid == null) return;
+    _ctrl.clear();
+    FocusScope.of(context).unfocus();
+    try {
+      await FirebaseFirestore.instance
+          .collection('posts')
+          .doc(widget.postId)
+          .collection('comments')
+          .add({
+        'userId': _uid,
+        'text': text,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
+  }
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inDays > 0) return '${diff.inDays}d';
+    if (diff.inHours > 0) return '${diff.inHours}h';
+    if (diff.inMinutes > 0) return '${diff.inMinutes}m';
+    return 'now';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Container(
+        height: MediaQuery.sizeOf(context).height * 0.62,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                'Comments',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black,
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('posts')
+                    .doc(widget.postId)
+                    .collection('comments')
+                    .orderBy('createdAt', descending: true)
+                    .snapshots(),
+                builder: (_, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(
+                        color: _kPrimary,
+                        strokeWidth: 2,
+                      ),
+                    );
+                  }
+                  final docs = snap.data?.docs ?? [];
+                  if (docs.isEmpty) {
+                    return Center(
+                      child: Text(
+                        'No comments yet.\nStart the conversation.',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.poppins(
+                          color: Colors.grey.shade600,
+                          fontSize: 14,
+                        ),
+                      ),
+                    );
+                  }
+                  return ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    itemCount: docs.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (_, i) {
+                      final c = docs[i].data();
+                      final text = (c['text'] ?? '').toString();
+                      final userId = (c['userId'] ?? '').toString();
+                      final createdAt = c['createdAt'];
+                      DateTime? when;
+                      if (createdAt is Timestamp) {
+                        when = createdAt.toDate();
+                      }
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CircleAvatar(
+                            radius: 16,
+                            backgroundColor: Colors.grey.shade200,
+                            child: Icon(Icons.person, size: 18, color: Colors.grey.shade600),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  userId.isNotEmpty ? '@$userId' : 'User',
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  text,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13.5,
+                                    color: Colors.black87,
+                                    height: 1.35,
+                                  ),
+                                ),
+                                if (when != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _timeAgo(when),
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey.shade500,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            const Divider(height: 1),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _ctrl,
+                        style: const TextStyle(color: Colors.black, fontSize: 14),
+                        cursorColor: Colors.black,
+                        decoration: InputDecoration(
+                          hintText: 'Add a comment…',
+                          hintStyle: TextStyle(color: Colors.grey.shade500),
+                          filled: true,
+                          fillColor: Colors.grey.shade100,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _postComment(),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _postComment,
+                      icon: const Icon(Icons.send_rounded, color: _kPrimary),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ─── Shared side-button widget ───────────────────────────────────────────────
 
-class _SideBtn extends StatelessWidget {
+class _SideBtn extends StatefulWidget {
   final Widget icon;
   final String label;
   final VoidCallback onTap;
   const _SideBtn({required this.icon, required this.label, required this.onTap});
 
   @override
+  State<_SideBtn> createState() => _SideBtnState();
+}
+
+class _SideBtnState extends State<_SideBtn> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 120),
+    );
+    _scale = Tween<double>(begin: 1, end: 0.88).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTapDown: (_) => _ctrl.forward(),
+      onTapUp: (_) {
+        _ctrl.reverse();
+        widget.onTap();
+      },
+      onTapCancel: () => _ctrl.reverse(),
       behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: 52,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            icon,
-            if (label.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  shadows: _kReelTextShadow,
+      child: ScaleTransition(
+        scale: _scale,
+        child: SizedBox(
+          width: 52,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              widget.icon,
+              if (widget.label.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  widget.label,
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    shadows: _kReelTextShadow,
+                  ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -1961,7 +2710,9 @@ class _FollowBtnState extends State<_FollowBtn> {
             .where('followerId',  isEqualTo: _uid)
             .where('followingId', isEqualTo: widget.targetUserId)
             .limit(1).get();
-        for (final d in snap.docs) await d.reference.delete();
+        for (final d in snap.docs) {
+          await d.reference.delete();
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _following = !next);
@@ -1973,42 +2724,56 @@ class _FollowBtnState extends State<_FollowBtn> {
     if (_checking) return const SizedBox.shrink();
     return GestureDetector(
       onTap: _toggle,
-      child: _following
-          ? Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white70, width: 1.2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text(
-                'Following',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.symmetric(
+          horizontal: _following ? 12 : 14,
+          vertical: 5,
+        ),
+        decoration: BoxDecoration(
+          gradient: _following
+              ? null
+              : const LinearGradient(
+                  colors: [Colors.white, Color(0xFFF0EBFF)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-              ),
-            )
-          : Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text(
-                'Follow',
-                style: TextStyle(
-                  color: Colors.black,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
+          color: _following ? Colors.transparent : null,
+          borderRadius: BorderRadius.circular(10),
+          border: _following
+              ? Border.all(color: Colors.white70, width: 1.2)
+              : null,
+          boxShadow: _following
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.white.withValues(alpha: 0.25),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+        ),
+        child: Text(
+          _following ? 'Following' : 'Follow',
+          style: GoogleFonts.poppins(
+            color: _following ? Colors.white : Colors.black,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
     );
   }
 }
 
 // ─── Format number helper ─────────────────────────────────────────────────────
+
+int _postCount(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse(v?.toString() ?? '') ?? 0;
+}
 
 String _fmtN(int n) {
   if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
@@ -2056,22 +2821,35 @@ class _ErrorView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.wifi_off_rounded, size: 48, color: Colors.grey.shade400),
-          const SizedBox(height: 12),
-          Text('Could not load posts', style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: onRetry,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kPrimary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.wifi_off_rounded, size: 48, color: _kPrimary.withValues(alpha: 0.5)),
+            const SizedBox(height: 16),
+            Text(
+              'Could not load posts',
+              style: GoogleFonts.poppins(
+                color: const Color(0xFF1A1A2E),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-            child: const Text('Retry', style: TextStyle(color: Colors.white)),
-          ),
-        ],
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: Text('Retry', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+              style: FilledButton.styleFrom(
+                backgroundColor: _kPrimary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2083,16 +2861,39 @@ class _EmptyView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.explore_off_rounded, size: 52, color: Colors.grey.shade300),
-          const SizedBox(height: 12),
-          Text(
-            hasQuery ? 'No results found' : 'Nothing to explore yet',
-            style: GoogleFonts.poppins(color: Colors.grey.shade500, fontSize: 14),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: _kSurface,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.explore_off_rounded, size: 40, color: _kPrimary.withValues(alpha: 0.5)),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              hasQuery ? 'No results found' : 'Nothing to explore yet',
+              style: GoogleFonts.poppins(
+                color: const Color(0xFF1A1A2E),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hasQuery
+                  ? 'Try a different search or filter'
+                  : 'New posts will appear here soon',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(color: const Color(0xFF888899), fontSize: 13),
+            ),
+          ],
+        ),
       ),
     );
   }
