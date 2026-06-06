@@ -25,6 +25,7 @@ import 'package:halo/Profile%20Pages/wellness_profile_page.dart' as wellness;
 import 'package:halo/chat/chat_list_page.dart';
 import 'package:halo/interest_selection_page.dart';
 import 'package:halo/models/story_model.dart';
+import 'package:halo/models/post_place.dart';
 import 'package:halo/services/feed_service.dart';
 import 'package:halo/services/save_service.dart';
 import 'package:halo/services/story_service.dart';
@@ -858,7 +859,7 @@ class _PostCardState extends State<_PostCard> {
     final d        = widget.data;
     final userId   = (d['userId'] ?? '').toString();
     final caption  = (d['caption'] ?? '').toString().trim();
-    final location = (d['location'] ?? '').toString().trim();
+    final location = PostPlace.labelFromPostData(d);
     final tags     = (d['tags'] as List?)?.map((e) => e.toString()).toList() ?? [];
     final createdAt = (d['createdAt'] as Timestamp?)?.toDate().toLocal();
 

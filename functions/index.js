@@ -2231,3 +2231,299 @@ exports.migrateLegacyVideos = onCall(
     return result;
   },
 );
+
+// ─── Place search (Google Places API New, Nominatim fallback) ───────────────
+
+const PLACES_USER_AGENT = 'HaloApp/1.0 (cloud function)';
+
+function placesApiKey() {
+  return process.env.GOOGLE_PLACES_API_KEY || '';
+}
+
+function toPlaceDto({ id, name, address, latitude, longitude }) {
+  return {
+    id: id || '',
+    name: name || '',
+    address: address || '',
+    latitude: latitude ?? 0,
+    longitude: longitude ?? 0,
+    placeId: id || '',
+    locationName: name || '',
+    locationAddress: address || '',
+  };
+}
+
+function googlePlaceToDto(place) {
+  if (!place) return null;
+  const lat = place.location?.latitude;
+  const lng = place.location?.longitude;
+  const name = (place.displayName?.text || '').trim();
+  if (!name || lat == null || lng == null) return null;
+  return toPlaceDto({
+    id: (place.id || '').trim(),
+    name,
+    address: (place.formattedAddress || '').trim(),
+    latitude: lat,
+    longitude: lng,
+  });
+}
+
+async function googleTextSearch(query, latitude, longitude) {
+  const key = placesApiKey();
+  if (!key) return null;
+
+  const body = {
+    textQuery: query,
+    maxResultCount: 15,
+  };
+  if (latitude != null && longitude != null) {
+    body.locationBias = {
+      circle: {
+        center: { latitude, longitude },
+        radius: 50000,
+      },
+    };
+  }
+
+  const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask':
+        'places.id,places.displayName,places.formattedAddress,places.location',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    console.warn('[searchPlaces] Google HTTP', res.status);
+    return null;
+  }
+
+  const data = await res.json();
+  const places = Array.isArray(data.places) ? data.places : [];
+  return places.map(googlePlaceToDto).filter(Boolean);
+}
+
+async function googleNearbySearch(latitude, longitude) {
+  const key = placesApiKey();
+  if (!key) return null;
+
+  const body = {
+    includedTypes: [
+      'restaurant',
+      'cafe',
+      'bar',
+      'park',
+      'shopping_mall',
+      'hotel',
+      'gym',
+      'store',
+    ],
+    maxResultCount: 15,
+    locationRestriction: {
+      circle: {
+        center: { latitude, longitude },
+        radius: 3000,
+      },
+    },
+  };
+
+  const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask':
+        'places.id,places.displayName,places.formattedAddress,places.location',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    console.warn('[nearbyPlaces] Google HTTP', res.status);
+    return null;
+  }
+
+  const data = await res.json();
+  const places = Array.isArray(data.places) ? data.places : [];
+  return places.map(googlePlaceToDto).filter(Boolean);
+}
+
+async function nominatimSearch(query, latitude, longitude) {
+  const params = new URLSearchParams({
+    q: query,
+    format: 'jsonv2',
+    addressdetails: '1',
+    limit: '15',
+    dedupe: '1',
+  });
+  if (latitude != null && longitude != null) {
+    const delta = 0.12;
+    params.set(
+      'viewbox',
+      `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`,
+    );
+  }
+
+  const res = await fetch(
+    `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+    { headers: { 'User-Agent': PLACES_USER_AGENT } },
+  );
+  if (!res.ok) return [];
+
+  const raw = await res.json();
+  if (!Array.isArray(raw)) return [];
+
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    const lat = parseFloat(item.lat);
+    const lon = parseFloat(item.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+    const osmType = (item.osm_type || '').toString();
+    const osmId = (item.osm_id || '').toString();
+    const id = osmId ? `osm:${osmType}:${osmId}` : `nominatim:${lat},${lon}`;
+
+    let name = (item.name || '').toString().trim();
+    const display = (item.display_name || '').toString().trim();
+    if (!name && display) name = display.split(',')[0].trim();
+    if (!name) continue;
+
+    let address = '';
+    if (item.address && typeof item.address === 'object') {
+      const parts = [];
+      for (const k of [
+        'house_number',
+        'road',
+        'suburb',
+        'neighbourhood',
+        'city',
+        'town',
+        'village',
+        'state',
+        'country',
+      ]) {
+        const v = (item.address[k] || '').toString().trim();
+        if (v && !parts.includes(v)) parts.push(v);
+      }
+      address = parts.join(', ');
+    }
+    if (!address && display.includes(',')) {
+      address = display.split(',').slice(1).join(',').trim();
+    }
+
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(toPlaceDto({ id, name, address, latitude: lat, longitude: lon }));
+  }
+  return out;
+}
+
+async function nominatimNearby(latitude, longitude) {
+  const terms = [
+    'cafe',
+    'restaurant',
+    'coffee',
+    'park',
+    'mall',
+    'hotel',
+    'gym',
+    'store',
+  ];
+  const delta = 0.018;
+  const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
+
+  const seen = new Set();
+  const out = [];
+
+  for (const term of terms) {
+    const params = new URLSearchParams({
+      q: term,
+      format: 'jsonv2',
+      addressdetails: '1',
+      limit: '6',
+      viewbox,
+      bounded: '1',
+      dedupe: '1',
+    });
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+        { headers: { 'User-Agent': PLACES_USER_AGENT } },
+      );
+      if (!res.ok) continue;
+      const raw = await res.json();
+      if (!Array.isArray(raw)) continue;
+      for (const item of raw) {
+        const lat = parseFloat(item.lat);
+        const lon = parseFloat(item.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        const osmType = (item.osm_type || '').toString();
+        const osmId = (item.osm_id || '').toString();
+        const id = osmId ? `osm:${osmType}:${osmId}` : `nominatim:${lat},${lon}`;
+        if (seen.has(id)) continue;
+
+        let name = (item.name || '').toString().trim();
+        const display = (item.display_name || '').toString().trim();
+        if (!name && display) name = display.split(',')[0].trim();
+        if (!name) continue;
+
+        let address = '';
+        if (item.address && typeof item.address === 'object') {
+          const parts = [];
+          for (const k of ['road', 'suburb', 'city', 'town', 'state', 'country']) {
+            const v = (item.address[k] || '').toString().trim();
+            if (v && !parts.includes(v)) parts.push(v);
+          }
+          address = parts.join(', ');
+        }
+
+        seen.add(id);
+        out.push(toPlaceDto({ id, name, address, latitude: lat, longitude: lon }));
+        if (out.length >= 20) break;
+      }
+    } catch (e) {
+      console.warn('[nearbyPlaces] Nominatim term failed', term, e.message);
+    }
+    if (out.length >= 20) break;
+  }
+
+  return out.slice(0, 15);
+}
+
+exports.searchPlaces = onCall(async (request) => {
+  const query = (request.data?.query || '').toString().trim();
+  if (query.length < 2) {
+    throw new HttpsError('invalid-argument', 'Query must be at least 2 characters.');
+  }
+
+  const latitude = request.data?.latitude;
+  const longitude = request.data?.longitude;
+  const lat = latitude != null ? Number(latitude) : null;
+  const lng = longitude != null ? Number(longitude) : null;
+
+  let places = await googleTextSearch(query, lat, lng);
+  if (!places) {
+    places = await nominatimSearch(query, lat, lng);
+  }
+
+  return { places: places || [] };
+});
+
+exports.nearbyPlaces = onCall(async (request) => {
+  const latitude = Number(request.data?.latitude);
+  const longitude = Number(request.data?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new HttpsError('invalid-argument', 'latitude and longitude are required.');
+  }
+
+  let places = await googleNearbySearch(latitude, longitude);
+  if (!places) {
+    places = await nominatimNearby(latitude, longitude);
+  }
+
+  return { places: places || [] };
+});

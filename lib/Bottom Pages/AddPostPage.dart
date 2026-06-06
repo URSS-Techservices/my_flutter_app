@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -10,10 +9,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:video_player/video_player.dart';
-import 'package:location/location.dart' as loc;
-import 'package:geocoding/geocoding.dart';
+import 'package:halo/models/post_place.dart';
+import 'package:halo/Bottom Pages/location_picker_sheet.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
-import 'package:http/http.dart' as http;
 import 'package:halo/services/upload_service.dart';
 import 'package:halo/services/video_upload_policy.dart';
 import 'video_quick_edit_page.dart';
@@ -68,10 +66,8 @@ class _AddPostPageState extends State<AddPostPage>
   static const int _maxMediaItems = 4;
 
   // Controllers
-  final _captionCtrl       = TextEditingController();
-  final _locationCtrl      = TextEditingController();
-  final _captionFocusNode  = FocusNode();
-  final _locationFocusNode = FocusNode();
+  final _captionCtrl      = TextEditingController();
+  final _captionFocusNode = FocusNode();
   final _picker            = ImagePicker();
   final UploadService _uploadService = UploadService();
 
@@ -98,15 +94,10 @@ class _AddPostPageState extends State<AddPostPage>
   bool _showMentions  = false;
   int  _mentionReqId  = 0;
 
-  // Location suggestions
-  List<String> _locationSuggestions     = [];
-  bool         _showLocationSuggestions = false;
-  Timer?       _locationDebounce;
-  int          _locationReqId           = 0;
+  PostPlace? _selectedPlace;
 
   // Tab animation
   late final AnimationController _tabAnim;
-  bool _isFetchingLiveLocation = false;
 
   @override
   void initState() {
@@ -118,11 +109,8 @@ class _AddPostPageState extends State<AddPostPage>
 
   @override
   void dispose() {
-    _locationDebounce?.cancel();
     _captionCtrl.dispose();
-    _locationCtrl.dispose();
     _captionFocusNode.dispose();
-    _locationFocusNode.dispose();
     _tabAnim.dispose();
     for (final m in _media) {
       m.videoController?.dispose();
@@ -317,65 +305,100 @@ class _AddPostPageState extends State<AddPostPage>
     }
   }
 
-  // ── Live location ─────────────────────────────────────────────────────────
-  Future<void> _pickLiveLocationCity() async {
-    if (_isFetchingLiveLocation) return;
-    setState(() => _isFetchingLiveLocation = true);
-    try {
-      final location = loc.Location();
-      bool serviceEnabled = await location.serviceEnabled();
-      if (!serviceEnabled) serviceEnabled = await location.requestService();
-      if (!serviceEnabled) {
-        _showSnack('Please enable location service.');
-        return;
-      }
-
-      var permission = await location.hasPermission();
-      if (permission == loc.PermissionStatus.denied) {
-        permission = await location.requestPermission();
-      }
-      if (permission != loc.PermissionStatus.granted &&
-          permission != loc.PermissionStatus.grantedLimited) {
-        _showSnack('Location permission is required.');
-        return;
-      }
-
-      final data = await location.getLocation();
-      final lat  = data.latitude;
-      final lng  = data.longitude;
-      if (lat == null || lng == null) {
-        _showSnack('Unable to fetch your location.');
-        return;
-      }
-
-      final places = await placemarkFromCoordinates(lat, lng);
-      if (places.isEmpty) {
-        _showSnack('City not found from current location.');
-        return;
-      }
-
-      final place = places.first;
-      final city  = (place.locality ??
-          place.subAdministrativeArea ??
-          place.administrativeArea ??
-          '')
-          .trim();
-      if (city.isEmpty) {
-        _showSnack('City not found from current location.');
-        return;
-      }
-
-      _locationCtrl.text = city;
-      setState(() {
-        _showLocationSuggestions = false;
-        _locationSuggestions     = [];
-      });
-      _showSnack('Location updated to $city');
-    } catch (e) {
-      _showSnack('Could not fetch location: $e');
-    } finally {
-      if (mounted) setState(() => _isFetchingLiveLocation = false);
+  Future<void> _openLocationPicker() async {
+    final outcome = await LocationPickerSheet.show(
+      context,
+      initial: _selectedPlace,
+    );
+    if (!mounted) return;
+    switch (outcome) {
+      case LocationPickerCleared():
+        setState(() => _selectedPlace = null);
+      case LocationPickerSelected(:final place) when place.isValid:
+        setState(() => _selectedPlace = place);
+      case LocationPickerDismissed():
+      case LocationPickerSelected():
+        break;
     }
+  }
+
+  Widget _buildLocationSection(TextTheme tt) {
+    final place = _selectedPlace;
+    final hasPlace = place != null && place.isValid;
+
+    return Material(
+      color: _kSurface,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: _openLocationPicker,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: kPrimaryColor.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                hasPlace ? Icons.location_on_rounded : Icons.location_on_outlined,
+                color: kSecondaryColor,
+                size: 22,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      hasPlace ? place.name : 'Add a location…',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight:
+                            hasPlace ? FontWeight.w600 : FontWeight.w500,
+                        color: hasPlace ? _kTextPrimary : _kTextSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (hasPlace && place.address.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        place.address,
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: _kTextSecondary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ] else if (!hasPlace) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Search cafés, venues, and places',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: _kTextSecondary.withValues(alpha: 0.85),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (hasPlace)
+                IconButton(
+                  icon: Icon(Icons.close_rounded,
+                      size: 20, color: Colors.grey.shade600),
+                  onPressed: () => setState(() => _selectedPlace = null),
+                  tooltip: 'Remove location',
+                )
+              else
+                Icon(Icons.chevron_right_rounded, color: Colors.grey.shade400),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── Remove media ──────────────────────────────────────────────────────────
@@ -528,7 +551,7 @@ class _AddPostPageState extends State<AddPostPage>
         builder: (_) => _PostPreviewPage(
           media:    _media,
           caption:  caption,
-          location: _locationCtrl.text.trim(),
+          location: _selectedPlace?.displayLabel ?? '',
           onPost:   _submitPost,
         ),
       ),
@@ -621,6 +644,10 @@ class _AddPostPageState extends State<AddPostPage>
 
       final hasVideo = mediaList.any((m) => (m['type'] ?? '') == 'video');
 
+      final placeFields = _selectedPlace?.isValid == true
+          ? _selectedPlace!.toFirestore()
+          : const <String, dynamic>{'location': ''};
+
       await FirebaseFirestore.instance
           .collection('posts')
           .doc(postId)
@@ -632,7 +659,7 @@ class _AddPostPageState extends State<AddPostPage>
             .map<String>((m) => m['url'] as String)
             .toList(),
         'caption'  : caption,
-        'location' : _locationCtrl.text.trim(),
+        ...placeFields,
         'mentions' : _extractMentions(caption),
         'thumbnailUrl': firstThumbUrl,
         if (legacyFirstImageUrl.isNotEmpty) 'imageUrl': legacyFirstImageUrl,
@@ -676,12 +703,10 @@ class _AddPostPageState extends State<AddPostPage>
       _media.clear();
       _tempFilePaths.clear();
       _captionCtrl.clear();
-      _locationCtrl.clear();
+      _selectedPlace = null;
       _mentionSuggestions.clear();
-      _showMentions            = false;
-      _locationSuggestions     = [];
-      _showLocationSuggestions = false;
-      _uploadProgress          = 0;
+      _showMentions   = false;
+      _uploadProgress = 0;
     });
   }
 
@@ -925,13 +950,8 @@ class _AddPostPageState extends State<AddPostPage>
           tt: tt,
           icon: Icons.location_on_outlined,
           title: 'Location',
-          subtitle: 'Optional',
-          child: Column(
-            children: [
-              _buildLocationField(tt),
-              if (_showLocationSuggestions) _buildLocationSuggestionList(tt),
-            ],
-          ),
+          subtitle: 'Optional · tap to search places',
+          child: _buildLocationSection(tt),
         ),
         const SizedBox(height: 16),
         _sectionCard(
@@ -1216,154 +1236,6 @@ class _AddPostPageState extends State<AddPostPage>
             builder: (_) =>
                 _MediaViewerPage(media: _media, initialIndex: index)));
   }
-
-  // ── Location field ────────────────────────────────────────────────────────
-  Widget _buildLocationField(TextTheme tt) => _styledField(
-    controller: _locationCtrl,
-    hint: 'Add a location…',
-    icon: Icons.location_on_rounded,
-    maxLines: 1,
-    tt: tt,
-    focusNode: _locationFocusNode,
-    onTap: () => _locationFocusNode.requestFocus(),
-    onChanged: _onLocationChanged,
-    readOnly: false,
-    suffixIcon: _isFetchingLiveLocation
-        ? const Padding(
-      padding: EdgeInsets.all(12),
-      child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(strokeWidth: 2)),
-    )
-        : IconButton(
-      tooltip: 'Use current location',
-      icon: const Icon(Icons.my_location_rounded,
-          color: kSecondaryColor),
-      onPressed: _pickLiveLocationCity,
-    ),
-  );
-
-  void _onLocationChanged(String value) {
-    _locationDebounce?.cancel();
-    final query = value.trim();
-    if (query.isEmpty) {
-      if (_showLocationSuggestions || _locationSuggestions.isNotEmpty) {
-        setState(() {
-          _showLocationSuggestions = false;
-          _locationSuggestions     = [];
-        });
-      }
-      return;
-    }
-
-    // Minimum 3 chars to respect Nominatim ToS + increased debounce to 700ms
-    if (query.length < 3) return;
-
-    final requestId = ++_locationReqId;
-    _locationDebounce =
-        Timer(const Duration(milliseconds: 700), () async {
-          if (!mounted) return;
-          final suggestions = await _fetchLocationSuggestions(query);
-          if (!mounted) return;
-          if (requestId != _locationReqId) return;
-          if (_locationCtrl.text.trim() != query) return;
-          setState(() {
-            _locationSuggestions     = suggestions;
-            _showLocationSuggestions = suggestions.isNotEmpty;
-          });
-        });
-  }
-
-  Future<List<String>> _fetchLocationSuggestions(String query) async {
-    try {
-      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
-        'q'             : query,
-        'format'        : 'jsonv2',
-        'addressdetails': '1',
-        'limit'         : '8',
-      });
-      final response = await http.get(uri,
-          headers: const {
-            'User-Agent': 'HaloApp/1.0 (location autocomplete)',
-          });
-      if (response.statusCode != 200) return [];
-
-      final raw = jsonDecode(response.body);
-      if (raw is! List) return [];
-      final set = <String>{};
-      for (final item in raw) {
-        if (item is! Map<String, dynamic>) continue;
-        final address = item['address'];
-        if (address is! Map<String, dynamic>) continue;
-        final city    = (address['city'] ??
-            address['town'] ??
-            address['village'] ??
-            address['county'] ??
-            '')
-            .toString()
-            .trim();
-        final state   = (address['state'] ?? '').toString().trim();
-        final country = (address['country'] ?? '').toString().trim();
-
-        final label = city.isNotEmpty
-            ? [
-          city,
-          if (state.isNotEmpty) state,
-          if (country.isNotEmpty) country
-        ].join(', ')
-            : (item['display_name'] ?? '').toString().trim();
-        if (label.isNotEmpty) set.add(label);
-      }
-      return set.take(8).toList();
-    } catch (_) {
-      return [];
-    }
-  }
-
-  void _selectLocationSuggestion(String city) {
-    _locationCtrl.value = TextEditingValue(
-        text: city,
-        selection: TextSelection.collapsed(offset: city.length));
-    setState(() {
-      _showLocationSuggestions = false;
-      _locationSuggestions     = [];
-    });
-    _locationFocusNode.requestFocus();
-  }
-
-  Widget _buildLocationSuggestionList(TextTheme tt) => Container(
-    margin: const EdgeInsets.only(top: 10),
-    decoration: BoxDecoration(
-      color: _kSurface,
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: kPrimaryColor.withValues(alpha: 0.2), width: 1),
-    ),
-    child: ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: _locationSuggestions.length,
-      separatorBuilder: (_, __) =>
-          Divider(height: 1, color: Colors.grey.shade100),
-      itemBuilder: (_, i) {
-        final city = _locationSuggestions[i];
-        return ListTile(
-          dense: true,
-          leading: Icon(Icons.place_outlined,
-              color: kSecondaryColor.withValues(alpha: 0.85), size: 20),
-          title: Text(
-            city,
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.w500,
-              fontSize: 13,
-              color: _kTextPrimary,
-            ),
-          ),
-          onTap: () => _selectLocationSuggestion(city),
-        );
-      },
-    ),
-  );
 
   // ── Caption field ─────────────────────────────────────────────────────────
   Widget _buildCaptionField(TextTheme tt) => _styledField(
