@@ -29,6 +29,7 @@ import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/Bottom Pages/saved_posts_page.dart';
 import 'package:halo/utils/search_utils.dart';
+import 'package:halo/utils/shell_back.dart';
 import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
@@ -55,20 +56,29 @@ import 'edit_profile_sections.dart'; // Edit pages for profile sections
 /// Wrapper class
 class ProfilePage extends StatelessWidget {
   final String profileUserId; // Jis aspirant ki profile dekhni hai
+  final VoidCallback? onBackToHome;
 
-  const ProfilePage({Key? key, required this.profileUserId}) : super(key: key);
+  const ProfilePage({Key? key, required this.profileUserId, this.onBackToHome})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return ProfilePageImproved(profileUserId: profileUserId);
+    return ProfilePageImproved(
+      profileUserId: profileUserId,
+      onBackToHome: onBackToHome,
+    );
   }
 }
 
 class ProfilePageImproved extends StatefulWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const ProfilePageImproved({Key? key, required this.profileUserId})
-      : super(key: key);
+  const ProfilePageImproved({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   _ProfilePageImprovedState createState() => _ProfilePageImprovedState();
@@ -2540,7 +2550,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   Icons.arrow_back,
                   color: isDarkBg ? Colors.white : Colors.black,
                 ),
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => popOrGoHome(
+                  context,
+                  onBackToHome: widget.onBackToHome,
+                ),
               ),
               actions: [
                 if (_isOwnProfile) ...[

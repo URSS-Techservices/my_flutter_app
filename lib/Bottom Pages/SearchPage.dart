@@ -29,6 +29,7 @@ import 'package:halo/screens/profile/profile_router_screen.dart';
 import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsPage;
 import 'package:halo/services/search_service.dart';
 import 'package:halo/utils/search_ranking.dart';
+import 'package:halo/utils/shell_back.dart';
 
 // ------- THEME CONSTANTS -------
 const Color kPrimaryColor = Color(0xFFA58CE3);
@@ -363,7 +364,9 @@ class _ScoredPost {
 // ======================================================================
 
 class SearchPage extends StatefulWidget {
-  const SearchPage({Key? key}) : super(key: key);
+  final VoidCallback? onBackToHome;
+
+  const SearchPage({Key? key, this.onBackToHome}) : super(key: key);
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -960,7 +963,10 @@ class _SearchPageState extends State<SearchPage>
                                 color: kSecondaryColor),
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
-                            onPressed: () => Navigator.pop(context),
+                            onPressed: () => popOrGoHome(
+                              context,
+                              onBackToHome: widget.onBackToHome,
+                            ),
                           ),
                           const SizedBox(width: 8),
                           Text(

@@ -304,12 +304,11 @@ String? pickProcessedMp4(
 ) {
   final qualities = item['qualities'] ?? postData['qualities'];
   if (qualities is Map) {
-    final q720 = _str(qualities['720']);
-    if (q720.isNotEmpty && !q720.contains('.m3u8')) return q720;
-    final q480 = _str(qualities['480']);
-    if (q480.isNotEmpty && !q480.contains('.m3u8')) return q480;
-    final q1080 = _str(qualities['1080']);
-    if (q1080.isNotEmpty && !q1080.contains('.m3u8')) return q1080;
+    // Prefer 720 → 480 → 1080 for faster startup (smaller files buffer sooner).
+    for (final key in ['720', '480', '1080']) {
+      final q = _str(qualities[key]);
+      if (q.isNotEmpty && !q.contains('.m3u8')) return q;
+    }
   }
   final docMp4 = _str(postData['videoUrl']);
   final itemMp4 = _str(item['videoUrl']).isNotEmpty
@@ -549,6 +548,45 @@ ResolvedVideoPlayback _resolveChain({
     sourceHeight: meta.height,
     sourceFps: meta.fps,
   );
+}
+
+Map<String, dynamic>? firstVideoMediaItem(Map<String, dynamic> postData) {
+  final media = postData['media'];
+  if (media is! List) return null;
+  for (final item in media) {
+    if (item is! Map) continue;
+    if ((item['type'] ?? '').toString() != 'video') continue;
+    return Map<String, dynamic>.from(item);
+  }
+  return null;
+}
+
+/// Feed / Explore / inline playback — processed MP4 first on iOS and Android.
+/// HLS is kept as [fallback] when MP4 is selected as primary.
+({String primary, String fallback}) resolveFeedVideoUrls({
+  required Map<String, dynamic> postData,
+  Map<String, dynamic>? mediaItem,
+}) {
+  final item = mediaItem ?? firstVideoMediaItem(postData) ?? const <String, dynamic>{};
+  final resolved = resolveVideoPlayback(postData: postData, mediaItem: item);
+  var primary = resolved.primaryUrl.trim();
+  var fallback = resolved.fallbackUrl.trim();
+
+  final mp4 = pickProcessedMp4(item, postData)?.trim() ?? '';
+  if (mp4.isNotEmpty &&
+      (primary.contains('.m3u8') || resolved.status == ReelStatus.readyHls)) {
+    fallback = primary.isNotEmpty ? primary : fallback;
+    primary = mp4;
+  } else if (fallback.isNotEmpty && primary.contains('.m3u8')) {
+    primary = fallback;
+    fallback = resolved.primaryUrl.trim();
+  }
+
+  if (primary.isEmpty && fallback.isNotEmpty) {
+    primary = fallback;
+    fallback = '';
+  }
+  return (primary: primary, fallback: fallback);
 }
 
 ResolvedVideoPlayback resolveVideoPlayback({

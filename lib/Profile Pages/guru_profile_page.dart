@@ -19,6 +19,7 @@ import '../../main.dart'; // LoginPage
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/utils/search_utils.dart';
+import 'package:halo/utils/shell_back.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
@@ -59,21 +60,32 @@ import '../Sections/Guru Section/guru_analytics_section.dart';
 
 class GuruProfilePage extends StatelessWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const GuruProfilePage({Key? key, required this.profileUserId})
-      : super(key: key);
+  const GuruProfilePage({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return _GuruProfilePageStateful(profileUserId: profileUserId);
+    return _GuruProfilePageStateful(
+      profileUserId: profileUserId,
+      onBackToHome: onBackToHome,
+    );
   }
 }
 
 class _GuruProfilePageStateful extends StatefulWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const _GuruProfilePageStateful({Key? key, required this.profileUserId})
-      : super(key: key);
+  const _GuruProfilePageStateful({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   State<_GuruProfilePageStateful> createState() =>
@@ -1248,7 +1260,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     : null,
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => popOrGoHome(
+                    context,
+                    onBackToHome: widget.onBackToHome,
+                  ),
                 ),
                 actions: [
                   if (_isOwnProfile) ...[

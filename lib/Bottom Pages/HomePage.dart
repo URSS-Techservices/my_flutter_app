@@ -29,7 +29,6 @@ import 'package:halo/services/feed_service.dart';
 import 'package:halo/services/save_service.dart';
 import 'package:halo/services/story_service.dart';
 import 'package:halo/services/app_video_focus.dart';
-import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/reel_preload_policy.dart';
 import 'package:halo/services/video_decoder_budget.dart';
 import 'package:halo/services/video_dispose_serial.dart';
@@ -68,6 +67,50 @@ String _timeAgo(DateTime dt) {
   if (diff.inDays    < 30)   return '${(diff.inDays / 7).floor()}w ago';
   if (diff.inDays    < 365)  return '${(diff.inDays / 30).floor()}mo ago';
   return '${(diff.inDays / 365).floor()}y ago';
+}
+
+/// Post tags (AddPostPage) vs interest keys (InterestSelectionPage) use different
+/// labels — normalize both sides before comparing.
+String _normalizeInterestToken(String value) =>
+    value.trim().toLowerCase().replaceAll(' ', '_').replaceAll('-', '_');
+
+/// Maps common post-tag labels to interest-selection keys.
+const Map<String, String> _postTagToInterestKey = {
+  'wellness': 'mental_health',
+  'spirituality': 'mental_health',
+  'mindset': 'mental_health',
+  'study': 'reading',
+  'lifestyle': 'travel',
+  'career': 'productivity',
+  'finance': 'productivity',
+  'relationships': 'mental_health',
+};
+
+bool _postMatchesInterests(
+  Map<String, dynamic> data,
+  List<String> interests,
+  String currentUserId,
+) {
+  final postUserId = (data['userId'] ?? '').toString();
+  if (currentUserId.isNotEmpty && postUserId == currentUserId) return true;
+  if (interests.isEmpty) return true;
+  if ((data['accountType'] ?? '').toString().toLowerCase() == 'guru') return true;
+
+  final tags = (data['tags'] as List?)
+          ?.map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toList() ??
+      [];
+  if (tags.isEmpty) return true;
+
+  final normalizedInterests = interests.map(_normalizeInterestToken).toSet();
+  for (final tag in tags) {
+    final token = _normalizeInterestToken(tag);
+    if (normalizedInterests.contains(token)) return true;
+    final mapped = _postTagToInterestKey[token];
+    if (mapped != null && normalizedInterests.contains(mapped)) return true;
+  }
+  return false;
 }
 
 // User-doc cache — avoids a Firestore read per post card on every scroll
@@ -113,9 +156,11 @@ class _HomePageState extends State<HomePage> {
   List<String> _interests = const [];
   Map<String, dynamic> _savedMap = const {};
   StreamSubscription<Map<String, dynamic>>? _savedSub;
+  StreamSubscription<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _feedSub;
 
   // Feed pagination
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _feed = const [];
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _feedExtra = const [];
   bool _feedLoading = false;
   bool _feedError   = false;
   bool _feedHasMore = true;
@@ -127,23 +172,29 @@ class _HomePageState extends State<HomePage> {
   late final Widget _notifPage;
   late final Widget _profilePage;
 
+  void _goHomeTab() {
+    if (!mounted || _navIndex == 0) return;
+    setState(() => _navIndex = 0);
+  }
+
   @override
   void initState() {
     super.initState();
-    _searchPage  = const SearchPage();
+    _searchPage  = SearchPage(onBackToHome: _goHomeTab);
     _explorePage = const ExplorePage();
-    _notifPage   = NotificationPage();
-    _profilePage = const _ProfileTab();
+    _notifPage   = NotificationPage(onBackToHome: _goHomeTab);
+    _profilePage = _ProfileTab(onBackToHome: _goHomeTab);
     _scrollCtrl.addListener(_onScroll);
     _loadInterests();
     _initSaved();
-    _loadFeed();
+    _startFeedStream();
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptLocation());
   }
 
   @override
   void dispose() {
     _savedSub?.cancel();
+    _feedSub?.cancel();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -157,7 +208,45 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _startFeedStream() {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    _feedSub?.cancel();
+    if (_feed.isEmpty) {
+      setState(() {
+        _feedLoading = true;
+        _feedError = false;
+      });
+    }
+    _feedSub = _feedSvc.getRankedFeedStream(currentUserId: uid).listen(
+      (docs) {
+        if (!mounted) return;
+        setState(() {
+          _feed = docs;
+          _feedCursor = docs.isNotEmpty ? docs.last : null;
+          _feedExtra = const [];
+          _feedHasMore = docs.length >= 50;
+          _feedLoading = false;
+          _feedError = false;
+        });
+      },
+      onError: (_) {
+        if (mounted) setState(() { _feedLoading = false; _feedError = true; });
+      },
+    );
+  }
+
+  Future<void> _refreshFeed() async {
+    _feedCursor = null;
+    _feedExtra = const [];
+    _feedHasMore = true;
+    _startFeedStream();
+  }
+
   Future<void> _loadFeed({bool refresh = false}) async {
+    if (refresh) {
+      await _refreshFeed();
+      return;
+    }
     if (_feedLoading) return;
     setState(() { _feedLoading = true; _feedError = false; });
     try {
@@ -166,11 +255,13 @@ class _HomePageState extends State<HomePage> {
         currentUserId: uid,
         userPreference: '',
         limit: 20,
-        startAfterDoc: refresh ? null : _feedCursor,
+        startAfterDoc: _feedCursor,
       );
       if (!mounted) return;
+      final seen = {..._feed.map((d) => d.id), ..._feedExtra.map((d) => d.id)};
+      final extra = result.docs.where((d) => !seen.contains(d.id)).toList();
       setState(() {
-        _feed      = refresh ? result.docs : [..._feed, ...result.docs];
+        _feedExtra = [..._feedExtra, ...extra];
         _feedCursor = result.lastDoc;
         _feedHasMore = result.hasMore;
         _feedLoading = false;
@@ -179,6 +270,9 @@ class _HomePageState extends State<HomePage> {
       if (mounted) setState(() { _feedLoading = false; _feedError = true; });
     }
   }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _allFeedDocs =>
+      [..._feed, ..._feedExtra];
 
   void _initSaved() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -248,24 +342,25 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // Apply interest filter
-    var visible = _feed;
+    // Soft interest filter — always show the current user's own posts.
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    var visible = _allFeedDocs;
     if (_interests.isNotEmpty) {
-      visible = _feed.where((d) {
-        final data = d.data();
-        if ((data['accountType'] ?? '').toString().toLowerCase() == 'guru') return true;
-        final tags = (data['tags'] as List?)?.map((e) => e.toString()).toList() ?? [];
-        if (tags.isEmpty) return true;
-        return tags.any(_interests.contains);
-      }).toList();
+      visible = _allFeedDocs
+          .where((d) => _postMatchesInterests(d.data(), _interests, uid))
+          .toList();
     }
 
     if (visible.isEmpty && !_feedLoading) {
       return Padding(
         padding: const EdgeInsets.all(32),
-        child: Text('No posts yet. Follow people to see their posts.',
+        child: Text(
+          _interests.isNotEmpty
+              ? 'No posts match your interests yet. Pull down to refresh.'
+              : 'No posts yet. Follow people to see their posts.',
           textAlign: TextAlign.center,
-          style: const TextStyle(color: Color(0xFF8E8E8E), fontSize: 14)),
+          style: const TextStyle(color: Color(0xFF8E8E8E), fontSize: 14),
+        ),
       );
     }
 
@@ -348,7 +443,12 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: _navIndex == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _navIndex != 0) _goHomeTab();
+      },
+      child: Scaffold(
       key: _scaffoldKey,
       backgroundColor: Colors.white,
       drawer: _Drawer(onSelect: _onDrawer),
@@ -388,10 +488,7 @@ class _HomePageState extends State<HomePage> {
             child: RefreshIndicator(
               key: _refreshKey,
               color: kPrimaryColor,
-              onRefresh: () async {
-                _feedCursor = null;
-                await _loadFeed(refresh: true);
-              },
+              onRefresh: _refreshFeed,
               child: SingleChildScrollView(
                 controller: _scrollCtrl,
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -425,10 +522,11 @@ class _HomePageState extends State<HomePage> {
         unselectedItemColor: Colors.grey.shade500,
         showUnselectedLabels: true,
         currentIndex: _navIndex,
-        onTap: (i) {
+        onTap: (i) async {
           if (i == 3) {
-            Navigator.push(context, MaterialPageRoute(
+            await Navigator.push(context, MaterialPageRoute(
               fullscreenDialog: true, builder: (_) => AddPostPage()));
+            if (mounted) await _refreshFeed();
             return;
           }
           if (i == 0 && _navIndex == 0) {
@@ -438,7 +536,11 @@ class _HomePageState extends State<HomePage> {
               () => _refreshKey.currentState?.show());
             return;
           }
+          final wasHome = _navIndex == 0;
           setState(() => _navIndex = i);
+          if (i == 0 && !wasHome) {
+            unawaited(_refreshFeed());
+          }
         },
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home_rounded),          label: 'Home'),
@@ -451,6 +553,7 @@ class _HomePageState extends State<HomePage> {
             label: 'Profile'),
         ],
       ),
+    ),
     );
   }
 }
@@ -460,7 +563,10 @@ class _HomePageState extends State<HomePage> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _ProfileTab extends StatefulWidget {
-  const _ProfileTab();
+  final VoidCallback? onBackToHome;
+
+  const _ProfileTab({this.onBackToHome});
+
   @override
   State<_ProfileTab> createState() => _ProfileTabState();
 }
@@ -491,9 +597,14 @@ class _ProfileTabState extends State<_ProfileTab> {
   @override
   Widget build(BuildContext context) {
     if (!_loaded) return const Center(child: CircularProgressIndicator(color: kPrimaryColor));
-    if (_type == 'wellness') return wellness.WellnessProfilePage(profileUserId: _uid);
-    if (_type == 'guru')     return guru.GuruProfilePage(profileUserId: _uid);
-    return aspirant.ProfilePage(profileUserId: _uid);
+    final onBack = widget.onBackToHome;
+    if (_type == 'wellness') {
+      return wellness.WellnessProfilePage(profileUserId: _uid, onBackToHome: onBack);
+    }
+    if (_type == 'guru') {
+      return guru.GuruProfilePage(profileUserId: _uid, onBackToHome: onBack);
+    }
+    return aspirant.ProfilePage(profileUserId: _uid, onBackToHome: onBack);
   }
 }
 
@@ -854,31 +965,16 @@ class _PostMediaState extends State<_PostMedia> {
   void _openReelViewer(BuildContext context, String tappedPostId) {
     // Build reel list from allVideoDocs — every video post regardless of processed status
     final reels = widget.allVideoDocs.map((doc) {
-      final d  = doc.data();
-      String vUrl = '';
-      String thumb = '';
-      final media = d['media'];
-      if (media is List) {
-        for (final item in media) {
-          if (item is! Map) continue;
-          final m = Map<String, dynamic>.from(item);
-          if ((m['type'] ?? '') != 'video') continue;
-          for (final k in ['hlsUrl', 'videoUrl', 'url', 'rawVideoUrl', 'previewUrl']) {
-            final v = (m[k] ?? '').toString().trim();
-            if (v.isNotEmpty && vUrl.isEmpty) vUrl = v;
-          }
-          for (final k in ['thumbnail', 'thumbnailUrl', 'previewUrl']) {
-            final v = (m[k] ?? '').toString().trim();
-            if (v.isNotEmpty && thumb.isEmpty) thumb = v;
-          }
-          break;
-        }
-      }
-      // Doc-level fallback
-      if (vUrl.isEmpty) {
-        for (final k in ['hlsUrl', 'videoUrl', 'url', 'rawVideoUrl', 'previewUrl']) {
-          final v = (d[k] ?? '').toString().trim();
-          if (v.isNotEmpty) { vUrl = v; break; }
+      final d = doc.data();
+      final urls = resolveFeedVideoUrls(postData: d);
+      if (urls.primary.isEmpty) return null;
+
+      var thumb = '';
+      final mediaItem = firstVideoMediaItem(d);
+      if (mediaItem != null) {
+        for (final k in ['thumbnail', 'thumbnailUrl', 'previewUrl']) {
+          final v = (mediaItem[k] ?? '').toString().trim();
+          if (v.isNotEmpty) { thumb = v; break; }
         }
       }
       if (thumb.isEmpty) {
@@ -887,13 +983,14 @@ class _PostMediaState extends State<_PostMedia> {
           if (v.isNotEmpty) { thumb = v; break; }
         }
       }
-      if (vUrl.isEmpty) return null;
+
       return _FeedReelItem(
         postId: doc.id,
-        videoUrl: vUrl,
+        videoUrl: urls.primary,
+        fallbackVideoUrl: urls.fallback,
         thumbUrl: thumb,
         caption: (d['caption'] ?? '').toString(),
-        userId:  (d['userId'] ?? '').toString(),
+        userId: (d['userId'] ?? '').toString(),
       );
     }).whereType<_FeedReelItem>().toList(growable: false);
 
@@ -932,21 +1029,9 @@ class _PostMediaState extends State<_PostMedia> {
     return '';
   }
 
+  /// Processed MP4 first on iOS and Android; HLS only when no MP4 exists.
   String _videoOf(Map<String, dynamic> m) {
-    final resolved = resolveVideoPlayback(postData: widget.data, mediaItem: m);
-    if (ReelPlatformPolicy.isAndroid) {
-      final mp4 = pickProcessedMp4(m, widget.data)?.trim() ?? '';
-      if (mp4.isNotEmpty &&
-          (resolved.primaryUrl.contains('.m3u8') ||
-              resolved.status == ReelStatus.readyHls)) {
-        return mp4;
-      }
-      if (resolved.fallbackUrl.isNotEmpty &&
-          resolved.primaryUrl.contains('.m3u8')) {
-        return resolved.fallbackUrl;
-      }
-    }
-    return resolved.primaryUrl.trim();
+    return resolveFeedVideoUrls(postData: widget.data, mediaItem: m).primary;
   }
 
   @override
@@ -970,12 +1055,18 @@ class _PostMediaState extends State<_PostMedia> {
               final m    = items[i];
               final type = (m['type'] ?? 'image').toString();
               if (type == 'video') {
-                final vUrl  = _videoOf(m);
+                final urls = resolveFeedVideoUrls(postData: widget.data, mediaItem: m);
+                final vUrl  = urls.primary;
                 final thumb = _thumbOf(m);
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    _InlineVideoPlayer(videoUrl: vUrl, thumbUrl: thumb, postId: widget.postId),
+                    _InlineVideoPlayer(
+                      videoUrl: vUrl,
+                      fallbackVideoUrl: urls.fallback,
+                      thumbUrl: thumb,
+                      postId: widget.postId,
+                    ),
                     // Fullscreen button — top-right — opens reel viewer
                     Positioned(
                       top: 10, right: 10,
@@ -1049,19 +1140,37 @@ class _PostMediaState extends State<_PostMedia> {
 
 class _InlineVideoPlayer extends StatefulWidget {
   final String videoUrl;
+  final String fallbackVideoUrl;
   final String thumbUrl;
   final String postId;
-  const _InlineVideoPlayer({required this.videoUrl, required this.thumbUrl, this.postId = ''});
+  const _InlineVideoPlayer({
+    required this.videoUrl,
+    this.fallbackVideoUrl = '',
+    required this.thumbUrl,
+    this.postId = '',
+  });
   @override
   State<_InlineVideoPlayer> createState() => _InlineVideoPlayerState();
 }
 
 class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
-  static const String _kOwner = 'home_inline';
+  static const double _kInitFraction = 0.12;
+  static const double _kTeardownFraction = 0.04;
+  static const Duration _kTeardownDelay = Duration(milliseconds: 450);
+  static const Duration _kInitRetryDelay = Duration(milliseconds: 120);
+
+  String get _owner => widget.postId.isNotEmpty
+      ? 'home_inline:${widget.postId}'
+      : 'home_inline';
+
   VideoPlayerController? _ctrl;
   bool _ready = false;
+  bool _initing = false;
   bool _error = false;
   bool _acquired = false;
+  bool _initRetryScheduled = false;
+  double _lastVisibleFraction = 0;
+  Timer? _teardownTimer;
 
   @override
   void initState() {
@@ -1071,6 +1180,7 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
 
   @override
   void dispose() {
+    _teardownTimer?.cancel();
     AppVideoFocus.instance.removeListener(_onFocusChange);
     final c = _ctrl;
     _ctrl = null;
@@ -1080,7 +1190,7 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
       c?.dispose();
     } catch (_) {}
     if (_acquired) {
-      VideoDecoderBudget.instance.release(_kOwner);
+      VideoDecoderBudget.instance.release(_owner);
       _acquired = false;
     }
     super.dispose();
@@ -1089,21 +1199,58 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
   void _onFocusChange() {
     if (!mounted) return;
     if (AppVideoFocus.instance.isFullscreenReel) {
+      _teardownTimer?.cancel();
       unawaited(_teardown(keepError: false));
+    } else if (_lastVisibleFraction >= _kInitFraction &&
+        _ctrl == null &&
+        !_error &&
+        !_initing) {
+      _init();
     }
   }
 
   void _onVisibility(VisibilityInfo info) {
     if (!mounted || AppVideoFocus.instance.isFullscreenReel) return;
+    _lastVisibleFraction = info.visibleFraction;
     final v = info.visibleFraction;
-    if (v >= 0.55 && _ctrl == null && !_error) {
-      _init();
-    } else if (v < 0.12 && _ctrl != null) {
-      unawaited(_teardown(keepError: false));
+
+    if (v >= _kInitFraction) {
+      _teardownTimer?.cancel();
+      if (_ctrl == null && !_error && !_initing) {
+        _init();
+      }
+      return;
+    }
+
+    if (v < _kTeardownFraction && _ctrl != null) {
+      _scheduleTeardown();
     }
   }
 
+  void _scheduleTeardown() {
+    if (_teardownTimer?.isActive ?? false) return;
+    _teardownTimer = Timer(_kTeardownDelay, () {
+      if (!mounted) return;
+      if (_lastVisibleFraction < _kTeardownFraction && _ctrl != null) {
+        unawaited(_teardown(keepError: false));
+      }
+    });
+  }
+
+  void _scheduleInitRetry() {
+    if (_initRetryScheduled || _ctrl != null || _initing) return;
+    _initRetryScheduled = true;
+    Future.delayed(_kInitRetryDelay, () {
+      _initRetryScheduled = false;
+      if (!mounted || _ctrl != null || _error || _initing) return;
+      if (AppVideoFocus.instance.isFullscreenReel) return;
+      if (_lastVisibleFraction >= _kInitFraction) _init();
+    });
+  }
+
   Future<void> _teardown({required bool keepError}) async {
+    _teardownTimer?.cancel();
+    _initing = false;
     final c = _ctrl;
     _ctrl = null;
     if (c != null) {
@@ -1116,7 +1263,7 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
       });
     }
     if (_acquired) {
-      VideoDecoderBudget.instance.release(_kOwner);
+      VideoDecoderBudget.instance.release(_owner);
       _acquired = false;
     }
     if (mounted) {
@@ -1129,19 +1276,55 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
 
   void _init() {
     if (AppVideoFocus.instance.isFullscreenReel) return;
-    if (widget.videoUrl.isEmpty) { setState(() => _error = true); return; }
-    if (!VideoDecoderBudget.instance.tryAcquire(_kOwner)) return; // show thumbnail silently
+    if (widget.videoUrl.isEmpty) {
+      setState(() => _error = true);
+      return;
+    }
+    if (_ctrl != null || _initing) return;
+    if (!VideoDecoderBudget.instance.tryAcquire(_owner)) {
+      _scheduleInitRetry();
+      return;
+    }
     _acquired = true;
+    _initing = true;
+    if (mounted) setState(() {});
+
+    _createAndInitController(widget.videoUrl.trim());
+  }
+
+  void _createAndInitController(String url) {
+    if (url.isEmpty) {
+      if (_acquired) {
+        VideoDecoderBudget.instance.release(_owner);
+        _acquired = false;
+      }
+      if (mounted) setState(() { _initing = false; _error = true; });
+      return;
+    }
+
     final c = VideoPlayerController.networkUrl(
-      Uri.parse(widget.videoUrl),
+      Uri.parse(url),
       videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false, allowBackgroundPlayback: false),
       httpHeaders: const {'Connection': 'keep-alive'},
     );
     _ctrl = c;
     c.addListener(_onCtrl);
-    c.initialize().catchError((_) {
-      if (_acquired) { VideoDecoderBudget.instance.release(_kOwner); _acquired = false; }
-      if (mounted) setState(() => _error = true);
+    c.initialize().catchError((_) async {
+      final alt = widget.fallbackVideoUrl.trim();
+      if (alt.isNotEmpty && alt != url) {
+        try {
+          c.removeListener(_onCtrl);
+          await c.dispose();
+        } catch (_) {}
+        _ctrl = null;
+        if (mounted) _createAndInitController(alt);
+        return;
+      }
+      if (_acquired) {
+        VideoDecoderBudget.instance.release(_owner);
+        _acquired = false;
+      }
+      if (mounted) setState(() { _initing = false; _error = true; });
     });
   }
 
@@ -1151,11 +1334,13 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
     if (c == null) return;
     if (!_ready && c.value.isInitialized) {
       c.setLooping(true);
-      c.setVolume(0.0); // muted by default — Instagram-style
-      c.play();         // auto-play as soon as initialized
-      setState(() => _ready = true);
+      c.setVolume(0.0);
+      c.play();
+      setState(() { _ready = true; _initing = false; });
     }
-    if (c.value.hasError && !_error) setState(() => _error = true);
+    if (c.value.hasError && !_error) {
+      setState(() { _error = true; _initing = false; });
+    }
   }
 
   bool _showHeart = false;
@@ -1216,8 +1401,38 @@ class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
               );
             }),
 
-          // Play icon — shown when not yet playing
-          if (!_error && !_ready)
+          // Buffering / init progress at top
+          if (_initing)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: LinearProgressIndicator(
+                backgroundColor: Colors.white12,
+                valueColor: AlwaysStoppedAnimation<Color>(kPrimaryColor),
+                minHeight: 2,
+              ),
+            )
+          else if (_ready && _ctrl != null)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: ValueListenableBuilder<VideoPlayerValue>(
+                valueListenable: _ctrl!,
+                builder: (_, val, __) {
+                  if (!val.isBuffering) return const SizedBox(height: 2);
+                  return const LinearProgressIndicator(
+                    backgroundColor: Colors.white12,
+                    valueColor: AlwaysStoppedAnimation<Color>(kPrimaryColor),
+                    minHeight: 2,
+                  );
+                },
+              ),
+            ),
+
+          // Play icon — shown when idle (not loading)
+          if (!_error && !_ready && !_initing)
             const Center(child: Icon(Icons.play_circle_fill_rounded,
                 color: Colors.white70, size: 56)),
           if (!_error && _ready && _ctrl != null)
@@ -1392,12 +1607,14 @@ class _LikeCount extends StatelessWidget {
 class _FeedReelItem {
   final String postId;
   final String videoUrl;
+  final String fallbackVideoUrl;
   final String thumbUrl;
   final String caption;
   final String userId;
   const _FeedReelItem({
     required this.postId,
     required this.videoUrl,
+    this.fallbackVideoUrl = '',
     required this.thumbUrl,
     required this.caption,
     required this.userId,
@@ -1432,7 +1649,7 @@ class _FeedReelViewerState extends State<_FeedReelViewer> {
     if (widget.reels[_page].videoUrl.isNotEmpty &&
         VideoDecoderBudget.instance.tryAcquire(_kOwner)) {
       _initing.add(_page);
-      unawaited(_initCtrl(_page, widget.reels[_page].videoUrl, true));
+      unawaited(_initCtrl(_page, widget.reels[_page], true));
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _sync());
   }
@@ -1472,12 +1689,12 @@ class _FeedReelViewerState extends State<_FeedReelViewer> {
         if (_ctrls.length + _initing.length >= ReelPreloadPolicy.maxWarmSlots) {
           break;
         }
-        final url = widget.reels[idx].videoUrl;
-        if (url.isEmpty) continue;
+        final reel = widget.reels[idx];
+        if (reel.videoUrl.isEmpty) continue;
         if (!VideoDecoderBudget.instance.tryAcquire(_kOwner)) break;
         _initing.add(idx);
         if (mounted) setState(() {});
-        await _initCtrl(idx, url, idx == _page);
+        await _initCtrl(idx, reel, idx == _page);
       }
       _applyPlayback();
       if (mounted) setState(() {});
@@ -1486,7 +1703,8 @@ class _FeedReelViewerState extends State<_FeedReelViewer> {
     }
   }
 
-  Future<void> _initCtrl(int idx, String url, bool active) async {
+  Future<void> _initCtrl(int idx, _FeedReelItem reel, bool active) async {
+    var url = reel.videoUrl.trim();
     final c = VideoPlayerController.networkUrl(
       Uri.parse(url),
       videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false, allowBackgroundPlayback: false),
@@ -1501,7 +1719,41 @@ class _FeedReelViewerState extends State<_FeedReelViewer> {
       _ctrls[idx] = c;
       if (mounted) setState(() {});
     } catch (_) {
-      c.dispose(); VideoDecoderBudget.instance.release(_kOwner);
+      final alt = reel.fallbackVideoUrl.trim();
+      if (alt.isNotEmpty && alt != url) {
+        try {
+          await c.dispose();
+        } catch (_) {}
+        url = alt;
+        final c2 = VideoPlayerController.networkUrl(
+          Uri.parse(url),
+          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false, allowBackgroundPlayback: false),
+          httpHeaders: const {'Connection': 'keep-alive'},
+        );
+        try {
+          await c2.initialize();
+          if (!mounted) {
+            await c2.dispose();
+            VideoDecoderBudget.instance.release(_kOwner);
+            return;
+          }
+          await c2.setLooping(true);
+          await c2.setVolume(active ? 1.0 : 0.0);
+          if (active) await c2.play();
+          _ctrls[idx] = c2;
+          if (mounted) setState(() {});
+        } catch (_) {
+          try {
+            await c2.dispose();
+          } catch (_) {}
+          VideoDecoderBudget.instance.release(_kOwner);
+        }
+      } else {
+        try {
+          await c.dispose();
+        } catch (_) {}
+        VideoDecoderBudget.instance.release(_kOwner);
+      }
     } finally {
       _initing.remove(idx);
       if (mounted) setState(() {});

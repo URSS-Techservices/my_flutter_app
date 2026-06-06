@@ -10,14 +10,16 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:video_player/video_player.dart';
 
+import 'package:halo/models/media_model.dart';
 import 'package:halo/services/app_video_focus.dart';
 import 'package:halo/services/explore_reel_prefetch.dart';
 import 'package:halo/services/explore_service.dart';
-import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/reel_preload_policy.dart';
+import 'package:halo/services/video_controller_pool.dart';
 import 'package:halo/services/video_decoder_budget.dart';
 import 'package:halo/services/video_dispose_serial.dart';
 import 'package:halo/services/video_playback_resolver.dart';
@@ -35,7 +37,8 @@ const int    _kFeatEvery = 7;   // every 7th item is a featured (2×2) tile
 /// Returns the best available thumbnail/poster URL — never returns a raw video file URL.
 String _thumb(Map<String, dynamic> d) {
   final candidates = [
-    d['thumbnailUrl'], d['previewUrl'], d['thumbnail'],
+    d['thumbnailUrl'], d['previewUrl'], d['thumbnail'], d['posterUrl'],
+    d['coverUrl'], d['thumbUrl'],
     d['imageUrl'], d['photoUrl'], d['image'],
   ];
   for (final v in candidates) {
@@ -48,15 +51,32 @@ String _thumb(Map<String, dynamic> d) {
     for (final item in media) {
       if (item is! Map) continue;
       final m = Map<String, dynamic>.from(item);
-      for (final k in ['thumbnail', 'thumbnailUrl', 'previewUrl']) {
+      for (final k in ['thumbnail', 'thumbnailUrl', 'previewUrl', 'posterUrl', 'coverUrl', 'thumb']) {
         final s = (m[k] ?? '').toString().trim();
         if (s.isNotEmpty && !_isVideoUrl(s)) return s;
+      }
+      final img = m['image'];
+      if (img is Map) {
+        for (final k in ['thumb', 'medium', 'full']) {
+          final s = (img[k] ?? '').toString().trim();
+          if (s.isNotEmpty && !_isVideoUrl(s)) return s;
+        }
       }
       // For image media items, use the url itself
       if ((m['type'] ?? '') != 'video') {
         final s = (m['url'] ?? '').toString().trim();
         if (s.isNotEmpty && !_isVideoUrl(s)) return s;
       }
+    }
+  }
+  // Structured media model (covers legacy + nested shapes)
+  for (final m in MediaModel.parsePostMedia(d)) {
+    if (m.isVideo && m.thumbnail.isNotEmpty && !_isVideoUrl(m.thumbnail)) {
+      return m.thumbnail;
+    }
+    if (m.isImage) {
+      final u = m.image.forGrid();
+      if (u.isNotEmpty && !_isVideoUrl(u)) return u;
     }
   }
   // image-only posts: plain imageUrl fields
@@ -67,34 +87,17 @@ String _thumb(Map<String, dynamic> d) {
   return '';
 }
 
-/// Playable URL for Explore — on Android prefers processed MP4 over HLS (MTK PesReader/pipelineFull).
-({String primary, String fallback}) _resolveExploreUrls(Map<String, dynamic> d) {
-  Map<String, dynamic>? mediaItem;
-  final media = d['media'];
-  if (media is List) {
-    for (final item in media) {
-      if (item is! Map) continue;
-      if ((item['type'] ?? '') != 'video') continue;
-      mediaItem = Map<String, dynamic>.from(item);
-      break;
-    }
+String _posterUrlFor(_Post post) {
+  if (post.thumbUrl.isNotEmpty) return post.thumbUrl;
+  if (post.imageUrl.isNotEmpty && !_isVideoUrl(post.imageUrl)) {
+    return post.imageUrl;
   }
-  final resolved = resolveVideoPlayback(postData: d, mediaItem: mediaItem);
-  var primary = resolved.primaryUrl.trim();
-  var fallback = resolved.fallbackUrl.trim();
+  return '';
+}
 
-  if (ReelPlatformPolicy.isAndroid) {
-    final mp4 = pickProcessedMp4(mediaItem ?? {}, d)?.trim() ?? '';
-    if (mp4.isNotEmpty &&
-        (primary.contains('.m3u8') || resolved.status == ReelStatus.readyHls)) {
-      fallback = primary;
-      primary = mp4;
-    } else if (fallback.isNotEmpty && primary.contains('.m3u8')) {
-      primary = fallback;
-      fallback = resolved.primaryUrl.trim();
-    }
-  }
-  return (primary: primary, fallback: fallback);
+/// Playable URL for Explore — processed MP4 first on iOS and Android; HLS as fallback.
+({String primary, String fallback}) _resolveExploreUrls(Map<String, dynamic> d) {
+  return resolveFeedVideoUrls(postData: d);
 }
 
 String _videoUrl(Map<String, dynamic> d) => _resolveExploreUrls(d).primary;
@@ -303,15 +306,24 @@ class _ExplorePageState extends State<ExplorePage> {
     final videos = _all.where((p) => p.isVideo && p.videoUrl.isNotEmpty).toList();
     if (videos.isEmpty) return;
     final idx = videos.indexWhere((p) => p.id == post.id);
+    // Ensure prefetch is running (onTapDown may have already started it).
     ExploreReelPrefetch.instance.start(
       postId: post.id,
       videoUrl: post.videoUrl,
       fallbackUrl: post.fallbackVideoUrl,
     );
     AppVideoFocus.instance.enterFullscreenReel();
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => _ReelViewer(posts: videos, initialIndex: idx < 0 ? 0 : idx),
-    )).whenComplete(AppVideoFocus.instance.exitFullscreenReel);
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => _ReelViewer(
+          posts: videos,
+          initialIndex: idx < 0 ? 0 : idx,
+        ),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: const Duration(milliseconds: 200),
+      ),
+    ).whenComplete(AppVideoFocus.instance.exitFullscreenReel);
   }
 
   void _openDetail(_Post post) {
@@ -697,6 +709,378 @@ class _Cell extends StatelessWidget {
   }
 }
 
+// ─── Reel UI helpers (display-only, no post/data logic changes) ───────────────
+
+const List<Shadow> _kReelTextShadow = [
+  Shadow(blurRadius: 6, color: Colors.black54, offset: Offset(0, 1)),
+];
+
+class _ReelUserLookup {
+  static final Map<String, Future<({String name, String photo})>> _cache = {};
+
+  static Future<({String name, String photo})> load(String userId) {
+    if (userId.isEmpty) {
+      return Future.value((name: '', photo: ''));
+    }
+    return _cache.putIfAbsent(userId, () async {
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .get();
+        final d = snap.data();
+        if (d == null) return (name: '', photo: '');
+        final name = (d['username'] ?? d['displayName'] ?? d['name'] ?? '')
+            .toString()
+            .trim();
+        for (final k in ['profilePhoto', 'photoURL', 'profile_photo', 'avatar']) {
+          final v = (d[k] ?? '').toString().trim();
+          if (v.isNotEmpty) return (name: name, photo: v);
+        }
+        return (name: name, photo: '');
+      } catch (_) {
+        return (name: '', photo: '');
+      }
+    });
+  }
+}
+
+class _ReelCircleIconBtn extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final double size;
+
+  const _ReelCircleIconBtn({
+    required this.icon,
+    required this.onTap,
+    this.size = 22,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black26,
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(icon, color: Colors.white, size: size),
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen poster behind the player — avoids a black flash before first frame.
+class _ReelPoster extends StatelessWidget {
+  final String posterUrl;
+  final bool showLoading;
+
+  const _ReelPoster({
+    required this.posterUrl,
+    this.showLoading = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (posterUrl.isNotEmpty) {
+      return CachedNetworkImage(
+        imageUrl: posterUrl,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        useOldImageOnUrlChange: true,
+        placeholder: (_, __) => _ReelPosterFallback(loading: true),
+        errorWidget: (_, __, ___) => _ReelPosterFallback(loading: showLoading),
+      );
+    }
+    return _ReelPosterFallback(loading: showLoading);
+  }
+}
+
+class _ReelPosterFallback extends StatelessWidget {
+  final bool loading;
+
+  const _ReelPosterFallback({this.loading = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      color: const Color(0xFF1C1C1E),
+      child: loading
+          ? const Center(
+              child: CircularProgressIndicator(
+                color: Colors.white54,
+                strokeWidth: 2,
+              ),
+            )
+          : const Center(
+              child: Icon(Icons.play_circle_outline_rounded,
+                  color: Colors.white38, size: 56),
+            ),
+    );
+  }
+}
+
+class _ReelAuthorStrip extends StatelessWidget {
+  final String userId;
+  final String fallbackUsername;
+  final String? currentUid;
+
+  const _ReelAuthorStrip({
+    required this.userId,
+    required this.fallbackUsername,
+    this.currentUid,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (userId.isEmpty && fallbackUsername.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return FutureBuilder<({String name, String photo})>(
+      future: _ReelUserLookup.load(userId),
+      builder: (context, snap) {
+        final meta = snap.data;
+        final name = fallbackUsername.isNotEmpty
+            ? fallbackUsername
+            : (meta?.name.isNotEmpty == true ? meta!.name : 'User');
+        final photo = meta?.photo ?? '';
+
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5),
+              ),
+              child: CircleAvatar(
+                radius: 16,
+                backgroundColor: Colors.white24,
+                backgroundImage:
+                    photo.isNotEmpty ? CachedNetworkImageProvider(photo) : null,
+                child: photo.isEmpty
+                    ? const Icon(Icons.person, color: Colors.white70, size: 18)
+                    : null,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                name.startsWith('@') ? name : '@$name',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  shadows: _kReelTextShadow,
+                ),
+              ),
+            ),
+            if (userId.isNotEmpty && userId != currentUid) ...[
+              const SizedBox(width: 10),
+              _FollowBtn(targetUserId: userId),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ReelCaption extends StatefulWidget {
+  final String caption;
+  const _ReelCaption({required this.caption});
+
+  @override
+  State<_ReelCaption> createState() => _ReelCaptionState();
+}
+
+class _ReelCaptionState extends State<_ReelCaption> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = widget.caption.trim();
+    if (text.isEmpty) return const SizedBox.shrink();
+
+    return GestureDetector(
+      onTap: () => setState(() => _expanded = !_expanded),
+      child: AnimatedCrossFade(
+        duration: const Duration(milliseconds: 180),
+        crossFadeState:
+            _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+        firstChild: RichText(
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          text: TextSpan(
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13.5,
+              height: 1.35,
+              shadows: _kReelTextShadow,
+            ),
+            children: [
+              TextSpan(text: text),
+              if (text.length > 64)
+                const TextSpan(
+                  text: ' …more',
+                  style: TextStyle(
+                    color: Color(0xCCFFFFFF),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        secondChild: RichText(
+          text: TextSpan(
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13.5,
+              height: 1.35,
+              shadows: _kReelTextShadow,
+            ),
+            children: [
+              TextSpan(text: text),
+              const TextSpan(
+                text: '  less',
+                style: TextStyle(
+                  color: Color(0xCCFFFFFF),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReelMusicChip extends StatelessWidget {
+  const _ReelMusicChip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: Colors.white24,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.white38),
+          ),
+          child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 14),
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            'Original audio',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w500,
+              shadows: _kReelTextShadow,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReelThinProgress extends StatelessWidget {
+  final VideoPlayerController controller;
+  const _ReelThinProgress({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<VideoPlayerValue>(
+      valueListenable: controller,
+      builder: (_, value, __) {
+        final duration = value.duration.inMilliseconds;
+        final position = value.position.inMilliseconds;
+        final progress = duration > 0 ? (position / duration).clamp(0.0, 1.0) : 0.0;
+        return ClipRRect(
+          child: LinearProgressIndicator(
+            value: progress,
+            minHeight: 2,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Fires [onSurfaceReady] after the platform video surface is in the tree.
+/// iOS/Android decoders often ignore [VideoPlayerController.play] until then.
+class _MountedVideoPlayer extends StatefulWidget {
+  final VideoPlayerController controller;
+  final VoidCallback? onSurfaceReady;
+
+  const _MountedVideoPlayer({
+    required this.controller,
+    this.onSurfaceReady,
+  });
+
+  @override
+  State<_MountedVideoPlayer> createState() => _MountedVideoPlayerState();
+}
+
+class _MountedVideoPlayerState extends State<_MountedVideoPlayer> {
+  @override
+  void initState() {
+    super.initState();
+    _notifySurfaceReady();
+  }
+
+  @override
+  void didUpdateWidget(_MountedVideoPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      _notifySurfaceReady();
+    }
+  }
+
+  void _notifySurfaceReady() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onSurfaceReady?.call();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: c.value.size.width > 0 ? c.value.size.width : 1080,
+        height: c.value.size.height > 0 ? c.value.size.height : 1920,
+        child: VideoPlayer(c),
+      ),
+    );
+  }
+}
+
 // ─── Reel viewer ─────────────────────────────────────────────────────────────
 
 class _ReelViewer extends StatefulWidget {
@@ -708,17 +1092,30 @@ class _ReelViewer extends StatefulWidget {
 }
 
 class _ReelViewerState extends State<_ReelViewer> {
+  static const String _kExploreOwner = 'explore_reel_viewer';
+
   late PageController _pc;
   int _page = 0;
   final Map<int, VideoPlayerController> _ctrls = {};
   final Set<int> _initing = {};
+  final Set<int> _surfacesReady = {};
   bool _syncing = false;
+
+  late final void Function() _memoryEvictOldest;
+  late final void Function() _memoryDisposeAll;
+  late final int Function() _memoryCount;
 
   @override
   void initState() {
     super.initState();
     _page = widget.initialIndex;
     _pc = PageController(initialPage: _page);
+    _memoryEvictOldest = _onMemoryEvictOldest;
+    _memoryDisposeAll = _onMemoryDisposeAll;
+    _memoryCount = () => _ctrls.length;
+    VideoPoolCoordinator.instance.registerEvictOldest(_memoryEvictOldest);
+    VideoPoolCoordinator.instance.registerDisposeAll(_memoryDisposeAll);
+    VideoPoolCoordinator.instance.registerCount(_memoryCount);
     AppVideoFocus.instance.enterFullscreenReel();
     _bootstrapFromPrefetchOrSync();
   }
@@ -729,19 +1126,57 @@ class _ReelViewerState extends State<_ReelViewer> {
     if (adopted != null) {
       _ctrls[_page] = adopted;
       if (adopted.value.isInitialized) {
+        _initing.remove(_page);
         if (mounted) setState(() {});
-        _applyPlayback();
-        _scheduleActivePlay(_page);
-        unawaited(_syncWarmNeighbors());
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _ensurePlaying(_page);
+        });
       } else {
         _initing.add(_page);
-        if (mounted) setState(() {});
         adopted.addListener(_onPrefetchReady);
-        unawaited(_syncWarmNeighbors());
+        if (mounted) setState(() {});
       }
+      unawaited(_syncWarmNeighbors());
       return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_sync()));
+    unawaited(_sync());
+  }
+
+  Future<void> _initCurrentReel() async {
+    if (!mounted) return;
+    final current = _page;
+    if (_ctrls.containsKey(current) || _initing.contains(current)) return;
+    final post = widget.posts[current];
+    if (post.videoUrl.isEmpty) return;
+    if (!VideoDecoderBudget.instance.tryAcquire(_kExploreOwner)) return;
+    _initing.add(current);
+    if (mounted) setState(() {});
+    await _initCtrl(current, post, true);
+  }
+
+  void _onSurfaceReady(int idx) {
+    _surfacesReady.add(idx);
+    if (idx == _page) {
+      _ensurePlaying(idx);
+    }
+  }
+
+  void _ensurePlaying(int idx) {
+    Future<void> attempt() async {
+      if (!mounted || _page != idx) return;
+      final c = _ctrls[idx];
+      if (c == null || !c.value.isInitialized || c.value.hasError) return;
+      if (!_surfacesReady.contains(idx)) return;
+      try {
+        await c.setVolume(1.0);
+        if (!c.value.isPlaying) {
+          await c.play();
+        }
+      } catch (_) {}
+    }
+
+    unawaited(attempt());
+    Future.delayed(const Duration(milliseconds: 50), () => unawaited(attempt()));
   }
 
   void _onPrefetchReady() {
@@ -750,13 +1185,15 @@ class _ReelViewerState extends State<_ReelViewer> {
     if (c == null || !c.value.isInitialized) return;
     c.removeListener(_onPrefetchReady);
     _initing.remove(_page);
-    _applyPlayback();
-    _scheduleActivePlay(_page);
     if (mounted) setState(() {});
+    _ensurePlaying(_page);
   }
 
   @override
   void dispose() {
+    VideoPoolCoordinator.instance.unregisterEvictOldest(_memoryEvictOldest);
+    VideoPoolCoordinator.instance.unregisterDisposeAll(_memoryDisposeAll);
+    VideoPoolCoordinator.instance.unregisterCount(_memoryCount);
     AppVideoFocus.instance.exitFullscreenReel();
     unawaited(ExploreReelPrefetch.instance.cancel());
     _pc.dispose();
@@ -766,25 +1203,49 @@ class _ReelViewerState extends State<_ReelViewer> {
       } catch (_) {}
     }
     _ctrls.clear();
-    for (final post in widget.posts) {
-      VideoDecoderBudget.instance.releaseAll('explore_reel:${post.id}');
-    }
+    VideoDecoderBudget.instance.releaseAll(_kExploreOwner);
     super.dispose();
   }
 
-  String _ownerFor(int index) => 'explore_reel:${widget.posts[index].id}';
+  void _onMemoryEvictOldest() {
+    if (!mounted || _ctrls.length <= 1) return;
+    int? victim;
+    var maxDist = -1;
+    for (final idx in _ctrls.keys) {
+      if (idx == _page) continue;
+      final dist = (idx - _page).abs();
+      if (dist > maxDist) {
+        maxDist = dist;
+        victim = idx;
+      }
+    }
+    if (victim != null) unawaited(_disposeIndex(victim));
+  }
+
+  void _onMemoryDisposeAll() {
+    if (!mounted) return;
+    for (final idx in _ctrls.keys.where((k) => k != _page).toList()) {
+      unawaited(_disposeIndex(idx));
+    }
+  }
+
+  Future<void> _disposeIndex(int idx) async {
+    final c = _ctrls.remove(idx);
+    _initing.remove(idx);
+    _surfacesReady.remove(idx);
+    if (c == null) return;
+    await VideoDisposeSerial.instance.run(() async {
+      try {
+        await c.dispose();
+      } catch (_) {}
+      VideoDecoderBudget.instance.release(_kExploreOwner);
+    });
+    if (mounted) setState(() {});
+  }
 
   Future<void> _evictOutside(Set<int> keep) async {
     for (final idx in _ctrls.keys.where((k) => !keep.contains(k)).toList()) {
-      final c = _ctrls.remove(idx);
-      _initing.remove(idx);
-      final owner = _ownerFor(idx);
-      await VideoDisposeSerial.instance.run(() async {
-        try {
-          await c?.dispose();
-        } catch (_) {}
-        VideoDecoderBudget.instance.releaseAll(owner);
-      });
+      await _disposeIndex(idx);
     }
   }
 
@@ -793,6 +1254,11 @@ class _ReelViewerState extends State<_ReelViewer> {
     if (!mounted || _syncing) return;
     _syncing = true;
     try {
+      // Start current reel immediately — don't block on eviction first.
+      if (!_ctrls.containsKey(_page) && !_initing.contains(_page)) {
+        await _initCurrentReel();
+      }
+
       final keep = ReelPreloadPolicy.warmIndices(_page, widget.posts.length);
       await _evictOutside(keep);
 
@@ -800,8 +1266,17 @@ class _ReelViewerState extends State<_ReelViewer> {
       if (!_ctrls.containsKey(current) && !_initing.contains(current)) {
         final post = widget.posts[current];
         if (post.videoUrl.isNotEmpty) {
-          final owner = _ownerFor(current);
-          if (VideoDecoderBudget.instance.tryAcquire(owner)) {
+          final adopted = ExploreReelPrefetch.instance.take(post.id);
+          if (adopted != null) {
+            _ctrls[current] = adopted;
+            if (adopted.value.isInitialized) {
+              _initing.remove(current);
+              _ensurePlaying(current);
+            } else {
+              _initing.add(current);
+              adopted.addListener(_onPrefetchReady);
+            }
+          } else if (VideoDecoderBudget.instance.tryAcquire(_kExploreOwner)) {
             _initing.add(current);
             if (mounted) setState(() {});
             await _initCtrl(current, post, true);
@@ -819,6 +1294,7 @@ class _ReelViewerState extends State<_ReelViewer> {
 
   Future<void> _syncWarmNeighbors() async {
     if (!mounted) return;
+    if (VideoPoolCoordinator.instance.pauseNewPreloads) return;
     final keep = ReelPreloadPolicy.warmIndices(_page, widget.posts.length);
     for (final idx in ReelPreloadPolicy.initOrder(_page, widget.posts.length)) {
       if (!mounted) break;
@@ -830,8 +1306,7 @@ class _ReelViewerState extends State<_ReelViewer> {
       }
       final post = widget.posts[idx];
       if (post.videoUrl.isEmpty) continue;
-      final owner = _ownerFor(idx);
-      if (!VideoDecoderBudget.instance.tryAcquire(owner)) break;
+      if (!VideoDecoderBudget.instance.tryAcquire(_kExploreOwner)) break;
       _initing.add(idx);
       if (mounted) setState(() {});
       await _initCtrl(idx, post, false);
@@ -841,7 +1316,6 @@ class _ReelViewerState extends State<_ReelViewer> {
   }
 
   Future<void> _initCtrl(int idx, _Post post, bool active) async {
-    final owner = _ownerFor(idx);
     var url = post.videoUrl.trim();
     final c = VideoPlayerController.networkUrl(
       Uri.parse(url),
@@ -855,13 +1329,14 @@ class _ReelViewerState extends State<_ReelViewer> {
       await c.initialize();
       if (!mounted) {
         await c.dispose();
-        VideoDecoderBudget.instance.releaseAll(owner);
+        VideoDecoderBudget.instance.release(_kExploreOwner);
         return;
       }
       await c.setLooping(true);
       _ctrls[idx] = c;
       if (active) {
         await c.setVolume(1.0);
+        await c.play();
       } else {
         await c.setVolume(0.0);
         await c.pause();
@@ -885,13 +1360,14 @@ class _ReelViewerState extends State<_ReelViewer> {
           await c2.initialize();
           if (!mounted) {
             await c2.dispose();
-            VideoDecoderBudget.instance.releaseAll(owner);
+            VideoDecoderBudget.instance.release(_kExploreOwner);
             return;
           }
           await c2.setLooping(true);
           _ctrls[idx] = c2;
           if (active) {
             await c2.setVolume(1.0);
+            await c2.play();
           } else {
             await c2.setVolume(0.0);
             await c2.pause();
@@ -900,40 +1376,19 @@ class _ReelViewerState extends State<_ReelViewer> {
           try {
             await c2.dispose();
           } catch (_) {}
-          VideoDecoderBudget.instance.releaseAll(owner);
+          VideoDecoderBudget.instance.release(_kExploreOwner);
         }
       } else {
         try {
           await c.dispose();
         } catch (_) {}
-        VideoDecoderBudget.instance.releaseAll(owner);
+        VideoDecoderBudget.instance.release(_kExploreOwner);
       }
     } finally {
       _initing.remove(idx);
       if (mounted) setState(() {});
-      if (active) _scheduleActivePlay(idx);
+      if (active) _ensurePlaying(idx);
     }
-  }
-
-  void _scheduleActivePlay(int idx) {
-    Future<void> tryPlay() async {
-      if (!mounted || _page != idx) return;
-      final c = _ctrls[idx];
-      if (c == null || !c.value.isInitialized || c.value.hasError) return;
-      try {
-        await c.setVolume(1.0);
-        if (!c.value.isPlaying && !c.value.isBuffering) {
-          await c.play();
-        }
-      } catch (_) {}
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(tryPlay());
-    });
-    Future.delayed(const Duration(milliseconds: 40), () {
-      unawaited(tryPlay());
-    });
   }
 
   void _applyPlayback() {
@@ -942,51 +1397,66 @@ class _ReelViewerState extends State<_ReelViewer> {
         final active = e.key == _page;
         if (active) {
           e.value.setVolume(1.0);
+          if (_surfacesReady.contains(e.key) && !e.value.value.isPlaying) {
+            e.value.play();
+          }
         } else {
           e.value.setVolume(0.0);
           if (e.value.value.isPlaying) e.value.pause();
         }
       } catch (_) {}
     }
-    _scheduleActivePlay(_page);
+    _ensurePlaying(_page);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: PageView.builder(
-        controller: _pc,
-        scrollDirection: Axis.vertical,
-        allowImplicitScrolling: true,
-        itemCount: widget.posts.length,
-        onPageChanged: (i) {
-          setState(() => _page = i);
-          unawaited(_sync());
-        },
-        itemBuilder: (_, i) {
-          final post = widget.posts[i];
-          final c = _ctrls[i];
-          final ready = c != null && c.value.isInitialized;
-          return _ReelPage(
-            key: ValueKey(post.id),
-            post: post,
-            isActive: i == _page,
-            preloadSurface: i == _page || i == _page + 1,
-            ctrl: c,
-            ready: ready,
-            loading: _initing.contains(i),
-          );
-        },
+      backgroundColor: const Color(0xFF1C1C1E),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          PageView.builder(
+            controller: _pc,
+            scrollDirection: Axis.vertical,
+            allowImplicitScrolling: true,
+            itemCount: widget.posts.length,
+            onPageChanged: (i) {
+              setState(() => _page = i);
+              _applyPlayback();
+              unawaited(_sync());
+            },
+            itemBuilder: (_, i) {
+              final post = widget.posts[i];
+              final c = _ctrls[i];
+              final ready = c != null && c.value.isInitialized;
+              return _ReelPage(
+                key: ValueKey(post.id),
+                post: post,
+                isActive: i == _page,
+                preloadSurface: i == _page || i == _page + 1,
+                ctrl: c,
+                ready: ready,
+                loading: _initing.contains(i),
+                onSurfaceReady: () => _onSurfaceReady(i),
+              );
+            },
+          ),
+          // Top-left back to Explore grid (no title)
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8, top: 4),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: _ReelCircleIconBtn(
+                  icon: Icons.arrow_back_ios_new_rounded,
+                  size: 18,
+                  onTap: () => Navigator.pop(context),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1001,6 +1471,7 @@ class _ReelPage extends StatefulWidget {
   final VideoPlayerController? ctrl;
   final bool ready;
   final bool loading;
+  final VoidCallback? onSurfaceReady;
   const _ReelPage({
     super.key,
     required this.post,
@@ -1009,6 +1480,7 @@ class _ReelPage extends StatefulWidget {
     required this.ctrl,
     required this.ready,
     required this.loading,
+    this.onSurfaceReady,
   });
   @override
   State<_ReelPage> createState() => _ReelPageState();
@@ -1017,14 +1489,103 @@ class _ReelPage extends StatefulWidget {
 class _ReelPageState extends State<_ReelPage> {
   bool _userPaused = false;
   bool _showHeart = false;
+  bool _muted = false;
+  bool _hidePoster = false;
   final String? _uid = FirebaseAuth.instance.currentUser?.uid;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPosterVisibility();
+    _attachVideoListener();
+  }
+
+  @override
+  void dispose() {
+    _detachVideoListener(widget.ctrl);
+    super.dispose();
+  }
+
+  void _attachVideoListener() {
+    widget.ctrl?.addListener(_onVideoTick);
+  }
+
+  void _detachVideoListener(VideoPlayerController? c) {
+    c?.removeListener(_onVideoTick);
+  }
+
+  void _syncPosterVisibility() {
+    final c = widget.ctrl;
+    if (c == null || !c.value.isInitialized) {
+      _hidePoster = false;
+      return;
+    }
+    _hidePoster = _hasVisibleFrame(c.value);
+  }
+
+  bool _hasVisibleFrame(VideoPlayerValue v) {
+    if (v.hasError || !v.isInitialized) return false;
+    // Only hide poster once decoded frames are actually advancing.
+    return v.position > const Duration(milliseconds: 50);
+  }
+
+  void _onVideoTick() {
+    if (!_hidePoster && mounted) {
+      final c = widget.ctrl;
+      if (c != null &&
+          c.value.isInitialized &&
+          !c.value.hasError &&
+          _hasVisibleFrame(c.value)) {
+        setState(() => _hidePoster = true);
+      }
+    }
+  }
 
   @override
   void didUpdateWidget(_ReelPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.ctrl != widget.ctrl) {
+      _detachVideoListener(oldWidget.ctrl);
+      _hidePoster = false;
+      _attachVideoListener();
+      _syncPosterVisibility();
+    } else if (!widget.ready && oldWidget.ready) {
+      _hidePoster = false;
+    } else if (widget.ready && !_hidePoster) {
+      _syncPosterVisibility();
+    }
     if (widget.isActive && !oldWidget.isActive) {
       _userPaused = false;
+      _muted = false;
+      final c = widget.ctrl;
+      if (c != null && c.value.isInitialized) {
+        try {
+          c.setVolume(1.0);
+        } catch (_) {}
+      }
+      if (widget.ready && widget.onSurfaceReady != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && widget.isActive) widget.onSurfaceReady!();
+        });
+      }
     }
+    if (widget.ready && !oldWidget.ready && widget.isActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.isActive) widget.onSurfaceReady?.call();
+      });
+    }
+  }
+
+  void _toggleMute() {
+    if (!widget.isActive) return;
+    final c = widget.ctrl;
+    if (c == null || !c.value.isInitialized) return;
+    setState(() {
+      _muted = !_muted;
+      try {
+        c.setVolume(_muted ? 0.0 : 1.0);
+      } catch (_) {}
+    });
   }
 
   void _onTap() {
@@ -1044,6 +1605,7 @@ class _ReelPageState extends State<_ReelPage> {
 
   Future<void> _doubleTapLike() async {
     if (_uid == null) return;
+    HapticFeedback.mediumImpact();
     setState(() => _showHeart = true);
     Future.delayed(const Duration(milliseconds: 900), () {
       if (mounted) setState(() => _showHeart = false);
@@ -1069,10 +1631,14 @@ class _ReelPageState extends State<_ReelPage> {
   @override
   Widget build(BuildContext context) {
     final c = widget.ctrl;
-    final thumb = widget.post.thumbUrl;
     final post = widget.post;
     final ready = widget.ready;
     final loading = widget.loading;
+    final posterUrl = _posterUrlFor(post);
+    final showVideo = ready &&
+        c != null &&
+        c.value.isInitialized &&
+        (widget.isActive || widget.preloadSurface);
 
     return GestureDetector(
       onTap: _onTap,
@@ -1081,29 +1647,30 @@ class _ReelPageState extends State<_ReelPage> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (thumb.isNotEmpty)
-            CachedNetworkImage(
-              imageUrl: thumb,
-              fit: BoxFit.cover,
-              placeholder: (_, __) => const ColoredBox(color: Colors.black),
-              errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black),
-            )
-          else
-            const ColoredBox(color: Colors.black),
+          // Neutral base — never pure black while loading
+          const ColoredBox(color: Color(0xFF1C1C1E)),
 
-          // Only mount [VideoPlayer] for current + next — saves GPU surfaces while warming.
-          if (ready &&
-              c != null &&
-              c.value.isInitialized &&
-              (widget.isActive || widget.preloadSurface))
-            FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: c.value.size.width > 0 ? c.value.size.width : 1080,
-                height: c.value.size.height > 0 ? c.value.size.height : 1920,
-                child: VideoPlayer(c),
+          // Video sits under the poster until decoded frames are visible
+          if (showVideo)
+            _MountedVideoPlayer(
+              controller: c,
+              onSurfaceReady: widget.onSurfaceReady,
+            ),
+
+          // Thumbnail stays on top until playback has real frames
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _hidePoster ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                child: _ReelPoster(
+                  posterUrl: posterUrl,
+                  showLoading: (loading || !ready) && !_hidePoster,
+                ),
               ),
             ),
+          ),
 
           if (loading || (ready && c != null && c.value.isBuffering))
             const Positioned(
@@ -1118,14 +1685,26 @@ class _ReelPageState extends State<_ReelPage> {
             ),
 
           if (widget.isActive && ready && c != null && _userPaused)
-            const Center(
-              child: Icon(
-                Icons.play_circle_filled,
-                color: Colors.white60,
-                size: 72,
+            Center(
+              child: AnimatedOpacity(
+                opacity: _userPaused ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.black38,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size: 52,
+                  ),
+                ),
               ),
             ),
 
+          // Bottom gradient for caption legibility (Instagram-style)
           Positioned.fill(
             child: IgnorePointer(
               child: DecoratedBox(
@@ -1135,10 +1714,10 @@ class _ReelPageState extends State<_ReelPage> {
                     end: Alignment.bottomCenter,
                     colors: [
                       Colors.transparent,
-                      Colors.transparent,
-                      Colors.black.withOpacity(0.75),
+                      Colors.black.withOpacity(0.15),
+                      Colors.black.withOpacity(0.82),
                     ],
-                    stops: const [0, 0.38, 1],
+                    stops: const [0.45, 0.72, 1],
                   ),
                 ),
               ),
@@ -1146,93 +1725,150 @@ class _ReelPageState extends State<_ReelPage> {
           ),
 
           if (_showHeart)
-            const Center(
-              child: Icon(
-                Icons.favorite,
-                color: Colors.white,
-                size: 90,
-                shadows: [Shadow(blurRadius: 16, color: Colors.black54)],
+            Center(
+              child: TweenAnimationBuilder<double>(
+                key: ValueKey(_showHeart),
+                tween: Tween(begin: 0.6, end: 1.15),
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.elasticOut,
+                builder: (_, scale, child) => Transform.scale(scale: scale, child: child),
+                child: const Icon(
+                  Icons.favorite,
+                  color: Colors.white,
+                  size: 96,
+                  shadows: [Shadow(blurRadius: 20, color: Colors.black54)],
+                ),
               ),
             ),
 
-          // ── LEFT: username + follow + caption ─────────────────────────────
+          // Mute toggle — top-right overlay
+          if (widget.isActive)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 52,
+              right: 14,
+              child: _ReelCircleIconBtn(
+                icon: _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                size: 20,
+                onTap: _toggleMute,
+              ),
+            ),
+
+          // ── LEFT: avatar + username + follow + caption + audio chip ───────
           Positioned(
-            left: 12, right: 80, bottom: 28,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
+            left: 14,
+            right: 72,
+            bottom: MediaQuery.of(context).padding.bottom + 18,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Row(children: [
-                  if (post.username.isNotEmpty)
-                    Text('@${post.username}',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700,
-                        fontSize: 15, shadows: [Shadow(blurRadius: 3, color: Colors.black54)])),
-                  if (post.userId.isNotEmpty && post.userId != _uid) ...[
-                    const SizedBox(width: 10),
-                    _FollowBtn(targetUserId: post.userId),
-                  ],
-                ]),
-                if (post.caption.isNotEmpty) ...[
-                  const SizedBox(height: 5),
-                  Text(post.caption, maxLines: 2, overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.4,
-                      shadows: [Shadow(blurRadius: 3, color: Colors.black54)])),
-                ],
-              ]),
-          ),
-
-          // ── RIGHT: like / comment / share ─────────────────────────────────
-          Positioned(
-            right: 12, bottom: 80,
-            child: Column(children: [
-              // Like
-              _SideBtn(
-                icon: StreamBuilder<DocumentSnapshot>(
-                  stream: _uid != null
-                    ? FirebaseFirestore.instance
-                        .collection('posts').doc(post.id)
-                        .collection('likes').doc(_uid!).snapshots()
-                    : const Stream.empty(),
-                  builder: (_, snap) {
-                    final liked = snap.data?.exists ?? false;
-                    return Icon(liked ? Icons.favorite : Icons.favorite_border,
-                      color: liked ? const Color(0xFFED4956) : Colors.white, size: 30);
-                  },
+                _ReelAuthorStrip(
+                  userId: post.userId,
+                  fallbackUsername: post.username,
+                  currentUid: _uid,
                 ),
-                label: post.likeCount > 0 ? _fmtN(post.likeCount) : '',
-                onTap: _toggleLike,
-              ),
-              const SizedBox(height: 22),
-              // Comment
-              _SideBtn(
-                icon: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.white, size: 28),
-                label: post.commentCount > 0 ? _fmtN(post.commentCount) : '',
-                onTap: () {},
-              ),
-              const SizedBox(height: 22),
-              // Share
-              _SideBtn(
-                icon: const Icon(Icons.send_outlined, color: Colors.white, size: 27),
-                label: 'Share',
-                onTap: () {},
-              ),
-            ]),
+                if (post.caption.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  _ReelCaption(caption: post.caption),
+                ],
+                const SizedBox(height: 10),
+                const _ReelMusicChip(),
+              ],
+            ),
           ),
 
-          // Progress bar
+          // ── RIGHT: action rail (Instagram-style) ──────────────────────────
+          Positioned(
+            right: 10,
+            bottom: MediaQuery.of(context).padding.bottom + 24,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (post.userId.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 18),
+                    child: FutureBuilder<({String name, String photo})>(
+                      future: _ReelUserLookup.load(post.userId),
+                      builder: (_, snap) {
+                        final photo = snap.data?.photo ?? '';
+                        return Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: CircleAvatar(
+                            radius: 18,
+                            backgroundColor: Colors.white24,
+                            backgroundImage: photo.isNotEmpty
+                                ? CachedNetworkImageProvider(photo)
+                                : null,
+                            child: photo.isEmpty
+                                ? const Icon(Icons.person,
+                                    color: Colors.white70, size: 20)
+                                : null,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                _SideBtn(
+                  icon: StreamBuilder<DocumentSnapshot>(
+                    stream: _uid != null
+                        ? FirebaseFirestore.instance
+                            .collection('posts')
+                            .doc(post.id)
+                            .collection('likes')
+                            .doc(_uid!)
+                            .snapshots()
+                        : const Stream.empty(),
+                    builder: (_, snap) {
+                      final liked = snap.data?.exists ?? false;
+                      return Icon(
+                        liked ? Icons.favorite : Icons.favorite_border,
+                        color: liked ? const Color(0xFFED4956) : Colors.white,
+                        size: 32,
+                      );
+                    },
+                  ),
+                  label: post.likeCount > 0 ? _fmtN(post.likeCount) : '',
+                  onTap: _toggleLike,
+                ),
+                const SizedBox(height: 20),
+                _SideBtn(
+                  icon: const Icon(Icons.mode_comment_outlined,
+                      color: Colors.white, size: 30),
+                  label: post.commentCount > 0 ? _fmtN(post.commentCount) : '',
+                  onTap: () {},
+                ),
+                const SizedBox(height: 20),
+                _SideBtn(
+                  icon: Transform.rotate(
+                    angle: -0.35,
+                    child: const Icon(Icons.send_rounded,
+                        color: Colors.white, size: 28),
+                  ),
+                  label: '',
+                  onTap: () {},
+                ),
+                const SizedBox(height: 20),
+                _SideBtn(
+                  icon: const Icon(Icons.more_horiz_rounded,
+                      color: Colors.white, size: 30),
+                  label: '',
+                  onTap: () {},
+                ),
+              ],
+            ),
+          ),
+
+          // Thin progress bar at the very bottom
           if (widget.isActive && ready && c != null)
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
-              child: VideoProgressIndicator(
-                c,
-                allowScrubbing: false,
-                colors: const VideoProgressColors(
-                  playedColor: _kAccent,
-                  bufferedColor: Colors.white24,
-                  backgroundColor: Colors.white12,
-                ),
-                padding: EdgeInsets.zero,
-              ),
+              child: _ReelThinProgress(controller: c),
             ),
         ],
       ),
@@ -1252,15 +1888,28 @@ class _SideBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Column(children: [
-        icon,
-        if (label.isNotEmpty) ...[
-          const SizedBox(height: 3),
-          Text(label, style: const TextStyle(color: Colors.white, fontSize: 12,
-            fontWeight: FontWeight.w600,
-            shadows: [Shadow(blurRadius: 3, color: Colors.black54)])),
-        ],
-      ]),
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 52,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            icon,
+            if (label.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  shadows: _kReelTextShadow,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1324,18 +1973,37 @@ class _FollowBtnState extends State<_FollowBtn> {
     if (_checking) return const SizedBox.shrink();
     return GestureDetector(
       onTap: _toggle,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-        decoration: BoxDecoration(
-          color: _following ? Colors.transparent : Colors.white,
-          border: Border.all(color: _following ? Colors.white60 : Colors.white, width: 1.2),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Text(_following ? 'Following' : 'Follow',
-          style: TextStyle(
-            color: _following ? Colors.white : Colors.black,
-            fontSize: 13, fontWeight: FontWeight.w700)),
-      ),
+      child: _following
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white70, width: 1.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'Following',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            )
+          : Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'Follow',
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
     );
   }
 }

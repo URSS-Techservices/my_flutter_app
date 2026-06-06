@@ -27,7 +27,7 @@ class ExploreReelPrefetch {
 
     unawaited(cancel());
 
-    final owner = 'explore_reel:$postId';
+    final owner = 'explore_reel_viewer';
     if (!VideoDecoderBudget.instance.tryAcquire(owner)) return;
 
     _postId = postId;
@@ -60,6 +60,7 @@ class ExploreReelPrefetch {
       await c.initialize();
       await c.setLooping(true);
       await c.setVolume(0.0);
+      await c.pause();
     } catch (_) {
       final alt = fallbackUrl.trim();
       if (alt.isNotEmpty && alt != primaryUrl) {
@@ -79,6 +80,7 @@ class ExploreReelPrefetch {
           await c2.initialize();
           await c2.setLooping(true);
           await c2.setVolume(0.0);
+          await c2.pause();
           return;
         } catch (_) {
           try {

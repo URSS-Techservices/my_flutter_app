@@ -49,6 +49,7 @@ import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.da
 import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
 import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
 import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
+import 'package:halo/utils/shell_back.dart';
 
 // ===================================================================
 //  WELLNESS PROFILE PAGE
@@ -56,9 +57,13 @@ import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
 
 class WellnessProfilePage extends StatefulWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const WellnessProfilePage({Key? key, required this.profileUserId})
-      : super(key: key);
+  const WellnessProfilePage({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   State<WellnessProfilePage> createState() => _WellnessProfilePageState();
@@ -832,7 +837,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                 ),
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => popOrGoHome(
+                    context,
+                    onBackToHome: widget.onBackToHome,
+                  ),
                 ),
                 actions: _isOwnProfile
                     ? [
