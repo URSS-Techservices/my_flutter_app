@@ -12,4 +12,10 @@ abstract final class ProfileLayout {
   static const Color deepLavender = Color(0xFF6D4DB3);
   static const Color bg = Color(0xFFF4F1FB);
   static const Color chipBg = Color(0xFFEDE7F6);
+  static const Color cardBg = Colors.white;
+
+  /// High-contrast text on light lavender page background.
+  static const Color textPrimary = Color(0xFF1A1A2E);
+  static const Color textSecondary = Color(0xFF4A4A5E);
+  static const Color textMuted = Color(0xFF6B6B7B);
 }

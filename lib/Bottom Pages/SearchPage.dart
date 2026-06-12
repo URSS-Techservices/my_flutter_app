@@ -365,8 +365,10 @@ class _ScoredPost {
 
 class SearchPage extends StatefulWidget {
   final VoidCallback? onBackToHome;
+  final String? initialQuery;
 
-  const SearchPage({Key? key, this.onBackToHome}) : super(key: key);
+  const SearchPage({Key? key, this.onBackToHome, this.initialQuery})
+      : super(key: key);
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -403,6 +405,12 @@ class _SearchPageState extends State<SearchPage>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    final seed = widget.initialQuery?.trim();
+    if (seed != null && seed.isNotEmpty) {
+      _searchController.text = seed;
+      _query = seed;
+      _debouncedQuery = seed;
+    }
     _loadRecentSearches();
     _searchFocusNode.addListener(() {
       if (!mounted) return;

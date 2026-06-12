@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/widgets/follow_button.dart';
 
 class WellnessActionRow extends StatelessWidget {
@@ -71,7 +72,7 @@ class WellnessActionRow extends StatelessWidget {
                 style: GoogleFonts.poppins(
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
-                  color: Colors.black87,
+                  color: ProfileLayout.textPrimary,
                 ),
               ),
             ),

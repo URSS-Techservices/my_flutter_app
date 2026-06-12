@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/widgets/follow_button.dart';
 
 class AspirantActionRow extends StatelessWidget {
@@ -7,6 +8,7 @@ class AspirantActionRow extends StatelessWidget {
   final VoidCallback onToggleFollow;
   final VoidCallback onMessage;
   final VoidCallback onEditProfile;
+  final VoidCallback? onSavedPosts;
   final Color accentColor;
 
   const AspirantActionRow({
@@ -16,6 +18,7 @@ class AspirantActionRow extends StatelessWidget {
     required this.onToggleFollow,
     required this.onMessage,
     required this.onEditProfile,
+    this.onSavedPosts,
     required this.accentColor,
   });
 
@@ -24,19 +27,34 @@ class AspirantActionRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
       child: isOwnProfile
-          ? SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: onEditProfile,
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
+          ? Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: onEditProfile,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                      side: BorderSide(color: accentColor),
+                    ),
+                    child: const Text('Edit Profile'),
                   ),
-                  side: BorderSide(color: accentColor),
                 ),
-                child: const Text('Edit Profile'),
-              ),
+                if (onSavedPosts != null) ...[
+                  const SizedBox(width: 10),
+                  IconButton(
+                    onPressed: onSavedPosts,
+                    icon: Icon(Icons.bookmark_outline,
+                        color: ProfileLayout.deepLavender),
+                    tooltip: 'Saved posts',
+                    style: IconButton.styleFrom(
+                      backgroundColor: ProfileLayout.chipBg,
+                    ),
+                  ),
+                ],
+              ],
             )
           : Row(
               children: [

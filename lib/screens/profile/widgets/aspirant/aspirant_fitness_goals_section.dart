@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/models/aspirant_profile_model.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state_rich.dart';
 
 class AspirantFitnessGoalsSection extends StatelessWidget {
-  final List<String> goals;
+  final List<FitnessGoalItem> goals;
   final VoidCallback onAddGoal;
-  final ValueChanged<String> onEditGoal;
-  final ValueChanged<String> onDeleteGoal;
+  final ValueChanged<FitnessGoalItem> onEditGoal;
+  final ValueChanged<FitnessGoalItem> onDeleteGoal;
   final Color accentColor;
   final Color accentDarkColor;
 
@@ -29,12 +31,15 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [accentColor.withOpacity(0.1), accentDarkColor.withOpacity(0.05)],
+            colors: [
+              accentColor.withValues(alpha: 0.1),
+              accentDarkColor.withValues(alpha: 0.05),
+            ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: accentColor.withOpacity(0.3)),
+          border: Border.all(color: accentColor.withValues(alpha: 0.3)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -94,10 +99,11 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(
-                            color: accentColor.withOpacity(0.15),
+                            color: accentColor.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: Icon(Icons.fitness_center, color: accentColor, size: 20),
+                          child: Icon(Icons.fitness_center,
+                              color: accentColor, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -106,7 +112,7 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                goal,
+                                goal.name,
                                 style: GoogleFonts.poppins(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
@@ -116,15 +122,17 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
                               ),
                               const SizedBox(height: 4),
                               LinearProgressIndicator(
-                                value: 0.6,
+                                value: goal.progress.clamp(0.0, 1.0),
                                 backgroundColor: Colors.grey[200],
-                                valueColor: AlwaysStoppedAnimation<Color>(accentColor),
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(accentColor),
                               ),
                             ],
                           ),
                         ),
                         PopupMenuButton<String>(
-                          icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
+                          icon: Icon(Icons.more_vert,
+                              size: 18, color: Colors.grey[600]),
                           onSelected: (value) {
                             if (value == 'edit') {
                               onEditGoal(goal);
@@ -134,7 +142,8 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
                           },
                           itemBuilder: (context) => const [
                             PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                            PopupMenuItem(
+                                value: 'delete', child: Text('Delete')),
                           ],
                         ),
                       ],

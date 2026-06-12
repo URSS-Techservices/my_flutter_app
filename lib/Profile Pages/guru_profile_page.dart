@@ -41,11 +41,14 @@ import 'package:halo/screens/profile/core/profile_media_upload.dart';
 import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
 import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
 import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
-import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
 import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
 import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
 import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_profile_shell.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
+import 'package:halo/screens/profile/pages/follow_list_page.dart';
+import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsPage;
 
 // GURU SECTIONS
 import '../Sections/Guru Section/guru_booking_section.dart';
@@ -170,6 +173,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
   late final AnimationController _followAnimController;
   late final TabController _tabController;
+  final GlobalKey<GuruProfileShellState> _shellKey =
+      GlobalKey<GuruProfileShellState>();
 
   @override
   void initState() {
@@ -1040,6 +1045,32 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       followers: _followersCount,
       following: _followingCount,
       posts: _postsCount,
+      onTapFollowers: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.followers,
+            ),
+          ),
+        );
+      },
+      onTapFollowing: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.following,
+            ),
+          ),
+        );
+      },
+      onTapPosts: () {
+        final postsTabIndex = _isOwnProfile ? 0 : 1;
+        _shellKey.currentState?.jumpToTab(postsTabIndex);
+      },
     );
   }
 
@@ -1067,7 +1098,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               (b) => Chip(
             label: Text(
               b,
-              style: GoogleFonts.poppins(color: Colors.black87),
+              style: GoogleFonts.poppins(
+                color: ProfileLayout.textPrimary,
+                fontSize: 12,
+              ),
+            ),
+            backgroundColor: ProfileLayout.chipBg,
+            side: BorderSide(
+              color: ProfileLayout.deepLavender.withValues(alpha: 0.15),
             ),
           ),
         )
@@ -1108,81 +1146,164 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         const SizedBox(height: 12),
         _buildActionButtons(),
         _buildBioCard(),
+        const SizedBox(height: 4),
       ],
     );
   }
 
-  Widget _buildGuruInlineTabsRow() {
-    return AnimatedBuilder(
-      animation: _tabController,
-      builder: (context, _) {
-        final current = _tabController.index.clamp(0, 1);
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            children: [
-              Expanded(
-                child: _buildGuruInlineTabChip(
-                  label: 'Profile',
-                  icon: Icons.grid_on_outlined,
-                  selected: current == 0,
-                  onTap: () => _tabController.animateTo(0),
+  List<Widget> _buildAppBarActions() {
+    if (!_isOwnProfile) return [];
+    return [
+      IconButton(
+        icon: const Icon(Icons.add_box_outlined, color: Colors.white),
+        onPressed: _openGalleryForPost,
+      ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        onSelected: (value) async {
+          if (value == 'Edit Profile') {
+            await _handleEditProfile();
+          } else if (value == 'Privacy') {
+            if (_currentUser == null) return;
+            final updated = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (ctx) => PrivacySettingsPage(
+                  initialPrivacy: _isPrivate,
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildGuruInlineTabChip(
-                  label: 'Business',
-                  icon: Icons.dashboard_outlined,
-                  selected: current == 1,
-                  onTap: () => _tabController.animateTo(1),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+            );
+            if (updated != null) {
+              try {
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'isPrivate': updated});
+                setState(() => _isPrivate = updated);
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Failed to update privacy');
+              }
+            }
+          } else if (value == 'Settings') {
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (ctx) => SettingsPage()),
+            );
+            if (result == 'logout') await _signOut();
+          } else if (value == 'Logout') {
+            await _signOut();
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(value: 'Settings', child: Text('Settings')),
+          PopupMenuItem(value: 'Privacy', child: Text('Privacy')),
+          PopupMenuItem(value: 'Edit Profile', child: Text('Edit Profile')),
+          PopupMenuItem(value: 'Logout', child: Text('Logout')),
+        ],
+      ),
+    ];
+  }
+
+  Widget _buildProfileTabContent() {
+    return ColoredBox(
+      color: ProfileLayout.bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 16),
+          if (_isOwnProfile) ...[
+            _buildCTAButtons(),
+            const SizedBox(height: 12),
+            _buildBusinessFeaturesShortcut(),
+            const SizedBox(height: 24),
+          ],
+          _buildPopularProductsSection(),
+          const SizedBox(height: 24),
+          _buildLastWorkoutsSection(),
+          const SizedBox(height: 24),
+          if (_isOwnProfile) _buildRecentPostsSection(),
+          if (_isOwnProfile) const SizedBox(height: 24),
+          _buildSpecializationsSection(),
+          const SizedBox(height: 24),
+          _buildReviewsSection(),
+          const SizedBox(height: 24),
+          _buildSocialLinksSection(),
+          const SizedBox(height: 24),
+          _buildTestimonialsSection(),
+          _buildCertificationsDisplaySection(),
+          _buildTrainingProgramsShowcase(),
+          _buildSuccessStoriesSection(),
+          _buildVideoTutorialsPreview(),
+          const SizedBox(height: 24),
+          _buildFooter(),
+          const SizedBox(height: 40),
+        ],
+      ),
     );
   }
 
-  Widget _buildGuruInlineTabChip({
-    required String label,
-    required IconData icon,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-        decoration: BoxDecoration(
-          color: selected ? ProfileLayout.deepLavender : Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: selected ? ProfileLayout.deepLavender : Colors.grey.shade300,
+  Widget _buildBusinessTabContent() {
+    return ColoredBox(
+      color: ProfileLayout.bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 8),
+          GuruBookingSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            bookingSettings: _bookingSettings,
+            upcomingSessions: _upcomingSessions,
+            pastSessions: _pastSessions,
+            onManageSlots: _isOwnProfile ? _handleManageSlots : null,
+            onBookNow: !_isOwnProfile ? _handleBookNow : null,
           ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 16,
-              color: selected ? Colors.white : Colors.black87,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: selected ? Colors.white : Colors.black87,
-              ),
-            ),
-          ],
-        ),
+          GuruClassesSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            classes: _classes,
+            specialties: _specialties,
+            onManage: _isOwnProfile ? _handleManageClasses : null,
+          ),
+          GuruEarningsSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            earningsSummary: _earningsSummary,
+            recentEarnings: _recentEarnings,
+            onViewPayoutDetails:
+                _isOwnProfile ? _handleViewPayoutDetails : null,
+          ),
+          GuruStudentsSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            students: _students,
+          ),
+          GuruAnalyticsSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            analytics: _analytics,
+          ),
+          const SizedBox(height: 80),
+        ],
       ),
+    );
+  }
+
+  Widget _buildGuruPostsTab() {
+    return AspirantPostsTab(
+      profileUserId: widget.profileUserId,
+      isPrivate: _isPrivate,
+      isFollowing: _isFollowing,
+      isOwnProfile: _isOwnProfile,
+      imageResolver: profilePostImageUrlFromMap,
+      onTapPost: (postId) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PostDetailsPage(postId: postId),
+          ),
+        );
+      },
     );
   }
 
@@ -1191,234 +1312,62 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // ===================================================================
   @override
   Widget build(BuildContext context) {
-    final baseTheme = Theme.of(context);
-    final textTheme = baseTheme.textTheme.apply(
-      bodyColor: Colors.black87,
-      displayColor: Colors.black87,
-    );
+    final tabs = _isOwnProfile
+        ? const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Business'),
+          ]
+        : const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Posts'),
+          ];
 
-    return Theme(
-      data: baseTheme.copyWith(textTheme: textTheme),
-      child: Scaffold(
-        backgroundColor: ProfileLayout.bg,
-        body: ProfileLoadingGate(
-          loading: _isLoading,
-          child: GestureDetector(
+    final tabViews = _isOwnProfile
+        ? [
+            _buildProfileTabContent(),
+            _buildBusinessTabContent(),
+          ]
+        : [
+            _buildProfileTabContent(),
+            _buildGuruPostsTab(),
+          ];
+
+    return Scaffold(
+      backgroundColor: ProfileLayout.bg,
+      body: DefaultTextStyle(
+        style: GoogleFonts.poppins(
+          color: ProfileLayout.textPrimary,
+          fontSize: 14,
+        ),
+        child: GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onHorizontalDragEnd: _isOwnProfile
-              ? (details) {
-                  final vx = details.primaryVelocity ?? 0;
-                  if (vx.abs() < 250) return;
-                  if (vx < 0 &&
-                      _tabController.index < _tabController.length - 1) {
-                    _tabController.animateTo(_tabController.index + 1);
-                  } else if (vx > 0 && _tabController.index > 0) {
-                    _tabController.animateTo(_tabController.index - 1);
-                  }
-                }
-              : null,
-          child: NestedScrollView(
-          headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
-            return [
-              SliverAppBar(
-                pinned: true,
-                expandedHeight: ProfileLayout.coverHeight,
-                backgroundColor: ProfileLayout.lavender,
-                elevation: 0,
-                bottom: _isOwnProfile
-                    ? PreferredSize(
-                        preferredSize: const Size.fromHeight(58),
-                        child: Container(
-                          color: Colors.white,
-                          child: TabBar(
-                            controller: _tabController,
-                            indicatorColor: ProfileLayout.lavender,
-                            indicatorWeight: 3,
-                            labelColor: Colors.black87,
-                            unselectedLabelColor: Colors.black54,
-                            labelStyle: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            unselectedLabelStyle: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.normal,
-                            ),
-                            tabs: const [
-                              Tab(
-                                icon: Icon(Icons.grid_on_outlined, size: 20),
-                                text: 'Profile',
-                              ),
-                              Tab(
-                                icon: Icon(Icons.dashboard_outlined, size: 20),
-                                text: 'Business',
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : null,
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => popOrGoHome(
-                    context,
-                    onBackToHome: widget.onBackToHome,
-                  ),
-                ),
-                actions: [
-                  if (_isOwnProfile) ...[
-                    IconButton(
-                      icon: const Icon(Icons.add_box_outlined),
-                      onPressed: _openGalleryForPost,
-                    ),
-                    PopupMenuButton<String>(
-                      onSelected: (value) async {
-                        if (value == 'Edit Profile') {
-                          await _handleEditProfile();
-                        } else if (value == 'Privacy') {
-                          if (_currentUser == null) return;
-                          final updated = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (ctx) => PrivacySettingsPage(
-                                initialPrivacy: _isPrivate,
-                              ),
-                            ),
-                          );
-                          if (updated != null) {
-                            try {
-                              await _firestore
-                                  .collection('users')
-                                  .doc(_currentUser!.uid)
-                                  .update({'isPrivate': updated});
-                              setState(() => _isPrivate = updated);
-                            } catch (e) {
-                              Fluttertoast.showToast(
-                                  msg: 'Failed to update privacy');
-                            }
-                          }
-                        } else if (value == 'Settings') {
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (ctx) => SettingsPage(),
-                            ),
-                          );
-                          if (result == 'logout') {
-                            await _signOut();
-                          }
-                        } else if (value == 'Logout') {
-                          await _signOut();
-                        }
-                      },
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: 'Settings',
-                          child: Text('Settings'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Privacy',
-                          child: Text('Privacy'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Edit Profile',
-                          child: Text('Edit Profile'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Logout',
-                          child: Text('Logout'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-                flexibleSpace: FlexibleSpaceBar(
-                  background: ProfileFlexibleSpaceCoverStack(
-                    cover: _coverWidget(context),
-                  ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: _buildProfileHeaderSection(),
-              ),
-              if (_isOwnProfile)
-                SliverToBoxAdapter(
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 10),
-                      _buildGuruInlineTabsRow(),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-            ];
+          onHorizontalDragEnd: (details) {
+            final vx = details.primaryVelocity ?? 0;
+            if (vx.abs() < 250) return;
+            if (vx < 0 && _tabController.index < _tabController.length - 1) {
+              _tabController.animateTo(_tabController.index + 1);
+            } else if (vx > 0 && _tabController.index > 0) {
+              _tabController.animateTo(_tabController.index - 1);
+            }
           },
-          body: _isOwnProfile
-              ? TabBarView(
-                  controller: _tabController,
-                  physics: const BouncingScrollPhysics(),
-                  children: [
-                    _buildFirstTab(),
-                    _buildSecondTab(),
-                  ],
-                )
-              : _buildFirstTab(),
-        ),
-        ),
-        ),
-      ),
-    );
-  }
-
-  // ===================================================================
-  //  TAB CONTENT BUILDERS
-  // ===================================================================
-  Widget _buildFirstTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 20),
-              if (_isOwnProfile) ...[
-                _buildCTAButtons(),
-                const SizedBox(height: 12),
-                _buildBusinessFeaturesShortcut(),
-                const SizedBox(height: 24),
-              ],
-              // Popular Products Section (Figma Design)
-              _buildPopularProductsSection(),
-              const SizedBox(height: 24),
-              // Last Workouts Section (Figma Design)
-              _buildLastWorkoutsSection(),
-              const SizedBox(height: 24),
-              // Recent Posts (Figma Design - Full Cards)
-              _buildRecentPostsSection(),
-              const SizedBox(height: 24),
-              // Specializations (Figma Design - Red Background)
-              _buildSpecializationsSection(),
-              const SizedBox(height: 24),
-              // Reviews & Ratings (Figma Design - Grey Background)
-              _buildReviewsSection(),
-              const SizedBox(height: 24),
-              // Social Links (Figma Design - YouTube, Apple Music, Instagram)
-              _buildSocialLinksSection(),
-              const SizedBox(height: 24),
-              // New Professional Features for Gurus
-              _buildTestimonialsSection(),
-              _buildCertificationsDisplaySection(),
-              _buildTrainingProgramsShowcase(),
-              _buildSuccessStoriesSection(),
-              _buildVideoTutorialsPreview(),
-              const SizedBox(height: 24),
-              // Footer
-              _buildFooter(),
-              const SizedBox(height: 40),
-            ],
+          child: GuruProfileShell(
+            key: _shellKey,
+            loading: _isLoading,
+            onBack: () => popOrGoHome(
+              context,
+              onBackToHome: widget.onBackToHome,
+            ),
+            cover: ProfileFlexibleSpaceCoverStack(
+              cover: _coverWidget(context),
+            ),
+            appBarActions: _buildAppBarActions(),
+            header: _buildProfileHeaderSection(),
+            tabController: _tabController,
+            tabs: tabs,
+            tabViews: tabViews,
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -5241,59 +5190,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => _AllVideosPage(tutorials: tutorials),
-    );
-  }
-
-  Widget _buildSecondTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 8),
-              GuruBookingSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                bookingSettings: _bookingSettings,
-                upcomingSessions: _upcomingSessions,
-                pastSessions: _pastSessions,
-                onManageSlots:
-                _isOwnProfile ? _handleManageSlots : null,
-                onBookNow: !_isOwnProfile ? _handleBookNow : null,
-              ),
-              GuruClassesSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                classes: _classes,
-                specialties: _specialties,
-                onManage:
-                _isOwnProfile ? _handleManageClasses : null,
-              ),
-              GuruEarningsSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                earningsSummary: _earningsSummary,
-                recentEarnings: _recentEarnings,
-                onViewPayoutDetails: _isOwnProfile
-                    ? _handleViewPayoutDetails
-                    : null,
-              ),
-              GuruStudentsSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                students: _students,
-              ),
-              GuruAnalyticsSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                analytics: _analytics,
-              ),
-              const SizedBox(height: 80),
-            ],
-          ),
-        ),
-      ],
     );
   }
 

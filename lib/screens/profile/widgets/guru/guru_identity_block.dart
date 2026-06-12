@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/screens/profile/widgets/common/profile_identity_layout.dart';
 import 'package:halo/screens/profile/widgets/common/profile_online_dot.dart';
 
@@ -36,6 +37,7 @@ class GuruIdentityBlock extends StatelessWidget {
     final title = fullName.isNotEmpty
         ? fullName
         : (username.isNotEmpty ? '@$username' : 'Guru');
+
     return ProfileIdentityLayout(
       avatar: avatar,
       details: Column(
@@ -49,7 +51,7 @@ class GuruIdentityBlock extends StatelessWidget {
                   style: GoogleFonts.poppins(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
-                    color: Colors.black87,
+                    color: ProfileLayout.textPrimary,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -60,26 +62,48 @@ class GuruIdentityBlock extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
-          Text(
-            username.isNotEmpty ? '@$username' : '',
-            style: GoogleFonts.poppins(color: Colors.black87),
-          ),
+          if (username.isNotEmpty)
+            Text(
+              '@$username',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: ProfileLayout.textSecondary,
+              ),
+            ),
           const SizedBox(height: 6),
           if (primaryCategory.isNotEmpty)
-            Text(
-              primaryCategory,
-              style: GoogleFonts.poppins(fontSize: 13, color: Colors.black87),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: ProfileLayout.chipBg,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: ProfileLayout.deepLavender.withValues(alpha: 0.2),
+                ),
+              ),
+              child: Text(
+                primaryCategory,
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: ProfileLayout.deepLavender,
+                ),
+              ),
             ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           Row(
             children: [
               if (city.isNotEmpty) ...[
-                const Icon(Icons.location_on_outlined, size: 14, color: Colors.black87),
+                Icon(Icons.location_on_outlined,
+                    size: 14, color: ProfileLayout.textMuted),
                 const SizedBox(width: 4),
                 Flexible(
                   child: Text(
                     city,
-                    style: GoogleFonts.poppins(fontSize: 12, color: Colors.black87),
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: ProfileLayout.textSecondary,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -87,12 +111,16 @@ class GuruIdentityBlock extends StatelessWidget {
               ],
               if (experienceYears != null) ...[
                 const SizedBox(width: 12),
-                const Icon(Icons.school_outlined, size: 14, color: Colors.black87),
+                Icon(Icons.school_outlined,
+                    size: 14, color: ProfileLayout.textMuted),
                 const SizedBox(width: 4),
                 Flexible(
                   child: Text(
-                    '${experienceYears}+ yrs exp',
-                    style: GoogleFonts.poppins(fontSize: 12, color: Colors.black87),
+                    '$experienceYears+ yrs exp',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: ProfileLayout.textSecondary,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -104,37 +132,49 @@ class GuruIdentityBlock extends StatelessWidget {
           if (languages.isNotEmpty)
             Text(
               'Languages: ${languages.join(', ')}',
-              style: GoogleFonts.poppins(fontSize: 12, color: Colors.black87),
-              maxLines: 1,
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: ProfileLayout.textSecondary,
+              ),
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
           if (trainingStyle.isNotEmpty)
             Text(
               'Training style: $trainingStyle',
-              style: GoogleFonts.poppins(fontSize: 12, color: Colors.black87),
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: ProfileLayout.textSecondary,
+              ),
             ),
           const SizedBox(height: 6),
           Row(
             children: [
               if (rating > 0 || reviewCount > 0) ...[
-                Icon(Icons.star, color: Colors.amber[700], size: 18),
+                Icon(Icons.star_rounded, color: Colors.amber.shade700, size: 18),
                 const SizedBox(width: 4),
                 Text(
                   rating.toStringAsFixed(1),
                   style: GoogleFonts.poppins(
                     fontWeight: FontWeight.w600,
-                    color: Colors.black87,
+                    color: ProfileLayout.textPrimary,
                   ),
                 ),
                 const SizedBox(width: 4),
                 Text(
                   '($reviewCount reviews)',
-                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.black54),
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: ProfileLayout.textSecondary,
+                  ),
                 ),
               ] else
                 Text(
                   'No ratings yet',
-                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.black54),
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: ProfileLayout.textMuted,
+                  ),
                 ),
             ],
           ),

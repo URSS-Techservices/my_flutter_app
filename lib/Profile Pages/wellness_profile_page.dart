@@ -33,6 +33,11 @@ import 'package:halo/screens/profile/widgets/wellness/wellness_identity_block.da
 import 'package:halo/screens/profile/widgets/wellness/wellness_recent_posts_section.dart';
 import 'package:halo/screens/profile/widgets/wellness/wellness_action_row.dart';
 import 'package:halo/screens/profile/widgets/wellness/wellness_bio_card.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_profile_shell.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
+import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
+import 'package:halo/screens/profile/pages/follow_list_page.dart';
+import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsPage;
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
@@ -48,7 +53,6 @@ import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
 import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
 import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
-import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
 import 'package:halo/utils/shell_back.dart';
 
 // ===================================================================
@@ -80,6 +84,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   bool _isOwnProfile = false;
   bool _isFollowing = false;
   bool _isLoading = true;
+  bool _isPrivate = false;
+
+  final GlobalKey<WellnessProfileShellState> _shellKey =
+      GlobalKey<WellnessProfileShellState>();
 
   // -------------------- PROFILE DATA --------------------
   String _businessName = '';
@@ -173,6 +181,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         _rating = (data['rating'] is num) ? (data['rating'] as num).toDouble() : 0.0;
         _reviewCount = data['reviewCount'] ?? 0;
         _isOnline = data['isOnline'] ?? false;
+        _isPrivate = (data['isPrivate'] ?? false) as bool;
 
         // Services
         _services = List<String>.from(data['services'] ?? []);
@@ -486,14 +495,12 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           isOwnProfile: _isOwnProfile,
           onEditCategory: _editCategory,
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 10),
         _buildStatsBar(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         _buildActionButtons(),
-        if (_bio.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          _buildBioCard(),
-        ],
+        _buildBioCard(),
+        const SizedBox(height: 4),
       ],
     );
   }
@@ -504,8 +511,34 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       following: _followingCount,
       posts: _postsCount,
       likes: _likesCount,
-      cardColor: _cardColor,
+      cardColor: ProfileLayout.cardBg,
       lavenderAccent: ProfileLayout.lavender,
+      onTapFollowers: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.followers,
+            ),
+          ),
+        );
+      },
+      onTapFollowing: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.following,
+            ),
+          ),
+        );
+      },
+      onTapPosts: () {
+        final postsTabIndex = _isOwnProfile ? 0 : 1;
+        _shellKey.currentState?.jumpToTab(postsTabIndex);
+      },
     );
   }
 
@@ -540,10 +573,66 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     return WellnessBioCard(
       bio: _bio,
       isOwnProfile: _isOwnProfile,
-      cardColor: _cardColor,
-      accentColor: ProfileLayout.lavender,
       onEditBio: _editBio,
     );
+  }
+
+  List<Widget> _buildAppBarActions() {
+    if (!_isOwnProfile) return [];
+    return [
+      IconButton(
+        icon: const Icon(Icons.add_box_outlined, color: Colors.white),
+        onPressed: _openPostCreation,
+      ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        onSelected: (value) {
+          if (value == 'Edit Profile') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditProfilePage(
+                  initialName: _businessName,
+                  initialUsername: _username,
+                  initialBio: _bio,
+                  initialGender: '',
+                  initialprofessiontype: '',
+                ),
+              ),
+            ).then((_) {
+              if (!mounted) return;
+              _loadProfileData();
+            });
+          } else if (value == 'Settings') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => SettingsPage(),
+              ),
+            ).then((result) async {
+              if (result == 'logout') {
+                await _auth.signOut();
+                if (!mounted) return;
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => LoginPage()),
+                );
+              }
+            });
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(
+            value: 'Edit Profile',
+            child: Text('Edit Profile'),
+          ),
+          PopupMenuItem(
+            value: 'Settings',
+            child: Text('Settings'),
+          ),
+        ],
+      ),
+    ];
   }
 
   // ===================================================================
@@ -771,20 +860,54 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   // ===================================================================
   //  BUILD
   // ===================================================================
+  Widget _buildWellnessPostsTab() {
+    return AspirantPostsTab(
+      profileUserId: widget.profileUserId,
+      isPrivate: _isPrivate,
+      isFollowing: _isFollowing,
+      isOwnProfile: _isOwnProfile,
+      imageResolver: profilePostImageUrlFromMap,
+      onTapPost: (postId) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PostDetailsPage(postId: postId),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: Theme.of(context).copyWith(
-        textTheme: Theme.of(context).textTheme.apply(
-          bodyColor: Colors.black87,
-          displayColor: Colors.black87,
+    final tabs = _isOwnProfile
+        ? const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Business'),
+          ]
+        : const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Posts'),
+          ];
+
+    final tabViews = _isOwnProfile
+        ? [
+            _buildProfileTabContent(),
+            _buildBusinessTabContent(),
+          ]
+        : [
+            _buildProfileTabContent(),
+            _buildWellnessPostsTab(),
+          ];
+
+    return Scaffold(
+      backgroundColor: ProfileLayout.bg,
+      body: DefaultTextStyle(
+        style: GoogleFonts.poppins(
+          color: ProfileLayout.textPrimary,
+          fontSize: 14,
         ),
-      ),
-      child: Scaffold(
-        backgroundColor: ProfileLayout.bg,
-        body: ProfileLoadingGate(
-          loading: _isLoading,
-          child: GestureDetector(
+        child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onHorizontalDragEnd: (details) {
             final vx = details.primaryVelocity ?? 0;
@@ -795,136 +918,22 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
               _tabController.animateTo(_tabController.index - 1);
             }
           },
-          child: NestedScrollView(
-          headerSliverBuilder:
-              (BuildContext context, bool innerBoxIsScrolled) {
-            return [
-              SliverAppBar(
-                pinned: true,
-                expandedHeight: ProfileLayout.coverHeight,
-                backgroundColor: ProfileLayout.lavender,
-                elevation: 0,
-                bottom: PreferredSize(
-                  preferredSize: const Size.fromHeight(58),
-                  child: Container(
-                    color: Colors.white,
-                    child: TabBar(
-                      controller: _tabController,
-                      indicatorColor: ProfileLayout.lavender,
-                      indicatorWeight: 3,
-                      labelColor: Colors.black87,
-                      unselectedLabelColor: Colors.black54,
-                      labelStyle: GoogleFonts.poppins(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      unselectedLabelStyle: GoogleFonts.poppins(
-                        fontSize: 14,
-                        fontWeight: FontWeight.normal,
-                      ),
-                      tabs: const [
-                        Tab(
-                          icon: Icon(Icons.grid_on_outlined, size: 20),
-                          text: 'Profile',
-                        ),
-                        Tab(
-                          icon: Icon(Icons.dashboard_outlined, size: 20),
-                          text: 'Business',
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => popOrGoHome(
-                    context,
-                    onBackToHome: widget.onBackToHome,
-                  ),
-                ),
-                actions: _isOwnProfile
-                    ? [
-                  IconButton(
-                    icon: const Icon(Icons.add_box_outlined),
-                    onPressed: _openPostCreation,
-                  ),
-
-                  /// ⚡ OPTIMIZED POPUP MENU
-                  PopupMenuButton<String>(
-                    onSelected: (value) {
-                      if (value == 'Edit Profile') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => EditProfilePage(
-                              initialName: _businessName,
-                              initialUsername: _username,
-                              initialBio: _bio,
-                              initialGender: '',
-                              initialprofessiontype: '',
-                            ),
-                          ),
-                        ).then((_) {
-                          // reload AFTER coming back, non-blocking
-                          if (!mounted) return;
-                          _loadProfileData();
-                        });
-                      } else if (value == 'Settings') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => SettingsPage(),
-                          ),
-                        ).then((result) async {
-                          if (result == 'logout') {
-                            await _auth.signOut();
-                            if (!mounted) return;
-
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => LoginPage(),
-                              ),
-                            );
-                          }
-                        });
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: 'Edit Profile',
-                        child: Text('Edit Profile'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Settings',
-                        child: Text('Settings'),
-                      ),
-                    ],
-                  ),
-                ]
-                    : [],
-                flexibleSpace: FlexibleSpaceBar(
-                  background: ProfileFlexibleSpaceCoverStack(
-                    cover: _coverWidget(context),
-                  ),
-                ),
-              ),
-
-              SliverToBoxAdapter(
-                child: _buildProfileHeaderSection(),
-              ),
-            ];
-          },
-          body: TabBarView(
-            controller: _tabController,
-            physics: const BouncingScrollPhysics(),
-            children: [
-              _buildFirstTab(),
-              _buildSecondTab(),
-            ],
+          child: WellnessProfileShell(
+            key: _shellKey,
+            loading: _isLoading,
+            onBack: () => popOrGoHome(
+              context,
+              onBackToHome: widget.onBackToHome,
+            ),
+            cover: ProfileFlexibleSpaceCoverStack(
+              cover: _coverWidget(context),
+            ),
+            appBarActions: _buildAppBarActions(),
+            header: _buildProfileHeaderSection(),
+            tabController: _tabController,
+            tabs: tabs,
+            tabViews: tabViews,
           ),
-        ),
-        ),
         ),
       ),
     );
@@ -934,86 +943,74 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   // ===================================================================
   //  TAB CONTENT BUILDERS
   // ===================================================================
-  Widget _buildFirstTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 20),
-              // Popular Products Section
-              _buildPopularProductsSection(),
-              const SizedBox(height: 24),
-              // Featured Staff Section
-              _buildFeaturedStaffSection(),
-              const SizedBox(height: 24),
-              // Recent Posts Section
-              _buildRecentPostsSection(),
-              const SizedBox(height: 24),
-              // Fitness Events Section
-              _buildFitnessEventsSection(),
-              const SizedBox(height: 24),
-              // Location Section
-              _buildLocationSection(),
-              const SizedBox(height: 24),
-              // Services & Availability Section
-              _buildServicesAndAvailabilitySection(),
-              const SizedBox(height: 24),
-              // Reviews Section
-              _buildReviewsSection(),
-              const SizedBox(height: 24),
-              // Social Links Section
-              _buildSocialLinksSection(),
-              const SizedBox(height: 24),
-              // New Professional Features for Wellness
-              _buildFacilityGallerySection(),
-              _buildAmenitiesShowcaseSection(),
-              _buildMembershipPlansSection(),
-              _buildSpecialOffersSection(),
-              _buildFacilityStatusSection(),
-              _buildAwardsCertificationsSection(),
-              const SizedBox(height: 40),
-            ],
+  Widget _buildProfileTabContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 20),
+        _buildPopularProductsSection(),
+        const SizedBox(height: 24),
+        _buildFeaturedStaffSection(),
+        const SizedBox(height: 24),
+        if (_isOwnProfile) ...[
+          _buildRecentPostsSection(),
+          const SizedBox(height: 24),
+        ],
+        _buildFitnessEventsSection(),
+        const SizedBox(height: 24),
+        _buildLocationSection(),
+        const SizedBox(height: 24),
+        _buildServicesAndAvailabilitySection(),
+        const SizedBox(height: 24),
+        _buildReviewsSection(),
+        const SizedBox(height: 24),
+        _buildSocialLinksSection(),
+        const SizedBox(height: 24),
+        if (!_isOwnProfile) ...[
+          WellnessBookingSection(
+            wellnessUserId: widget.profileUserId,
+            isOwner: false,
           ),
-        ),
+          const SizedBox(height: 24),
+        ],
+        _buildFacilityGallerySection(),
+        _buildAmenitiesShowcaseSection(),
+        _buildMembershipPlansSection(),
+        _buildSpecialOffersSection(),
+        _buildFacilityStatusSection(),
+        _buildAwardsCertificationsSection(),
+        const SizedBox(height: 40),
       ],
     );
   }
 
-  Widget _buildSecondTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 8),
-              WellnessProductsSection(
-                wellnessUserId: widget.profileUserId,
-                isOwner: _isOwnProfile,
-              ),
-              WellnessServicesSection(
-                wellnessUserId: widget.profileUserId,
-                isOwner: _isOwnProfile,
-              ),
-              WellnessBookingSection(
-                wellnessUserId: widget.profileUserId,
-                isOwner: _isOwnProfile,
-              ),
-              WellnessReviewsSection(
-                wellnessUserId: widget.profileUserId,
-              ),
-              if (_isOwnProfile) ...[
-                const SizedBox(height: 16),
-                WellnessAnalyticsSection(
-                  wellnessUserId: widget.profileUserId,
-                ),
-              ],
-              const SizedBox(height: 80),
-            ],
-          ),
+  Widget _buildBusinessTabContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        WellnessProductsSection(
+          wellnessUserId: widget.profileUserId,
+          isOwner: _isOwnProfile,
         ),
+        WellnessServicesSection(
+          wellnessUserId: widget.profileUserId,
+          isOwner: _isOwnProfile,
+        ),
+        WellnessBookingSection(
+          wellnessUserId: widget.profileUserId,
+          isOwner: _isOwnProfile,
+        ),
+        WellnessReviewsSection(
+          wellnessUserId: widget.profileUserId,
+        ),
+        if (_isOwnProfile) ...[
+          const SizedBox(height: 16),
+          WellnessAnalyticsSection(
+            wellnessUserId: widget.profileUserId,
+          ),
+        ],
+        const SizedBox(height: 80),
       ],
     );
   }

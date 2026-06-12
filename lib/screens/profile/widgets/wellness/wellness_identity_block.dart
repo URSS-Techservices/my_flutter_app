@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/screens/profile/widgets/common/profile_identity_layout.dart';
 
 class WellnessIdentityBlock extends StatelessWidget {
@@ -34,18 +35,19 @@ class WellnessIdentityBlock extends StatelessWidget {
             style: GoogleFonts.poppins(
               fontSize: 20,
               fontWeight: FontWeight.bold,
-              color: Colors.black87,
+              color: ProfileLayout.textPrimary,
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            username.isNotEmpty ? '@$username' : '',
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              color: const Color(0xFF8E8E8E),
-              fontWeight: FontWeight.w400,
+          if (username.isNotEmpty)
+            Text(
+              '@$username',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: ProfileLayout.textSecondary,
+                fontWeight: FontWeight.w400,
+              ),
             ),
-          ),
           const SizedBox(height: 6),
           _CategoryChip(
             category: category,
@@ -56,14 +58,15 @@ class WellnessIdentityBlock extends StatelessWidget {
           if (location.isNotEmpty)
             Row(
               children: [
-                const Icon(Icons.location_on_outlined, size: 14, color: Color(0xFF8E8E8E)),
+                Icon(Icons.location_on_outlined,
+                    size: 14, color: ProfileLayout.textMuted),
                 const SizedBox(width: 4),
                 Flexible(
                   child: Text(
                     location,
                     style: GoogleFonts.poppins(
                       fontSize: 12,
-                      color: const Color(0xFF8E8E8E),
+                      color: ProfileLayout.textSecondary,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -89,17 +92,17 @@ class _CategoryChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const lavender = Color(0xFFA58CE3);
-    const deepLavender = Color(0xFF5B3FA3);
     if (category.isNotEmpty) {
       return GestureDetector(
         onTap: isOwnProfile ? onEditCategory : null,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-            color: lavender.withOpacity(0.15),
+            color: ProfileLayout.chipBg,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: lavender.withOpacity(0.3), width: 1),
+            border: Border.all(
+              color: ProfileLayout.deepLavender.withValues(alpha: 0.2),
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -110,7 +113,7 @@ class _CategoryChip extends StatelessWidget {
                   style: GoogleFonts.poppins(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: deepLavender,
+                    color: ProfileLayout.deepLavender,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -118,7 +121,7 @@ class _CategoryChip extends StatelessWidget {
               ),
               if (isOwnProfile) ...[
                 const SizedBox(width: 4),
-                const Icon(Icons.edit, size: 12, color: lavender),
+                Icon(Icons.edit, size: 12, color: ProfileLayout.lavender),
               ],
             ],
           ),
@@ -131,9 +134,11 @@ class _CategoryChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: lavender.withOpacity(0.15),
+          color: ProfileLayout.chipBg,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: lavender.withOpacity(0.3), width: 1),
+          border: Border.all(
+            color: ProfileLayout.deepLavender.withValues(alpha: 0.2),
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -143,11 +148,11 @@ class _CategoryChip extends StatelessWidget {
               style: GoogleFonts.poppins(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: deepLavender,
+                color: ProfileLayout.deepLavender,
               ),
             ),
             const SizedBox(width: 4),
-            const Icon(Icons.add, size: 12, color: lavender),
+            Icon(Icons.add, size: 12, color: ProfileLayout.lavender),
           ],
         ),
       ),

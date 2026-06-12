@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/widgets/follow_button.dart';
 
 class GuruActionRow extends StatelessWidget {
@@ -35,11 +36,15 @@ class GuruActionRow extends StatelessWidget {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(30),
                   ),
-                  side: BorderSide(color: lavender),
+                  side: BorderSide(color: deepLavender),
+                  foregroundColor: deepLavender,
                 ),
-                child: const Text(
+                child: Text(
                   'Edit Profile',
-                  style: TextStyle(color: Colors.black87),
+                  style: TextStyle(
+                    color: deepLavender,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             )
@@ -56,8 +61,11 @@ class GuruActionRow extends StatelessWidget {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: onMessage,
-                    icon: const Icon(Icons.message_outlined, color: Colors.black87),
-                    label: const Text('Message', style: TextStyle(color: Colors.black87)),
+                    icon: Icon(Icons.message_outlined, color: deepLavender),
+                    label: Text(
+                      'Message',
+                      style: TextStyle(color: ProfileLayout.textPrimary),
+                    ),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(

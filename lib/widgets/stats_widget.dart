@@ -17,12 +17,19 @@ class StatsWidget extends StatelessWidget {
       children: [
         Text(
           value,
-          style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 18),
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w700,
+            fontSize: 18,
+            color: const Color(0xFF1A1A2E),
+          ),
         ),
         const SizedBox(height: 3),
         Text(
           label,
-          style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600),
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            color: const Color(0xFF4A4A5E),
+          ),
         ),
       ],
     );

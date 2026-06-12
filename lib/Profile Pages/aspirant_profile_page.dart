@@ -33,21 +33,26 @@ import 'package:halo/utils/shell_back.dart';
 import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
-import 'package:halo/screens/profile/widgets/aspirant/aspirant_recent_posts_grid.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_action_row.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_bio_card.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_fitness_goals_section.dart';
-import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state_rich.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
 import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
 import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
 import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
-import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
 import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
 import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
-import 'edit_profile_sections.dart'; // Edit pages for profile sections
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_profile_shell.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
+import 'package:halo/screens/profile/widgets/common/profile_inline_tab_chip.dart';
+import 'package:halo/screens/profile/pages/follow_list_page.dart';
+import 'package:halo/models/aspirant_profile_model.dart';
+import 'package:halo/models/post_place.dart';
+import 'package:halo/screens/profile/configs/aspirant_profile_config.dart';
+import 'package:halo/Bottom Pages/SearchPage.dart';
+import 'edit_profile_sections.dart';
 
 // ===================================================================
 //  ASPIRANT PROFILE PAGE (HALO – HOBBY BASED ASPIRANT)
@@ -102,7 +107,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   String _bio = '';
   String? _profilePhotoUrl;
   String? _coverPhotoUrl;
-  List<String> _fitnessGoals = [];
+  List<FitnessGoalItem> _fitnessGoalItems = [];
   String? _fitnessLevel;
   List<String> _interests = []; // Hobbies / categories (cricket, dance, yoga...)
   List<String> _healthNotes = [];
@@ -139,8 +144,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   List<CameraDescription>? _cameras;
   bool _isCameraInitialized = false;
 
+  List<int> _workoutCalendarDays = [];
+  AspirantProfileModules _profileModules = const AspirantProfileModules();
+
   // Animations
   late final AnimationController _followAnimController;
+  final GlobalKey<AspirantProfileShellState> _shellKey =
+      GlobalKey<AspirantProfileShellState>();
 
   @override
   void initState() {
@@ -180,7 +190,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         _bio = (data['bio'] ?? '') as String;
         _profilePhotoUrl = data['profilePhoto'] as String?;
         _coverPhotoUrl = data['coverPhoto'] as String?;
-        _fitnessGoals = List<String>.from(data['fitnessGoals'] ?? []);
+        _fitnessGoalItems = parseFitnessGoals(data['fitnessGoals']);
         _fitnessLevel = data['fitnessLevel'] as String?;
         _interests = List<String>.from(data['interests'] ?? []);
         _healthNotes = List<String>.from(data['healthNotes'] ?? []);
@@ -232,24 +242,36 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             'steps': 0,
             'caloriesBurned': 0,
             'workouts': 0,
-            'currentWeight': data['currentWeight'] ?? 70,
-            'targetWeight': data['targetWeight'] ?? 65,
-            'bodyFat': data['bodyFat'] ?? 18,
-            'targetBodyFat': data['targetBodyFat'] ?? 15,
+            'currentWeight': data['currentWeight'] ?? 0,
+            'targetWeight': data['targetWeight'] ?? 0,
+            'bodyFat': data['bodyFat'] ?? 0,
+            'targetBodyFat': data['targetBodyFat'] ?? 0,
             'currentStreak': data['currentStreak'] ?? 0,
             'longestStreak': data['longestStreak'] ?? 0,
           };
         }
 
+        final recordsRaw = data['personalRecords'] as List<dynamic>?;
+        _personalRecords = parseRecordList(recordsRaw);
+
+        final weeklyRaw = data['weeklyProgressData'] as List<dynamic>?;
+        _weeklyProgressData = parseWeeklyProgress(weeklyRaw);
+
+        final calRaw = data['workoutCalendarDays'] as List<dynamic>?;
+        _workoutCalendarDays = calRaw
+                ?.map((e) => (e as num).toInt())
+                .toList() ??
+            [];
+
+        final modulesRaw =
+            data['profileModules'] as Map<String, dynamic>?;
+        _profileModules = AspirantProfileModules.fromMap(modulesRaw);
+
         // Social links
         final sl = data['socialLinks'] as Map<String, dynamic>?;
         _socialLinks = sl != null
             ? sl.map((k, v) => MapEntry(k, v.toString()))
-            : {
-          'instagram': 'Instagram',
-          'spotify': 'Spotify',
-          'telegram': 'Telegram',
-        };
+            : {};
       }
 
       // Follow status: kya current user is aspirant ko follow karta hai?
@@ -573,11 +595,37 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
+  bool _isSectionEnabled(String sectionId) =>
+      AspirantProfileConfig.isSectionEnabled(_profileModules, sectionId);
+
   Widget _buildStatsCard() {
     return ProfileThreeColumnStatsCard(
       followers: _followersCount,
       following: _followingCount,
       posts: _postsCount,
+      onTapFollowers: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.followers,
+            ),
+          ),
+        );
+      },
+      onTapFollowing: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.following,
+            ),
+          ),
+        );
+      },
+      onTapPosts: () => _shellKey.currentState?.jumpToPostsTab(),
     );
   }
 
@@ -588,6 +636,16 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       onToggleFollow: _toggleFollow,
       onMessage: _openMessage,
       onEditProfile: _handleEditProfile,
+      onSavedPosts: _isOwnProfile
+          ? () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const SavedPostsPage(),
+                ),
+              );
+            }
+          : null,
       accentColor: ProfileLayout.lavender,
     );
   }
@@ -603,38 +661,21 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   //  NEW ASPIRANT UI SECTIONS (HOBBY FOCUSED)
   // ===================================================================
 
-  /// Aspirant profile tabs
+  /// Aspirant discovery tabs (lavender chips)
   Widget _buildAspirantTabsRow() {
-    final tabs = ['Aspirant', 'Coaches', 'Wellness', 'Community'];
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 4),
+    const tabs = ['Aspirant', 'Coaches', 'Wellness', 'Community'];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: Row(
         children: List.generate(tabs.length, (index) {
-          final isSelected = _selectedAspirantTab == index;
-          return Expanded(
-            child: GestureDetector(
-              onTap: () {
-                if (_selectedAspirantTab == index) return;
-                setState(() => _selectedAspirantTab = index);
-              },
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 2),
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                decoration: BoxDecoration(
-                  color: isSelected ? Colors.blue : Colors.grey.shade200,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  tabs[index],
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    color: isSelected ? Colors.white : Colors.black87,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ),
+          return ProfileInlineTabChip(
+            label: tabs[index],
+            selected: _selectedAspirantTab == index,
+            onTap: () {
+              if (_selectedAspirantTab == index) return;
+              setState(() => _selectedAspirantTab = index);
+            },
           );
         }),
       ),
@@ -1264,13 +1305,23 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Achievements & Badges --------------------
   Widget _buildAchievementsSection() {
+    if (!_isSectionEnabled('achievements')) return const SizedBox.shrink();
     if (_badges.isEmpty && !_isOwnProfile) {
       return const SizedBox.shrink();
     }
 
-    final displayBadges = _badges.isNotEmpty
-        ? _badges
-        : ['New to Halo'];
+    if (_badges.isEmpty && _isOwnProfile) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
+        child: ProfileEmptyStateRich(
+          text: 'Earn badges as you explore Halo',
+          icon: Icons.emoji_events_outlined,
+          actionLabel: 'Enable in Profile Sections',
+          onAction: _openProfileModules,
+          card: true,
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
@@ -1309,7 +1360,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: displayBadges
+            children: _badges
                 .map(
                   (b) => Container(
                 padding: const EdgeInsets.symmetric(
@@ -1321,10 +1372,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.emoji_events,
                       size: 16,
-                      color: Colors.orange,
+                      color: ProfileLayout.deepLavender,
                     ),
                     const SizedBox(width: 4),
                     Text(
@@ -1346,6 +1397,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Recent Activities --------------------
   Widget _buildLastWorkoutsSection() {
+    if (!_isSectionEnabled('recent_activities')) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Column(
@@ -1464,7 +1516,14 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       child: Container(
         width: double.infinity,
         decoration: BoxDecoration(
-          color: Colors.red[600],
+          gradient: LinearGradient(
+            colors: [
+              ProfileLayout.deepLavender,
+              ProfileLayout.lavender,
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
           borderRadius: BorderRadius.circular(14),
         ),
         padding: const EdgeInsets.all(16),
@@ -1624,8 +1683,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             runSpacing: 8,
             children: _interests
                 .map(
-                  (i) => Chip(
-                label: Text(i),
+                  (i) => ActionChip(
+                label: Text(i, style: GoogleFonts.poppins(fontSize: 12)),
+                backgroundColor: ProfileLayout.chipBg,
+                side: BorderSide.none,
+                onPressed: () => _openInterestExplore(i),
               ),
             )
                 .toList(),
@@ -1636,6 +1698,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildFitnessArticlesSection() {
+    if (!_isSectionEnabled('learning_resources')) return const SizedBox.shrink();
     if (_fitnessArticles.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -1676,9 +1739,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildFitnessStatsSection() {
+    if (!_isSectionEnabled('activity_stats')) return const SizedBox.shrink();
     final steps = _fitnessStats['steps'] ?? 0;
     final calories = _fitnessStats['caloriesBurned'] ?? 0;
     final workouts = _fitnessStats['workouts'] ?? 0;
+    if (steps == 0 && calories == 0 && workouts == 0 && !_isOwnProfile) {
+      return const SizedBox.shrink();
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -1777,6 +1844,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   // ===================================================================
 
   Widget _buildProgressTrackingSection() {
+    if (!_isSectionEnabled('progress_tracking')) return const SizedBox.shrink();
     if (!_isOwnProfile) return const SizedBox.shrink();
     
     return Padding(
@@ -1847,10 +1915,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     onTap: _isOwnProfile ? () => _editProgress('weight') : null,
                     child: _buildProgressCard(
                       'Weight',
-                      '${(_fitnessStats['currentWeight'] ?? 70).toString()} kg',
-                      'Goal: ${(_fitnessStats['targetWeight'] ?? 65).toString()} kg',
+                      '${(_fitnessStats['currentWeight'] ?? 0).toString()} kg',
+                      'Goal: ${(_fitnessStats['targetWeight'] ?? 0).toString()} kg',
                       Icons.monitor_weight,
-                      Colors.blue,
+                      ProfileLayout.lavender,
                     ),
                   ),
                 ),
@@ -1860,17 +1928,17 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     onTap: _isOwnProfile ? () => _editProgress('bodyFat') : null,
                     child: _buildProgressCard(
                       'Body Fat',
-                      '${(_fitnessStats['bodyFat'] ?? 18).toString()}%',
-                      'Target: ${(_fitnessStats['targetBodyFat'] ?? 15).toString()}%',
+                      '${(_fitnessStats['bodyFat'] ?? 0).toString()}%',
+                      'Target: ${(_fitnessStats['targetBodyFat'] ?? 0).toString()}%',
                       Icons.analytics,
-                      Colors.orange,
+                      ProfileLayout.deepLavender,
                     ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            if (_fitnessGoals.isNotEmpty)
+            if (_fitnessGoalItems.isNotEmpty)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1882,7 +1950,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ..._fitnessGoals.take(3).map((goal) => Padding(
+                  ..._fitnessGoalItems.take(3).map((goal) => Padding(
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(
                       children: [
@@ -1890,7 +1958,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            goal,
+                            goal.name,
                             style: GoogleFonts.poppins(fontSize: 13),
                           ),
                         ),
@@ -1965,14 +2033,48 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildWorkoutCalendarSection() {
+    if (!_isSectionEnabled('workout_calendar')) return const SizedBox.shrink();
     if (!_isOwnProfile) return const SizedBox.shrink();
-    
+
     final now = DateTime.now();
     final currentMonth = now.month;
     final currentYear = now.year;
     final daysInMonth = DateTime(currentYear, currentMonth + 1, 0).day;
-    final workoutDays = List.generate(7, (i) => (i * 4) + 1); // Mock workout days
-    
+    final workoutDays = workoutDaysForMonth(
+      year: currentYear,
+      month: currentMonth,
+      lastWorkouts: _lastWorkouts,
+      storedCalendarDays: _workoutCalendarDays,
+    );
+
+    if (workoutDays.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: ProfileEmptyStateRich(
+          text: 'Log activities to see them on your calendar',
+          icon: Icons.calendar_today_outlined,
+          actionLabel: 'Add Activity',
+          onAction: () async {
+            final updated = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (ctx) => EditWorkoutsPage(
+                  initialWorkouts: _lastWorkouts,
+                  userType: 'aspirant',
+                ),
+              ),
+            );
+            if (updated != null) {
+              setState(() {
+                _lastWorkouts = List<Map<String, dynamic>>.from(updated);
+              });
+            }
+          },
+          card: true,
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Container(
@@ -2128,9 +2230,12 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildFitnessGoalsSection() {
-    if (!_isOwnProfile) return const SizedBox.shrink();
+    if (!_isSectionEnabled('fitness_goals')) return const SizedBox.shrink();
+    if (!_isOwnProfile && _fitnessGoalItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
     return AspirantFitnessGoalsSection(
-      goals: _fitnessGoals,
+      goals: _fitnessGoalItems,
       onAddGoal: _addNewGoal,
       onEditGoal: _editGoal,
       onDeleteGoal: _deleteGoal,
@@ -2140,9 +2245,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildWorkoutStreakSection() {
-    final currentStreak = _fitnessStats['currentStreak'] ?? 5;
-    final longestStreak = _fitnessStats['longestStreak'] ?? 12;
-    
+    if (!_isSectionEnabled('workout_streak')) return const SizedBox.shrink();
+    final currentStreak = (_fitnessStats['currentStreak'] as num?)?.toInt() ?? 0;
+    final longestStreak = (_fitnessStats['longestStreak'] as num?)?.toInt() ?? 0;
+    if (currentStreak == 0 && longestStreak == 0 && !_isOwnProfile) {
+      return const SizedBox.shrink();
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Container(
@@ -2150,14 +2259,17 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.orange[100]!, Colors.orange[50]!],
+            colors: [
+              ProfileLayout.lavender.withValues(alpha: 0.25),
+              ProfileLayout.chipBg,
+            ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.orange.withOpacity(0.2),
+              color: ProfileLayout.lavender.withValues(alpha: 0.15),
               blurRadius: 12,
               offset: const Offset(0, 4),
             )
@@ -2168,14 +2280,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.local_fire_department, color: Colors.orange[700], size: 32),
+                Icon(Icons.local_fire_department,
+                    color: ProfileLayout.deepLavender, size: 32),
                 const SizedBox(width: 12),
                 Text(
                   '$currentStreak',
                   style: GoogleFonts.poppins(
                     fontSize: 36,
                     fontWeight: FontWeight.bold,
-                    color: Colors.orange[900],
+                    color: ProfileLayout.deepLavender,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -2184,17 +2297,19 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   style: GoogleFonts.poppins(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
-                    color: Colors.orange[900],
+                    color: ProfileLayout.deepLavender,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
             Text(
-              'Keep it up! Your longest streak is $longestStreak days',
+              longestStreak > 0
+                  ? 'Keep it up! Your longest streak is $longestStreak days'
+                  : 'Start logging activities to build your streak',
               style: GoogleFonts.poppins(
                 fontSize: 13,
-                color: Colors.orange[800],
+                color: ProfileLayout.deepLavender.withValues(alpha: 0.85),
               ),
               textAlign: TextAlign.center,
             ),
@@ -2205,14 +2320,24 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildPersonalRecordsSection() {
-    // Use Firebase data if available, otherwise use defaults
-    final defaultRecords = [
-      {'name': 'Fastest 5K', 'value': '28:45', 'icon': Icons.directions_run, 'color': Colors.blue},
-      {'name': 'Max Bench Press', 'value': '85 kg', 'icon': Icons.fitness_center, 'color': Colors.red},
-      {'name': 'Longest Plank', 'value': '3:15', 'icon': Icons.timer, 'color': Colors.green},
-    ];
-    
-    final records = _personalRecords.isNotEmpty ? _personalRecords : defaultRecords;
+    if (!_isSectionEnabled('personal_records')) return const SizedBox.shrink();
+    if (_personalRecords.isEmpty && !_isOwnProfile) {
+      return const SizedBox.shrink();
+    }
+    if (_personalRecords.isEmpty && _isOwnProfile) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: ProfileEmptyStateRich(
+          text: 'Track your personal bests',
+          icon: Icons.emoji_events_outlined,
+          actionLabel: 'Add Record',
+          onAction: () => _editPersonalRecord(-1, {}),
+          card: true,
+        ),
+      );
+    }
+
+    final records = _personalRecords;
     
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -2322,24 +2447,24 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildWeeklyProgressSection() {
+    if (!_isSectionEnabled('weekly_progress')) return const SizedBox.shrink();
     if (!_isOwnProfile) return const SizedBox.shrink();
-    
-    // Use Firebase data if available, otherwise use defaults
-    final weeklyData = _weeklyProgressData.isNotEmpty
-        ? _weeklyProgressData
-        : [
-            {'day': 'Mon', 'workouts': 2, 'calories': 450},
-            {'day': 'Tue', 'workouts': 1, 'calories': 320},
-            {'day': 'Wed', 'workouts': 3, 'calories': 680},
-            {'day': 'Thu', 'workouts': 2, 'calories': 520},
-            {'day': 'Fri', 'workouts': 1, 'calories': 380},
-            {'day': 'Sat', 'workouts': 2, 'calories': 490},
-            {'day': 'Sun', 'workouts': 0, 'calories': 0},
-          ];
-    
-    final maxCalories = weeklyData.isNotEmpty
-        ? weeklyData.map((d) => (d['calories'] as num?)?.toInt() ?? 0).reduce((a, b) => a > b ? a : b)
-        : 680;
+
+    if (_weeklyProgressData.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: ProfileEmptyStateRich(
+          text: 'Log weekly activity to see your progress chart',
+          icon: Icons.bar_chart_outlined,
+          card: true,
+        ),
+      );
+    }
+
+    final weeklyData = _weeklyProgressData;
+    final maxCalories = weeklyData
+        .map((d) => (d['calories'] as num?)?.toInt() ?? 0)
+        .fold<int>(0, (a, b) => a > b ? a : b);
     
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -2482,219 +2607,44 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
-  // ===================================================================
-  //  POSTS GRID
-  // ===================================================================
-  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
-  Widget _buildRecentPostsGrid() {
-    return AspirantRecentPostsGrid(
-      isPrivate: _isPrivate,
-      isFollowing: _isFollowing,
-      isOwnProfile: _isOwnProfile,
-      profileUserId: widget.profileUserId,
-      accentColor: ProfileLayout.lavender,
-      imageResolver: profilePostImageUrlFromMap,
-      onTapPost: (postId) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (ctx) => PostDetailsPage(postId: postId),
-          ),
-        );
-      },
-      onTapViewAll: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (ctx) => UserAllPostsPage(userId: widget.profileUserId),
-          ),
-        );
-      },
-    );
-  }
-
-  // ===================================================================
-  //  BUILD  (Yahin se text ka color global dark ho raha hai)
-// ===================================================================
   @override
   Widget build(BuildContext context) {
-    final baseTheme = Theme.of(context);
-
-    // 🔥 Detect background brightness
-    final isDarkBg =
-        ThemeData.estimateBrightnessForColor(ProfileLayout.bg) == Brightness.dark;
-
-    // 🔥 Dynamic text color
-    final textColor = isDarkBg ? Colors.white : Colors.black87;
-
-    // 🔥 Apply dynamic text theme
-    final textTheme = baseTheme.textTheme.apply(
-      bodyColor: textColor,
-      displayColor: textColor,
-    );
-    return Theme(
-      data: baseTheme.copyWith(textTheme: textTheme),
-      child: Scaffold(
-        backgroundColor: ProfileLayout.bg,
-        body: ProfileLoadingGate(
-          loading: _isLoading,
-          child: CustomScrollView(
-          slivers: [
-            SliverAppBar(
-              pinned: true,
-              expandedHeight: ProfileLayout.coverHeight,
-              backgroundColor: ProfileLayout.lavender,
-              elevation: 0,
-              leading: IconButton(
-                icon: Icon(
-                  Icons.arrow_back,
-                  color: isDarkBg ? Colors.white : Colors.black,
-                ),
-                onPressed: () => popOrGoHome(
-                  context,
-                  onBackToHome: widget.onBackToHome,
-                ),
-              ),
-              actions: [
-                if (_isOwnProfile) ...[
-                  IconButton(
-                    icon: Icon(
-                      Icons.add_box_outlined,
-                      color: isDarkBg ? Colors.white : Colors.black,
-                    ),
-                    onPressed: _openGalleryForPost,
-                  ),
-                  PopupMenuButton<String>(
-                    icon: Icon(
-                      Icons.more_vert,
-                      color: isDarkBg ? Colors.white : Colors.black,
-                    ),
-                    onSelected: (value) async {
-                      if (value == 'Edit Profile') {
-                        await _handleEditProfile();
-                      } else if (value == 'Privacy') {
-                        if (_currentUser == null) return;
-                        final updated = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => PrivacySettingsPage(
-                              initialPrivacy: _isPrivate,
-                            ),
-                          ),
-                        );
-                        if (updated != null) {
-                          try {
-                            await _firestore
-                                .collection('users')
-                                .doc(_currentUser!.uid)
-                                .update({'isPrivate': updated});
-                            setState(() => _isPrivate = updated);
-                          } catch (e) {
-                            Fluttertoast.showToast(
-                                msg: 'Failed to update privacy');
-                          }
-                        }
-                      } else if (value == 'Saved') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => const SavedPostsPage(),
-                          ),
-                        );
-                      } else if (value == 'Settings') {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => SettingsPage(),
-                          ),
-                        );
-                        if (result == 'logout') {
-                          await _signOut();
-                        }
-                      } else if (value == 'Logout') {
-                        await _signOut();
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: 'Saved',
-                        child: Text('Saved'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Settings',
-                        child: Text('Settings'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Privacy',
-                        child: Text('Privacy'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Edit Profile',
-                        child: Text('Edit Profile'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Logout',
-                        child: Text('Logout'),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-              flexibleSpace: FlexibleSpaceBar(
-                background: ProfileFlexibleSpaceCoverStack(
-                  cover: _coverWidget(context),
-                ),
-              ),
-            ),
-
-            SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(height: ProfileLayout.identityColumnTopInset),
-
-                  // Avatar + Name row (header)
-                  AspirantIdentityBlock(
-                    avatar: _avatarWidget(),
-                    profileUserId: widget.profileUserId,
-                    fullName: _fullName,
-                    username: _username,
-                    interests: _interests,
-                    fitnessTag: _fitnessTag,
-                    city: _city,
-                    age: _age,
-                  ),
-
-                  const SizedBox(height: 14),
-                  _buildStatsCard(),
-                  const SizedBox(height: 12),
-                  _buildActionButtons(),
-                  _buildBioCard(),
-
-                  // Halo-style sections
-                  _buildAspirantTabsRow(),
-                  _buildAspirantTabContent(),
-                  _buildAchievementsSection(),
-                  _buildLastWorkoutsSection(),
-                  _buildRecentPostsGrid(),
-                  _buildFitnessArticlesSection(),
-                  _buildFitnessStatsSection(),
-                  
-                  // New Professional Features for Aspirants
-                  _buildProgressTrackingSection(),
-                  _buildWorkoutCalendarSection(),
-                  _buildFitnessGoalsSection(),
-                  _buildWorkoutStreakSection(),
-                  _buildPersonalRecordsSection(),
-                  _buildWeeklyProgressSection(),
-
-                  const SizedBox(height: 80),
-                ],
-              ),
-            ),
-          ],
+    return Scaffold(
+      backgroundColor: ProfileLayout.bg,
+      body: DefaultTextStyle(
+        style: GoogleFonts.poppins(
+          color: ProfileLayout.textPrimary,
+          fontSize: 14,
         ),
-      ),
+        child: AspirantProfileShell(
+          key: _shellKey,
+          loading: _isLoading,
+          onBack: () => popOrGoHome(
+            context,
+            onBackToHome: widget.onBackToHome,
+          ),
+          cover: ProfileFlexibleSpaceCoverStack(
+            cover: _coverWidget(context),
+          ),
+          appBarActions: _buildAppBarActions(),
+          header: _buildProfileHeader(),
+          profileTab: _buildProfileTabContent(),
+          postsTab: AspirantPostsTab(
+            profileUserId: widget.profileUserId,
+            isPrivate: _isPrivate,
+            isFollowing: _isFollowing,
+            isOwnProfile: _isOwnProfile,
+            imageResolver: profilePostImageUrlFromMap,
+            onTapPost: (postId) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PostDetailsPage(postId: postId),
+                ),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -2852,6 +2802,143 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
+  Future<void> _openProfileModules() async {
+    if (!_isOwnProfile) return;
+    final updated = await Navigator.push<AspirantProfileModules>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditProfileModulesPage(initial: _profileModules),
+      ),
+    );
+    if (updated != null && mounted) {
+      setState(() => _profileModules = updated);
+    }
+  }
+
+  void _openInterestExplore(String interest) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SearchPage(initialQuery: interest),
+      ),
+    );
+  }
+
+  List<Widget> _buildAppBarActions() {
+    if (!_isOwnProfile) return [];
+    return [
+      IconButton(
+        icon: const Icon(Icons.add_box_outlined, color: Colors.white),
+        onPressed: _openGalleryForPost,
+      ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        onSelected: (value) async {
+          if (value == 'Edit Profile') {
+            await _handleEditProfile();
+          } else if (value == 'Profile Sections') {
+            await _openProfileModules();
+          } else if (value == 'Privacy') {
+            if (_currentUser == null) return;
+            final updated = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (ctx) => PrivacySettingsPage(initialPrivacy: _isPrivate),
+              ),
+            );
+            if (updated != null) {
+              try {
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'isPrivate': updated});
+                setState(() => _isPrivate = updated);
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Failed to update privacy');
+              }
+            }
+          } else if (value == 'Saved') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SavedPostsPage()),
+            );
+          } else if (value == 'Settings') {
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => SettingsPage()),
+            );
+            if (result == 'logout') await _signOut();
+          } else if (value == 'Logout') {
+            await _signOut();
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(value: 'Saved', child: Text('Saved')),
+          PopupMenuItem(value: 'Settings', child: Text('Settings')),
+          PopupMenuItem(value: 'Privacy', child: Text('Privacy')),
+          PopupMenuItem(
+              value: 'Profile Sections', child: Text('Profile Sections')),
+          PopupMenuItem(value: 'Edit Profile', child: Text('Edit Profile')),
+          PopupMenuItem(value: 'Logout', child: Text('Logout')),
+        ],
+      ),
+    ];
+  }
+
+  Widget _buildProfileHeader() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: ProfileLayout.identityColumnTopInset),
+        AspirantIdentityBlock(
+          avatar: _avatarWidget(),
+          profileUserId: widget.profileUserId,
+          fullName: _fullName,
+          username: _username,
+          interests: _interests,
+          fitnessTag: _fitnessTag,
+          city: _city,
+          age: _age,
+          primaryCategory: _primaryCategory,
+          fitnessLevel: _fitnessLevel,
+          healthNotes: _healthNotes,
+          showHealthNotes: _isOwnProfile,
+          onInterestTap: _openInterestExplore,
+        ),
+        const SizedBox(height: 14),
+        _buildStatsCard(),
+        const SizedBox(height: 12),
+        _buildActionButtons(),
+        _buildBioCard(),
+        const SizedBox(height: 4),
+      ],
+    );
+  }
+
+  Widget _buildProfileTabContent() {
+    return ColoredBox(
+      color: ProfileLayout.bg,
+      child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildAspirantTabsRow(),
+        _buildAspirantTabContent(),
+        _buildAchievementsSection(),
+        _buildLastWorkoutsSection(),
+        _buildFitnessArticlesSection(),
+        _buildFitnessStatsSection(),
+        _buildProgressTrackingSection(),
+        _buildWorkoutCalendarSection(),
+        _buildFitnessGoalsSection(),
+        _buildWorkoutStreakSection(),
+        _buildPersonalRecordsSection(),
+        _buildWeeklyProgressSection(),
+        const SizedBox(height: 80),
+      ],
+      ),
+    );
+  }
+
   Future<void> _addNewGoal() async {
     if (!_isOwnProfile || _currentUser == null) return;
 
@@ -2902,15 +2989,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
             onPressed: () async {
               if (goalCtrl.text.trim().isEmpty) return;
-              
+
               try {
-                final updatedGoals = List<String>.from(_fitnessGoals)..add(goalCtrl.text.trim());
-                await _firestore
-                    .collection('users')
-                    .doc(_currentUser!.uid)
-                    .update({'fitnessGoals': updatedGoals});
-                
-                setState(() => _fitnessGoals = updatedGoals);
+                final updated = List<FitnessGoalItem>.from(_fitnessGoalItems)
+                  ..add(FitnessGoalItem(name: goalCtrl.text.trim()));
+                await _firestore.collection('users').doc(_currentUser!.uid).update({
+                  'fitnessGoals': updated.map((g) => g.toMap()).toList(),
+                });
+
+                setState(() => _fitnessGoalItems = updated);
                 Navigator.pop(ctx);
                 Fluttertoast.showToast(msg: 'Goal added successfully!');
               } catch (e) {
@@ -2927,10 +3014,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
-  Future<void> _editGoal(String oldGoal) async {
+  Future<void> _editGoal(FitnessGoalItem oldGoal) async {
     if (!_isOwnProfile || _currentUser == null) return;
 
-    final goalCtrl = TextEditingController(text: oldGoal);
+    final goalCtrl = TextEditingController(text: oldGoal.name);
+    final progressCtrl = TextEditingController(
+      text: (oldGoal.progress * 100).round().toString(),
+    );
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2942,21 +3032,36 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             color: ProfileLayout.lavender,
           ),
         ),
-        content: TextField(
-          controller: goalCtrl,
-          decoration: InputDecoration(
-            labelText: 'Goal Description',
-            labelStyle: GoogleFonts.poppins(),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: goalCtrl,
+              decoration: InputDecoration(
+                labelText: 'Goal Description',
+                labelStyle: GoogleFonts.poppins(),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
+              ),
+              maxLines: 2,
             ),
-            prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
+            const SizedBox(height: 12),
+            TextField(
+              controller: progressCtrl,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Progress (%)',
+                labelStyle: GoogleFonts.poppins(),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon:
+                    Icon(Icons.percent, color: ProfileLayout.lavender),
+              ),
             ),
-          ),
-          maxLines: 2,
+          ],
         ),
         actions: [
           TextButton(
@@ -2976,18 +3081,25 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
             onPressed: () async {
               if (goalCtrl.text.trim().isEmpty) return;
-              
+
               try {
-                final updatedGoals = List<String>.from(_fitnessGoals);
-                final index = updatedGoals.indexOf(oldGoal);
+                final pct =
+                    (double.tryParse(progressCtrl.text.trim()) ?? 0) / 100;
+                final updated = List<FitnessGoalItem>.from(_fitnessGoalItems);
+                final index = updated.indexWhere((g) => g.name == oldGoal.name);
                 if (index != -1) {
-                  updatedGoals[index] = goalCtrl.text.trim();
+                  updated[index] = FitnessGoalItem(
+                    name: goalCtrl.text.trim(),
+                    progress: pct.clamp(0.0, 1.0),
+                  );
                   await _firestore
                       .collection('users')
                       .doc(_currentUser!.uid)
-                      .update({'fitnessGoals': updatedGoals});
-                  
-                  setState(() => _fitnessGoals = updatedGoals);
+                      .update({
+                    'fitnessGoals': updated.map((g) => g.toMap()).toList(),
+                  });
+
+                  setState(() => _fitnessGoalItems = updated);
                   Navigator.pop(ctx);
                   Fluttertoast.showToast(msg: 'Goal updated successfully!');
                 }
@@ -3005,7 +3117,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
-  Future<void> _deleteGoal(String goal) async {
+  Future<void> _deleteGoal(FitnessGoalItem goal) async {
     if (!_isOwnProfile || _currentUser == null) return;
 
     final confirmed = await showDialog<bool>(
@@ -3020,7 +3132,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
         ),
         content: Text(
-          'Are you sure you want to delete "$goal"?',
+          'Are you sure you want to delete "${goal.name}"?',
           style: GoogleFonts.poppins(),
         ),
         actions: [
@@ -3051,13 +3163,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
     if (confirmed == true) {
       try {
-        final updatedGoals = List<String>.from(_fitnessGoals)..remove(goal);
-        await _firestore
-            .collection('users')
-            .doc(_currentUser!.uid)
-            .update({'fitnessGoals': updatedGoals});
-        
-        setState(() => _fitnessGoals = updatedGoals);
+        final updated = List<FitnessGoalItem>.from(_fitnessGoalItems)
+          ..removeWhere((g) => g.name == goal.name);
+        await _firestore.collection('users').doc(_currentUser!.uid).update({
+          'fitnessGoals': updated.map((g) => g.toMap()).toList(),
+        });
+
+        setState(() => _fitnessGoalItems = updated);
         Fluttertoast.showToast(msg: 'Goal deleted successfully!');
       } catch (e) {
         Fluttertoast.showToast(msg: 'Error deleting goal: $e');
@@ -3142,7 +3254,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       backgroundColor: Colors.transparent,
       builder: (ctx) => _FullProgressPage(
         fitnessStats: _fitnessStats,
-        fitnessGoals: _fitnessGoals,
+        fitnessGoals: _fitnessGoalItems.map((g) => g.name).toList(),
         onUpdate: () async {
           await _loadProfileData();
         },
@@ -3472,8 +3584,67 @@ class PostDetailsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Post')),
-      body: Center(child: Text('Post: $postId')),
+      backgroundColor: ProfileLayout.bg,
+      appBar: AppBar(
+        backgroundColor: ProfileLayout.bg,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: Text('Post', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+      ),
+      body: FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        future: FirebaseFirestore.instance.collection('posts').doc(postId).get(),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: ProfileLayout.lavender),
+            );
+          }
+          final data = snap.data?.data();
+          if (data == null) {
+            return const Center(child: Text('Post not found'));
+          }
+          final caption = (data['caption'] ?? '').toString();
+          final location = PostPlace.labelFromPostData(data);
+          final imageUrl = profilePostImageUrlFromMap(data);
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (imageUrl != null && imageUrl.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 1,
+                    child: Image.network(imageUrl, fit: BoxFit.cover),
+                  ),
+                ),
+              if (location.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Icon(Icons.location_on_outlined,
+                        size: 16, color: ProfileLayout.deepLavender),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        location,
+                        style: GoogleFonts.poppins(
+                          fontSize: 13,
+                          color: ProfileLayout.deepLavender,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (caption.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(caption, style: GoogleFonts.poppins(fontSize: 14)),
+              ],
+            ],
+          );
+        },
+      ),
     );
   }
 }
