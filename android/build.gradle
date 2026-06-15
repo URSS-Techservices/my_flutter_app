@@ -17,6 +17,7 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        maven { url 'https://arthenica.github.io/ffmpeg-kit/android' }
         jcenter() // Required for Spotify SDK (legacy)
     }
 }
@@ -34,6 +35,26 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+}
+
+// Workaround for third-party Android libraries that still miss `namespace`
+// (required by AGP 8+). This keeps older pub packages buildable.
+subprojects { subproject ->
+    subproject.plugins.withId("com.android.library") {
+        def androidExt = subproject.extensions.findByName("android")
+        if (androidExt != null && (androidExt.namespace == null || androidExt.namespace.toString().trim().isEmpty())) {
+            def manifestFile = subproject.file("src/main/AndroidManifest.xml")
+            if (manifestFile.exists()) {
+                def matcher = (manifestFile.getText("UTF-8") =~ /package="([^"]+)"/)
+                if (matcher.find()) {
+                    androidExt.namespace = matcher.group(1)
+                }
+            }
+            if (androidExt.namespace == null || androidExt.namespace.toString().trim().isEmpty()) {
+                androidExt.namespace = "auto.namespace.${subproject.name.replace('-', '_')}"
+            }
+        }
+    }
 }
 
 tasks.register("clean", Delete) {

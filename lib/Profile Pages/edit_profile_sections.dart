@@ -7,8 +7,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fluttertoast/fluttertoast.dart';
-import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:halo/platform/storage_upload.dart';
+import 'package:halo/models/aspirant_profile_model.dart';
+import 'package:halo/screens/profile/configs/aspirant_profile_config.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
 
 // ===================================================================
 //  EDIT WORKOUTS PAGE (For Aspirant & Guru)
@@ -689,8 +692,11 @@ class _EditProductsPageState extends State<EditProductsPage> {
             .child(userId)
             .child('products')
             .child(fileName);
-        await ref.putFile(File(picked.path));
-        final url = await ref.getDownloadURL();
+        final url = await uploadReferenceXFileAndGetUrl(
+          ref,
+          picked,
+          metadata: SettableMetadata(contentType: 'image/jpeg'),
+        );
         setState(() {
           _products[index]['imageUrl'] = url;
         });
@@ -1363,8 +1369,11 @@ class _EditFitnessEventsPageState extends State<EditFitnessEventsPage> {
             .child(userId)
             .child('events')
             .child(fileName);
-        await ref.putFile(File(picked.path));
-        final url = await ref.getDownloadURL();
+        final url = await uploadReferenceXFileAndGetUrl(
+          ref,
+          picked,
+          metadata: SettableMetadata(contentType: 'image/jpeg'),
+        );
         setState(() {
           _events[index]['imageUrl'] = url;
         });
@@ -1464,6 +1473,147 @@ class _EditFitnessEventsPageState extends State<EditFitnessEventsPage> {
         onPressed: _saveEvents,
         label: const Text('Save Events'),
         icon: const Icon(Icons.save),
+      ),
+    );
+  }
+}
+
+// ===================================================================
+//  EDIT PROFILE MODULES (Aspirant optional sections)
+// ===================================================================
+
+class EditProfileModulesPage extends StatefulWidget {
+  final AspirantProfileModules initial;
+
+  const EditProfileModulesPage({super.key, required this.initial});
+
+  @override
+  State<EditProfileModulesPage> createState() => _EditProfileModulesPageState();
+}
+
+class _EditProfileModulesPageState extends State<EditProfileModulesPage> {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  late AspirantProfileModules _modules;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _modules = widget.initial;
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      final uid = _auth.currentUser!.uid;
+      await _firestore.collection('users').doc(uid).update({
+        'profileModules': _modules.toMap(),
+      });
+      if (!mounted) return;
+      Fluttertoast.showToast(msg: 'Profile sections updated');
+      Navigator.pop(context, _modules);
+    } catch (e) {
+      Fluttertoast.showToast(msg: 'Failed to save: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  void _toggle(String key, bool value) {
+    setState(() {
+      switch (key) {
+        case 'fitnessGoals':
+          _modules = _modules.copyWith(fitnessGoals: value);
+        case 'recentActivities':
+          _modules = _modules.copyWith(recentActivities: value);
+        case 'activityStats':
+          _modules = _modules.copyWith(activityStats: value);
+        case 'progressTracking':
+          _modules = _modules.copyWith(progressTracking: value);
+        case 'workoutCalendar':
+          _modules = _modules.copyWith(workoutCalendar: value);
+        case 'workoutStreak':
+          _modules = _modules.copyWith(workoutStreak: value);
+        case 'personalRecords':
+          _modules = _modules.copyWith(personalRecords: value);
+        case 'weeklyProgress':
+          _modules = _modules.copyWith(weeklyProgress: value);
+        case 'learningResources':
+          _modules = _modules.copyWith(learningResources: value);
+        case 'achievements':
+          _modules = _modules.copyWith(achievements: value);
+      }
+    });
+  }
+
+  bool _valueFor(String key) =>
+      AspirantProfileConfig.isModuleEnabled(_modules, key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: ProfileLayout.bg,
+      appBar: AppBar(
+        backgroundColor: ProfileLayout.bg,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: Text(
+          'Profile Sections',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600,
+            color: Colors.black87,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : _save,
+            child: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(
+                    'Save',
+                    style: GoogleFonts.poppins(
+                      color: ProfileLayout.deepLavender,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(
+            'Choose which sections appear on your profile.',
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              color: Colors.grey.shade700,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ...AspirantProfileConfig.moduleKeys.map((key) {
+            final label = AspirantProfileConfig.moduleLabels[key] ?? key;
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: SwitchListTile(
+                title: Text(
+                  label,
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                ),
+                value: _valueFor(key),
+                activeThumbColor: ProfileLayout.lavender,
+                onChanged: (v) => _toggle(key, v),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }

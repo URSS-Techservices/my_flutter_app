@@ -3,13 +3,15 @@ import 'package:halo/utils/explore_ranking.dart';
 
 class ExploreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static const Duration _kSideQueryTtl = Duration(minutes: 3);
+  static final Map<String, _TimedListCache> _followingCache = {};
+  static final Map<String, _TimedListCache> _interestsCache = {};
 
-  /// Posts from last 3 days, ordered by createdAt descending, limit 200.
+  /// All posts ordered by createdAt descending, limit 200.
+  /// No date filter — we want to show all existing content on Explore.
   Stream<QuerySnapshot<Map<String, dynamic>>> getRecentPosts() {
-    final threeDaysAgo = DateTime.now().subtract(const Duration(days: 3));
     return _firestore
         .collection('posts')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(threeDaysAgo))
         .orderBy('createdAt', descending: true)
         .limit(200)
         .snapshots();
@@ -18,15 +20,19 @@ class ExploreService {
   /// User IDs that the current user follows.
   Future<List<String>> getFollowingIds(String currentUserId) async {
     if (currentUserId.isEmpty) return [];
+    final cached = _followingCache[currentUserId];
+    if (cached != null && !cached.isExpired) return cached.values;
     try {
       final snap = await _firestore
           .collection('follows')
           .where('followerId', isEqualTo: currentUserId)
           .get();
-      return snap.docs
+      final values = snap.docs
           .map((d) => (d.data()['followingId'] as String?) ?? '')
           .where((id) => id.isNotEmpty)
           .toList();
+      _followingCache[currentUserId] = _TimedListCache(values);
+      return values;
     } catch (_) {
       return [];
     }
@@ -35,29 +41,36 @@ class ExploreService {
   /// Current user's interests from user_interests collection.
   Future<List<String>> getUserInterests(String currentUserId) async {
     if (currentUserId.isEmpty) return [];
+    final cached = _interestsCache[currentUserId];
+    if (cached != null && !cached.isExpired) return cached.values;
     try {
       final snap = await _firestore
           .collection('user_interests')
           .where('userId', isEqualTo: currentUserId)
           .limit(1)
           .get();
-      if (snap.docs.isEmpty) return [];
+      if (snap.docs.isEmpty) {
+        _interestsCache[currentUserId] = _TimedListCache(const []);
+        return [];
+      }
       final list = snap.docs.first.data()['interests'];
-      if (list is! List) return [];
-      return list.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      if (list is! List) {
+        _interestsCache[currentUserId] = _TimedListCache(const []);
+        return [];
+      }
+      final values = list.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      _interestsCache[currentUserId] = _TimedListCache(values);
+      return values;
     } catch (_) {
       return [];
     }
   }
 
-  /// Explore feed: exclude followed users, rank by exploreScore, diversity (max 2 per user).
+  /// Explore feed: ranked by exploreScore, diversity (max 3 per user).
+  /// Shows ALL posts — not filtering by following so the grid is always full.
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> getExplorePostsStream(String currentUserId) {
     return getRecentPosts().asyncMap((snapshot) async {
-      final following = await getFollowingIds(currentUserId);
-      final followingSet = following.toSet();
-      var docs = snapshot.docs
-          .where((d) => !followingSet.contains((d.data()['userId'] as String?) ?? ''))
-          .toList();
+      var docs = snapshot.docs;
 
       final userInterests = await getUserInterests(currentUserId);
 
@@ -83,7 +96,7 @@ class ExploreService {
       scored.sort((a, b) => b.score.compareTo(a.score));
 
       final perUserCount = <String, int>{};
-      const maxPerUser = 2;
+      const maxPerUser = 3;
       final result = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
       for (final s in scored) {
         final uid = (s.doc.data()['userId'] as String?) ?? '';
@@ -95,6 +108,18 @@ class ExploreService {
       return result;
     });
   }
+}
+
+class _TimedListCache {
+  final List<String> values;
+  final DateTime fetchedAt;
+
+  _TimedListCache(List<String> source)
+      : values = List.unmodifiable(source),
+        fetchedAt = DateTime.now();
+
+  bool get isExpired =>
+      DateTime.now().difference(fetchedAt) > ExploreService._kSideQueryTtl;
 }
 
 class _ScoredPost {

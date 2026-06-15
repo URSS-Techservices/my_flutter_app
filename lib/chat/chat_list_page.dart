@@ -23,31 +23,66 @@ class ChatListPage extends StatefulWidget {
 
 class _ChatListPageState extends State<ChatListPage> {
   final ChatService _chatService = ChatService();
+  final Map<String, Map<String, dynamic>?> _userCache = {};
+  final Map<String, int> _unreadCountCache = {};
+  String _lastChatSnapshotKey = '';
 
-  /// 🔹 Helper: get user info from users collection
-  Future<Map<String, dynamic>?> _getUserData(String userId) async {
-    try {
-      final doc =
-      await FirebaseFirestore.instance.collection('users').doc(userId).get();
-      if (doc.exists) {
-        return doc.data();
-      }
-    } catch (e) {
-      debugPrint("❌ Error fetching user data: $e");
+  Future<void> _syncChatRowData(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> chats) async {
+    final userIds = <String>{};
+    final chatIds = <String>[];
+
+    for (final chatDoc in chats) {
+      final chat = chatDoc.data();
+      final members = List<String>.from(chat['members'] ?? const []);
+      final otherUserId = members.firstWhere(
+        (id) => id != widget.currentUserId,
+        orElse: () => '',
+      );
+      if (otherUserId.isNotEmpty) userIds.add(otherUserId);
+      chatIds.add(chatDoc.id);
     }
-    return null;
-  }
 
-  /// 🔹 Helper: get unread count for a chat
-  Stream<int> _getUnreadCount(String chatId) {
-    return FirebaseFirestore.instance
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .where('receiverId', isEqualTo: widget.currentUserId)
-        .where('seen', isEqualTo: false)
-        .snapshots()
-        .map((snapshot) => snapshot.docs.length);
+    try {
+      final missingUserIds =
+          userIds.where((id) => !_userCache.containsKey(id)).toList();
+      if (missingUserIds.isNotEmpty) {
+        final loadedUsers = await Future.wait(
+          missingUserIds.map((id) async {
+            final doc =
+                await FirebaseFirestore.instance.collection('users').doc(id).get();
+            return MapEntry<String, Map<String, dynamic>?>(
+              id,
+              doc.exists ? doc.data() : null,
+            );
+          }),
+        );
+        for (final entry in loadedUsers) {
+          _userCache[entry.key] = entry.value;
+        }
+      }
+
+      final unreadResults = await Future.wait(
+        chatIds.map((chatId) async {
+          final snap = await FirebaseFirestore.instance
+              .collection('chats')
+              .doc(chatId)
+              .collection('messages')
+              .where('receiverId', isEqualTo: widget.currentUserId)
+              .where('seen', isEqualTo: false)
+              .count()
+              .get();
+          return MapEntry(chatId, snap.count ?? 0);
+        }),
+      );
+      for (final entry in unreadResults) {
+        _unreadCountCache[entry.key] = entry.value;
+      }
+
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint("❌ Error syncing chat list data: $e");
+    }
   }
 
   /// 🔹 Format time like WhatsApp-ish (e.g., "09:30" / "Yesterday" / "12 Jan")
@@ -288,6 +323,14 @@ class _ChatListPageState extends State<ChatListPage> {
                 final bMs = bTs?.millisecondsSinceEpoch ?? 0;
                 return bMs.compareTo(aMs);
               });
+              final snapshotKey = chats
+                  .map((d) =>
+                      '${d.id}:${(d.data()['updatedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0}')
+                  .join('|');
+              if (_lastChatSnapshotKey != snapshotKey) {
+                _lastChatSnapshotKey = snapshotKey;
+                _syncChatRowData(chats);
+              }
 
               return ListView.builder(
                 itemCount: chats.length,
@@ -302,223 +345,165 @@ class _ChatListPageState extends State<ChatListPage> {
                         (id) => id != widget.currentUserId,
                     orElse: () => "Unknown",
                   );
+                  final otherUser = _userCache[otherUserId];
+                  final isOnline = (otherUser?['isOnline'] as bool?) ?? false;
+                  final lastMessage = (chat['lastMessage'] ?? '').toString();
+                  final isTyping = (chat['typingUserId'] ?? '') == otherUserId;
+                  final unreadCount = _unreadCountCache[chatId] ?? 0;
+                  final hasUnread = unreadCount > 0;
+                  final updatedAt = chat['updatedAt'] as Timestamp?;
+                  final timeLabel = _formatTime(updatedAt);
 
-                  return FutureBuilder<Map<String, dynamic>?>(
-                    future: _getUserData(otherUserId),
-                    builder: (context, userSnapshot) {
-                      if (userSnapshot.connectionState ==
-                          ConnectionState.waiting) {
-                        return const ListTile(
-                          leading:
-                          CircleAvatar(child: Icon(Icons.person)),
-                          title: Text('Loading...'),
-                          subtitle: Text(''),
-                        );
-                      }
-
-                      final otherUser = userSnapshot.data;
-                      final isOnline =
-                          (otherUser?['isOnline'] as bool?) ?? false;
-                      final lastMessage =
-                      (chat['lastMessage'] ?? '').toString();
-                      final isTyping =
-                          (chat['typingUserId'] ?? '') == otherUserId;
-
-                      return StreamBuilder<int>(
-                        stream: _getUnreadCount(chatId),
-                        builder: (context, unreadSnapshot) {
-                          final unreadCount = unreadSnapshot.data ?? 0;
-                          final hasUnread = unreadCount > 0;
-                          final updatedAt =
-                          chat['updatedAt'] as Timestamp?;
-                          final timeLabel = _formatTime(updatedAt);
-
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8.0,
-                              vertical: 4.0,
-                            ),
-                            child: Material(
-                              color: Colors.white.withOpacity(0.96),
-                              borderRadius: BorderRadius.circular(18),
-                              elevation: 1.5,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(18),
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => ChatScreen(
-                                        chatId: chatId,
-                                        currentUserId: widget.currentUserId,
-                                        otherUserId: otherUserId,
-                                      ),
-                                    ),
-                                  );
-                                },
-                                onLongPress: () => _showChatActionsBottomSheet(
-                                    chatId, otherUser),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10.0, vertical: 8.0),
-                                  child: Row(
-                                    children: [
-                                      // Avatar + online indicator
-                                      Stack(
-                                        children: [
-                                          CircleAvatar(
-                                            radius: 24,
-                                            backgroundImage: otherUser?[
-                                            'photoURL'] !=
-                                                null &&
-                                                (otherUser!['photoURL']
-                                                as String)
-                                                    .isNotEmpty
-                                                ? NetworkImage(
-                                                otherUser['photoURL'])
-                                                : const AssetImage(
-                                                'assets/images/Profile.png')
-                                            as ImageProvider,
-                                            child: (otherUser?['photoURL'] ==
-                                                null ||
-                                                (otherUser!['photoURL']
-                                                as String)
-                                                    .isEmpty)
-                                                ? const Icon(Icons.person)
-                                                : null,
-                                          ),
-                                          if (isOnline)
-                                            Positioned(
-                                              right: 0,
-                                              bottom: 0,
-                                              child: Container(
-                                                width: 11,
-                                                height: 11,
-                                                decoration: BoxDecoration(
-                                                  color: Colors.green,
-                                                  shape: BoxShape.circle,
-                                                  border: Border.all(
-                                                    color: Colors.white,
-                                                    width: 2,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                      const SizedBox(width: 10),
-
-                                      // Name + last message
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    otherUser?['name'] ??
-                                                        otherUser?[
-                                                        'username'] ??
-                                                        'Unknown User',
-                                                    overflow:
-                                                    TextOverflow.ellipsis,
-                                                    style: textTheme
-                                                        .bodyLarge
-                                                        ?.copyWith(
-                                                      fontWeight:
-                                                      FontWeight.w600,
-                                                      color:
-                                                      Colors.grey.shade900,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 2),
-                                            if (isTyping)
-                                              Text(
-                                                'typing…',
-                                                maxLines: 1,
-                                                overflow:
-                                                TextOverflow.ellipsis,
-                                                style: textTheme.bodySmall
-                                                    ?.copyWith(
-                                                  color: Colors.green[600],
-                                                  fontStyle: FontStyle.italic,
-                                                ),
-                                              )
-                                            else
-                                              Text(
-                                                lastMessage,
-                                                maxLines: 1,
-                                                overflow:
-                                                TextOverflow.ellipsis,
-                                                style: textTheme.bodySmall
-                                                    ?.copyWith(
-                                                  fontWeight: hasUnread
-                                                      ? FontWeight.w600
-                                                      : FontWeight.normal,
-                                                  color: hasUnread
-                                                      ? Colors.black
-                                                      : Colors.grey[700],
-                                                ),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-
-                                      const SizedBox(width: 8),
-
-                                      // Time + unread badge
-                                      Column(
-                                        mainAxisAlignment:
-                                        MainAxisAlignment.center,
-                                        crossAxisAlignment:
-                                        CrossAxisAlignment.end,
-                                        children: [
-                                          if (timeLabel.isNotEmpty)
-                                            Text(
-                                              timeLabel,
-                                              style: textTheme.labelSmall
-                                                  ?.copyWith(
-                                                color: Colors.grey[600],
-                                              ),
-                                            ),
-                                          const SizedBox(height: 6),
-                                          if (hasUnread)
-                                            Container(
-                                              padding:
-                                              const EdgeInsets.symmetric(
-                                                horizontal: 8,
-                                                vertical: 4,
-                                              ),
-                                              decoration: BoxDecoration(
-                                                color: Colors.teal,
-                                                borderRadius:
-                                                BorderRadius.circular(999),
-                                              ),
-                                              child: Text(
-                                                "$unreadCount",
-                                                style: textTheme.labelSmall
-                                                    ?.copyWith(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8.0,
+                      vertical: 4.0,
+                    ),
+                    child: Material(
+                      color: Colors.white.withOpacity(0.96),
+                      borderRadius: BorderRadius.circular(18),
+                      elevation: 1.5,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                chatId: chatId,
+                                currentUserId: widget.currentUserId,
+                                otherUserId: otherUserId,
                               ),
                             ),
                           );
                         },
-                      );
-                    },
+                        onLongPress: () =>
+                            _showChatActionsBottomSheet(chatId, otherUser),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10.0, vertical: 8.0),
+                          child: Row(
+                            children: [
+                              Stack(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 24,
+                                    backgroundImage: otherUser?['photoURL'] != null &&
+                                            (otherUser!['photoURL'] as String).isNotEmpty
+                                        ? NetworkImage(otherUser['photoURL'])
+                                        : const AssetImage('assets/images/Profile.png')
+                                            as ImageProvider,
+                                    child: (otherUser?['photoURL'] == null ||
+                                            (otherUser!['photoURL'] as String).isEmpty)
+                                        ? const Icon(Icons.person)
+                                        : null,
+                                  ),
+                                  if (isOnline)
+                                    Positioned(
+                                      right: 0,
+                                      bottom: 0,
+                                      child: Container(
+                                        width: 11,
+                                        height: 11,
+                                        decoration: BoxDecoration(
+                                          color: Colors.green,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: Colors.white,
+                                            width: 2,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            otherUser?['name'] ??
+                                                otherUser?['username'] ??
+                                                'Unknown User',
+                                            overflow: TextOverflow.ellipsis,
+                                            style: textTheme.bodyLarge?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.grey.shade900,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 2),
+                                    if (isTyping)
+                                      Text(
+                                        'typing…',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: textTheme.bodySmall?.copyWith(
+                                          color: Colors.green[600],
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      )
+                                    else
+                                      Text(
+                                        lastMessage,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: textTheme.bodySmall?.copyWith(
+                                          fontWeight: hasUnread
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                          color: hasUnread
+                                              ? Colors.black
+                                              : Colors.grey[700],
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  if (timeLabel.isNotEmpty)
+                                    Text(
+                                      timeLabel,
+                                      style: textTheme.labelSmall?.copyWith(
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  const SizedBox(height: 6),
+                                  if (hasUnread)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.teal,
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        "$unreadCount",
+                                        style: textTheme.labelSmall?.copyWith(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   );
                 },
               );

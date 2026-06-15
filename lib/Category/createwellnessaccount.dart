@@ -9,6 +9,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:location/location.dart' as loc;
+import 'package:geocoding/geocoding.dart';
+import 'package:halo/widgets/gps_location_suffix.dart';
 
 // ---------- HALO THEME COLORS ----------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -58,6 +61,9 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
 
   int _currentStep = 0;
   String? selectedDate;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
+  bool _isFetchingLocation = false;
 
   // ---------- Helpers ----------
 
@@ -110,6 +116,59 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         .where('username', isEqualTo: username)
         .get();
     return querySnapshot.docs.isEmpty;
+  }
+
+  Future<void> _detectCurrentCity() async {
+    if (_isFetchingLocation) return;
+    setState(() => _isFetchingLocation = true);
+    try {
+      final location = loc.Location();
+      bool serviceEnabled = await location.serviceEnabled();
+      if (!serviceEnabled) {
+        serviceEnabled = await location.requestService();
+      }
+      if (!serviceEnabled) {
+        _showSnack('Please enable location service.');
+        return;
+      }
+
+      var permission = await location.hasPermission();
+      if (permission == loc.PermissionStatus.denied) {
+        permission = await location.requestPermission();
+      }
+      if (permission != loc.PermissionStatus.granted &&
+          permission != loc.PermissionStatus.grantedLimited) {
+        _showSnack('Location permission is required.');
+        return;
+      }
+
+      final data = await location.getLocation();
+      final lat = data.latitude;
+      final lng = data.longitude;
+      if (lat == null || lng == null) {
+        _showSnack('Unable to fetch your location.');
+        return;
+      }
+
+      final places = await placemarkFromCoordinates(lat, lng);
+      if (places.isEmpty) {
+        _showSnack('City not found from current location.');
+        return;
+      }
+
+      final p = places.first;
+      final city = (p.locality ?? p.subAdministrativeArea ?? p.administrativeArea ?? '').trim();
+      if (city.isEmpty) {
+        _showSnack('City not found from current location.');
+        return;
+      }
+      _location.text = city;
+      _showSnack('Location updated to $city');
+    } catch (e) {
+      _showSnack('Could not fetch location: $e');
+    } finally {
+      if (mounted) setState(() => _isFetchingLocation = false);
+    }
   }
 
   // ---------- File picking (Certifications) ----------
@@ -281,6 +340,10 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     }
   }
 
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   // ---------- UI HELPERS ----------
 
   InputDecoration _inputDecoration({
@@ -324,6 +387,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
           width: 1.5,
         ),
       ),
+      errorMaxLines: 4,
       contentPadding:
       const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
@@ -475,11 +539,19 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Password
         TextFormField(
           controller: _passwordController,
-          obscureText: true,
+          obscureText: _obscurePassword,
           style: const TextStyle(color: Colors.white),
           decoration: _inputDecoration(
             label: 'Password*',
             icon: Icons.lock_outline,
+            suffixIcon: IconButton(
+              icon: Icon(
+                _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                color: Colors.white70,
+              ),
+              onPressed: () => setState(
+                  () => _obscurePassword = !_obscurePassword),
+            ),
           ),
           validator: _validatePassword,
         ),
@@ -488,11 +560,21 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Confirm Password
         TextFormField(
           controller: _confirmPasswordController,
-          obscureText: true,
+          obscureText: _obscureConfirmPassword,
           style: const TextStyle(color: Colors.white),
           decoration: _inputDecoration(
             label: 'Confirm Password',
             icon: Icons.lock,
+            suffixIcon: IconButton(
+              icon: Icon(
+                _obscureConfirmPassword
+                    ? Icons.visibility_off
+                    : Icons.visibility,
+                color: Colors.white70,
+              ),
+              onPressed: () => setState(() => _obscureConfirmPassword =
+                  !_obscureConfirmPassword),
+            ),
           ),
           validator: (value) {
             if (value == null || value.isEmpty) {
@@ -534,10 +616,23 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         TextFormField(
           controller: _location,
           style: const TextStyle(color: Colors.white),
+          textCapitalization: TextCapitalization.words,
+          keyboardType: TextInputType.streetAddress,
           decoration: _inputDecoration(
             label: 'Location (City)',
+            hint: 'Type your city or tap GPS',
             icon: Icons.location_on,
+            suffixIcon: gpsLocationSuffix(
+              isFetching: _isFetchingLocation,
+              onPressed: _detectCurrentCity,
+            ),
           ),
+          validator: (value) {
+            if (value == null || value.trim().isEmpty) {
+              return 'Please enter your location';
+            }
+            return null;
+          },
         ),
         const SizedBox(height: 16),
 
@@ -831,6 +926,14 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     }
   }
 
+  Future<bool> _onWillPop() async {
+    if (_currentStep > 0) {
+      setState(() => _currentStep--);
+      return false;
+    }
+    return true;
+  }
+
   // ---------- BUILD ----------
 
   @override
@@ -839,13 +942,22 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     final textTheme =
     GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
 
-    return Scaffold(
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
         centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () async {
+            final allowPop = await _onWillPop();
+            if (allowPop && mounted) Navigator.of(context).pop();
+          },
+        ),
         title: Text(
           'Create Wellness Account',
           style: textTheme.titleMedium?.copyWith(
@@ -979,6 +1091,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

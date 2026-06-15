@@ -1,11 +1,11 @@
 {
-    "name": "classic_1",
-    "short_name": "classic_1",
+    "name": "HALO",
+    "short_name": "HALO",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "HALO — fitness & wellness social app",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

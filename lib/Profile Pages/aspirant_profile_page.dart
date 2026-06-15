@@ -1,7 +1,6 @@
 // profile_page_improved.dart  (Aspirant Profile)
 
 // -------------------- IMPORTS --------------------
-import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -12,8 +11,14 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:halo/Profile Pages/guru_profile_page.dart' as guru_profile;
-import 'package:halo/Profile Pages/wellness_profile_page.dart' as wellness_profile;
+import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
+import 'package:halo/platform/profile_avatar_provider.dart';
+import 'package:halo/platform/profile_local_photo.dart';
+import 'package:halo/platform/storage_upload.dart';
+import 'package:halo/screens/profile/core/profile_media_upload.dart';
+import 'package:halo/screens/profile/profile_router_screen.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
+import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
@@ -26,7 +31,30 @@ import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/Bottom Pages/saved_posts_page.dart';
 import 'package:halo/utils/search_utils.dart';
-import 'edit_profile_sections.dart'; // Edit pages for profile sections
+import 'package:halo/utils/shell_back.dart';
+import 'package:halo/services/follow_service.dart';
+import 'package:halo/widgets/profile_image_interactions.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_action_row.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_bio_card.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_fitness_goals_section.dart';
+import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
+import 'package:halo/screens/profile/widgets/common/profile_empty_state_rich.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
+import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
+import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
+import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
+import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_profile_shell.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
+import 'package:halo/screens/profile/widgets/common/profile_inline_tab_chip.dart';
+import 'package:halo/screens/profile/pages/follow_list_page.dart';
+import 'package:halo/models/aspirant_profile_model.dart';
+import 'package:halo/models/post_place.dart';
+import 'package:halo/screens/profile/configs/aspirant_profile_config.dart';
+import 'package:halo/Bottom Pages/SearchPage.dart';
+import 'edit_profile_sections.dart';
 
 // ===================================================================
 //  ASPIRANT PROFILE PAGE (HALO – HOBBY BASED ASPIRANT)
@@ -35,20 +63,29 @@ import 'edit_profile_sections.dart'; // Edit pages for profile sections
 /// Wrapper class
 class ProfilePage extends StatelessWidget {
   final String profileUserId; // Jis aspirant ki profile dekhni hai
+  final VoidCallback? onBackToHome;
 
-  const ProfilePage({Key? key, required this.profileUserId}) : super(key: key);
+  const ProfilePage({Key? key, required this.profileUserId, this.onBackToHome})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return ProfilePageImproved(profileUserId: profileUserId);
+    return ProfilePageImproved(
+      profileUserId: profileUserId,
+      onBackToHome: onBackToHome,
+    );
   }
 }
 
 class ProfilePageImproved extends StatefulWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const ProfilePageImproved({Key? key, required this.profileUserId})
-      : super(key: key);
+  const ProfilePageImproved({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   _ProfilePageImprovedState createState() => _ProfilePageImprovedState();
@@ -60,6 +97,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   User? _currentUser; // logged in user
+  final FollowService _followService = FollowService();
   bool _isOwnProfile = false; // current user == profile user ?
 
   // -------------------- USER DATA (ASPIRANT) --------------------
@@ -71,7 +109,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   String _bio = '';
   String? _profilePhotoUrl;
   String? _coverPhotoUrl;
-  List<String> _fitnessGoals = [];
+  List<FitnessGoalItem> _fitnessGoalItems = [];
   String? _fitnessLevel;
   List<String> _interests = []; // Hobbies / categories (cricket, dance, yoga...)
   List<String> _healthNotes = [];
@@ -91,32 +129,30 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   List<Map<String, dynamic>> _personalRecords = [];     // Personal fitness records
   List<Map<String, dynamic>> _weeklyProgressData = [];  // Weekly progress data
 
-  // -------------------- UI CONSTANTS --------------------
-  static const double _coverHeight = 220.0;
-  static const double _avatarSize = 90.0;
-  static const double _avatarOverlap = 30.0;
-  static const Color _lavender = Color(0xFFA58CE3);
-  static const Color _deepLavender = Color(0xFF6D4DB3);
-  static const Color _bg = Color(0xFFF4F1FB);
-  static const Color _chipBg = Color(0xFFEDE7F6);
-
   // -------------------- INTERACTION STATE --------------------
   bool _isFollowing = false;
   bool _isPrivate = false;
   bool _isLoading = true;
+  int _selectedAspirantTab = 0;
+  final Map<String, bool> _suggestedFollowLoading = {};
 
   // Image picker
   final ImagePicker _picker = ImagePicker();
-  File? _profilePhotoFile;
-  File? _coverPhotoFile;
+  ProfileLocalPhoto? _profilePhotoLocal;
+  ProfileLocalPhoto? _coverPhotoLocal;
 
   // Camera
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
   bool _isCameraInitialized = false;
 
+  List<int> _workoutCalendarDays = [];
+  AspirantProfileModules _profileModules = const AspirantProfileModules();
+
   // Animations
   late final AnimationController _followAnimController;
+  final GlobalKey<AspirantProfileShellState> _shellKey =
+      GlobalKey<AspirantProfileShellState>();
 
   @override
   void initState() {
@@ -148,40 +184,6 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       await _firestore.collection('users').doc(widget.profileUserId).get();
       if (doc.exists) {
         final data = doc.data()!;
-        final accountType = data['category']?.toString().toLowerCase() ?? 'aspirant';
-
-// agar guru found → guru page open
-        if (accountType == 'guru') {
-          if (!mounted) return;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => guru_profile.GuruProfilePage(
-                  profileUserId: widget.profileUserId,
-                ),
-              ),
-            );
-          });
-          return;
-        }
-
-// agar wellness found → wellness page open
-        if (accountType == 'wellness') {
-          if (!mounted) return;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => wellness_profile.WellnessProfilePage(
-                  profileUserId: widget.profileUserId,
-                ),
-              ),
-            );
-          });
-          return;
-        }
-
         _fullName = (data['full_name'] ?? '') as String;
         _username = (data['username'] ?? '') as String;
         _fitnessTag = (data['fitnessTag'] ?? 'Explorer on Halo') as String;
@@ -190,7 +192,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         _bio = (data['bio'] ?? '') as String;
         _profilePhotoUrl = data['profilePhoto'] as String?;
         _coverPhotoUrl = data['coverPhoto'] as String?;
-        _fitnessGoals = List<String>.from(data['fitnessGoals'] ?? []);
+        _fitnessGoalItems = parseFitnessGoals(data['fitnessGoals']);
         _fitnessLevel = data['fitnessLevel'] as String?;
         _interests = List<String>.from(data['interests'] ?? []);
         _healthNotes = List<String>.from(data['healthNotes'] ?? []);
@@ -242,24 +244,36 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             'steps': 0,
             'caloriesBurned': 0,
             'workouts': 0,
-            'currentWeight': data['currentWeight'] ?? 70,
-            'targetWeight': data['targetWeight'] ?? 65,
-            'bodyFat': data['bodyFat'] ?? 18,
-            'targetBodyFat': data['targetBodyFat'] ?? 15,
+            'currentWeight': data['currentWeight'] ?? 0,
+            'targetWeight': data['targetWeight'] ?? 0,
+            'bodyFat': data['bodyFat'] ?? 0,
+            'targetBodyFat': data['targetBodyFat'] ?? 0,
             'currentStreak': data['currentStreak'] ?? 0,
             'longestStreak': data['longestStreak'] ?? 0,
           };
         }
 
+        final recordsRaw = data['personalRecords'] as List<dynamic>?;
+        _personalRecords = parseRecordList(recordsRaw);
+
+        final weeklyRaw = data['weeklyProgressData'] as List<dynamic>?;
+        _weeklyProgressData = parseWeeklyProgress(weeklyRaw);
+
+        final calRaw = data['workoutCalendarDays'] as List<dynamic>?;
+        _workoutCalendarDays = calRaw
+                ?.map((e) => (e as num).toInt())
+                .toList() ??
+            [];
+
+        final modulesRaw =
+            data['profileModules'] as Map<String, dynamic>?;
+        _profileModules = AspirantProfileModules.fromMap(modulesRaw);
+
         // Social links
         final sl = data['socialLinks'] as Map<String, dynamic>?;
         _socialLinks = sl != null
             ? sl.map((k, v) => MapEntry(k, v.toString()))
-            : {
-          'instagram': 'Instagram',
-          'spotify': 'Spotify',
-          'telegram': 'Telegram',
-        };
+            : {};
       }
 
       // Follow status: kya current user is aspirant ko follow karta hai?
@@ -311,8 +325,14 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _profilePhotoFile = File(picked.path));
-    await _uploadAndSaveProfilePhoto(_profilePhotoFile!, isCover: false);
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      picked: picked,
+      outputNamePrefix: 'profile',
+    );
+    if (edited == null) return;
+    setState(() => _profilePhotoLocal = edited);
+    await _uploadAndSaveProfilePhoto(edited, isCover: false);
   }
 
   Future<void> _pickCoverImage() async {
@@ -320,37 +340,57 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _coverPhotoFile = File(picked.path));
-    await _uploadAndSaveProfilePhoto(_coverPhotoFile!, isCover: true);
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      picked: picked,
+      outputNamePrefix: 'cover',
+    );
+    if (edited == null) return;
+    setState(() => _coverPhotoLocal = edited);
+    await _uploadAndSaveProfilePhoto(edited, isCover: true);
   }
 
-  Future<void> _uploadAndSaveProfilePhoto(File file,
-      {required bool isCover}) async {
+  void _previewCoverImage() {
+    openProfileStoredImagePreview(
+      context: context,
+      localPath: _coverPhotoLocal?.path,
+      localBytes: _coverPhotoLocal?.previewBytes,
+      remoteUrl: _coverPhotoUrl,
+      heroTag: 'aspirant-cover-${widget.profileUserId}',
+    );
+  }
+
+  void _previewProfileImage() {
+    openProfileStoredImagePreview(
+      context: context,
+      localPath: _profilePhotoLocal?.path,
+      localBytes: _profilePhotoLocal?.previewBytes,
+      remoteUrl: _profilePhotoUrl,
+      heroTag: 'profile-avatar-${widget.profileUserId}',
+    );
+  }
+
+  Future<void> _uploadAndSaveProfilePhoto(
+    ProfileLocalPhoto local, {
+    required bool isCover,
+  }) async {
     if (_currentUser == null) return;
     try {
-      final fileName =
-          '${isCover ? 'cover' : 'profile'}_${_currentUser!.uid}_${DateTime.now().millisecondsSinceEpoch}';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('users')
-          .child(_currentUser!.uid)
-          .child(fileName);
-      final task = ref.putFile(file);
-      final snap = await task;
-      final url = await snap.ref.getDownloadURL();
-      final key = isCover ? 'coverPhoto' : 'profilePhoto';
-
-      await _firestore
-          .collection('users')
-          .doc(_currentUser!.uid)
-          .update({key: url});
+      final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
+        firestore: _firestore,
+        userId: _currentUser!.uid,
+        media: await local.toXFile(),
+        isCover: isCover,
+      );
 
       if (!mounted) return;
       setState(() {
         if (isCover) {
           _coverPhotoUrl = url;
+          _coverPhotoLocal = null;
         } else {
           _profilePhotoUrl = url;
+          _profilePhotoLocal = null;
         }
       });
       Fluttertoast.showToast(msg: 'Photo updated');
@@ -368,83 +408,26 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
     final String currentUserId = _currentUser!.uid;
     final String profileUserId = widget.profileUserId;
-
-    final followersDocRef = _firestore
-        .collection('users')
-        .doc(profileUserId)
-        .collection('followers')
-        .doc(currentUserId);
-
-    final followingDocRef = _firestore
-        .collection('users')
-        .doc(currentUserId)
-        .collection('following')
-        .doc(profileUserId);
-
     final bool wasFollowing = _isFollowing;
 
-    // Optimistic UI
-    setState(() {
-      _isFollowing = !wasFollowing;
-      _followersCount += wasFollowing ? -1 : 1;
-      if (_followersCount < 0) _followersCount = 0;
-    });
-    _followAnimController.forward(from: 0);
-
-    try {
-      await _firestore.runTransaction((transaction) async {
-        final profileUserRef =
-        _firestore.collection('users').doc(profileUserId);
-        final currentUserRef =
-        _firestore.collection('users').doc(currentUserId);
-
-        if (!wasFollowing) {
-          // FOLLOW
-          transaction.set(followersDocRef, {
-            'followerId': currentUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.set(followingDocRef, {
-            'followingId': profileUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(1),
-          });
-        } else {
-          // UNFOLLOW
-          transaction.delete(followersDocRef);
-          transaction.delete(followingDocRef);
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(-1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(-1),
-          });
-        }
-      });
-    } catch (e) {
-      debugPrint('follow toggle error: $e');
-
-      // Rollback UI
-      setState(() {
+    await ProfileFollowToggle.runOptimisticToggle(
+      followService: _followService,
+      currentUserId: currentUserId,
+      profileUserId: profileUserId,
+      wasFollowing: wasFollowing,
+      applyOptimisticUi: () => setState(() {
+        _isFollowing = !wasFollowing;
+        _followersCount += wasFollowing ? -1 : 1;
+        if (_followersCount < 0) _followersCount = 0;
+      }),
+      rollbackUi: () => setState(() {
         _isFollowing = wasFollowing;
         _followersCount += wasFollowing ? 1 : -1;
         if (_followersCount < 0) _followersCount = 0;
-      });
-
-      Fluttertoast.showToast(
-        msg: 'Something went wrong. Please try again.',
-      );
-    }
+      }),
+      afterOptimisticUi: () => _followAnimController.forward(from: 0),
+      errorToast: 'Something went wrong. Please try again.',
+    );
   }
 
   Future<void> _openMessage() async {
@@ -498,10 +481,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   .ref()
                   .child('posts')
                   .child(fileName);
-              final snap = await ref.putFile(File(image.path));
-              final url = await snap.ref.getDownloadURL();
+              final url = await uploadReferenceXFileAndGetUrl(
+                ref,
+                image,
+                metadata: SettableMetadata(contentType: 'image/jpeg'),
+              );
               final uid = FirebaseAuth.instance.currentUser!.uid;
-
+              print('uid: $uid');
 // 🔹 get accountType from users collection
               final userDoc = await FirebaseFirestore.instance
                   .collection('users')
@@ -591,225 +577,94 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   //  UI HELPERS (HEADER PARTS)
   // ===================================================================
   Widget _coverWidget(BuildContext context) {
-    final ImageProvider cover = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : (_coverPhotoUrl != null
-        ? NetworkImage(_coverPhotoUrl!)
-        : const AssetImage('assets/images/bio.png')) as ImageProvider;
+    final cover = profileHeroImageProvider(
+      local: _coverPhotoLocal,
+      remoteUrl: _coverPhotoUrl,
+      defaultAsset: const AssetImage('assets/images/bio.png'),
+    );
 
-    return GestureDetector(
-      onTap: _isOwnProfile ? _pickCoverImage : null,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              image: DecorationImage(image: cover, fit: BoxFit.cover),
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.black.withOpacity(0.25), Colors.transparent],
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return ProfileCoverHero(
+      cover: cover,
+      heroTag: 'aspirant-cover-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
+      onLongPress: _previewCoverImage,
     );
   }
 
   Widget _avatarWidget() {
-    final ImageProvider avatar = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : (_profilePhotoUrl != null
-        ? NetworkImage(_profilePhotoUrl!)
-        : const AssetImage('assets/images/Profile.png')) as ImageProvider;
+    final avatar = profileHeroImageProvider(
+      local: _profilePhotoLocal,
+      remoteUrl: _profilePhotoUrl,
+      defaultAsset: const AssetImage('assets/images/Profile.png'),
+    );
 
-    return Hero(
-      tag: 'profile-avatar-${widget.profileUserId}',
-      child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : null,
-        child: Container(
-          width: _avatarSize + 6,
-          height: _avatarSize + 6,
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              )
-            ],
-          ),
-          child: CircleAvatar(
-            radius: _avatarSize / 2,
-            backgroundImage: avatar,
-          ),
-        ),
-      ),
+    return ProfileAvatarHeroShell(
+      avatar: avatar,
+      heroTag: 'profile-avatar-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+      onLongPress: _previewProfileImage,
     );
   }
 
-  Widget _buildStatsCard() {
-    Widget tile(String count, String label) {
-      return Expanded(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              count,
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
+  bool _isSectionEnabled(String sectionId) =>
+      AspirantProfileConfig.isSectionEnabled(_profileModules, sectionId);
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          )
-        ],
-      ),
-      child: Row(
-        children: [
-          tile(_followersCount.toString(), 'Followers'),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_followingCount.toString(), 'Following'),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_postsCount.toString(), 'Posts'),
-        ],
-      ),
+  Widget _buildStatsCard() {
+    return ProfileThreeColumnStatsCard(
+      followers: _followersCount,
+      following: _followingCount,
+      posts: _postsCount,
+      onTapFollowers: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.followers,
+            ),
+          ),
+        );
+      },
+      onTapFollowing: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.following,
+            ),
+          ),
+        );
+      },
+      onTapPosts: () => _shellKey.currentState?.jumpToPostsTab(),
     );
   }
 
   Widget _buildActionButtons() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
-      child: _isOwnProfile
-          ? SizedBox(
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: _handleEditProfile,
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30),
-            ),
-            side: const BorderSide(color: _lavender),
-          ),
-          child: const Text('Edit Profile'),
-        ),
-      )
-          : Row(
-        children: [
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, anim) =>
-                  ScaleTransition(scale: anim, child: child),
-              child: ElevatedButton.icon(
-                key: ValueKey(_isFollowing),
-                onPressed: _toggleFollow,
-                icon: Icon(
-                  _isFollowing ? Icons.check : Icons.person_add,
-                  color: _isFollowing ? Colors.black : Colors.white,
+    return AspirantActionRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onEditProfile: _handleEditProfile,
+      onSavedPosts: _isOwnProfile
+          ? () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const SavedPostsPage(),
                 ),
-                label: Text(
-                  _isFollowing ? 'Following' : 'Follow',
-                  style: TextStyle(
-                    color: _isFollowing ? Colors.black : Colors.white,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                  _isFollowing ? Colors.white : _lavender,
-                  side: _isFollowing
-                      ? const BorderSide(color: _deepLavender)
-                      : null,
-                  elevation: 4,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: _openMessage,
-              icon: const Icon(Icons.message_outlined),
-              label: const Text('Message'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                side: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-          ),
-        ],
-      ),
+              );
+            }
+          : null,
+      accentColor: ProfileLayout.lavender,
     );
   }
 
   Widget _buildBioCard() {
-    final displayBio = _bio.isNotEmpty
-        ? _bio
-        : (_isOwnProfile
-        ? 'Add a short bio — tell people what you love (cricket, dance, yoga, etc.).'
-        : '');
-
-    if (displayBio.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        padding: const EdgeInsets.all(14),
-        child: Text(
-          displayBio,
-          style: GoogleFonts.poppins(fontSize: 14, height: 1.4),
-        ),
-      ),
+    return AspirantBioCard(
+      bio: _bio,
+      isOwnProfile: _isOwnProfile,
     );
   }
 
@@ -817,49 +672,228 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   //  NEW ASPIRANT UI SECTIONS (HOBBY FOCUSED)
   // ===================================================================
 
-  /// Tabs – abhi sirf visual
+  /// Aspirant discovery tabs (lavender chips)
   Widget _buildAspirantTabsRow() {
-    final tabs = ['Overview', 'Coaches', 'Wellness', 'Community'];
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 4),
+    const tabs = ['Aspirant', 'Coaches', 'Wellness', 'Community'];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: tabs
-            .map(
-              (t) => Expanded(
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 2),
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              decoration: BoxDecoration(
-                color: t == 'Overview'
-                    ? Colors.blue
-                    : Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                t,
-                textAlign: TextAlign.center,
-                style: GoogleFonts.poppins(
-                  fontSize: 11,
-                  color: t == 'Overview'
-                      ? Colors.white
-                      : Colors.black87,
-                ),
-              ),
-            ),
-          ),
-        )
-            .toList(),
+        children: List.generate(tabs.length, (index) {
+          return ProfileInlineTabChip(
+            label: tabs[index],
+            selected: _selectedAspirantTab == index,
+            onTap: () {
+              if (_selectedAspirantTab == index) return;
+              setState(() => _selectedAspirantTab = index);
+            },
+          );
+        }),
       ),
+    );
+  }
+
+  Widget _buildAspirantTabContent() {
+    switch (_selectedAspirantTab) {
+      case 0: // Aspirant
+        return Column(
+          children: [
+            _buildSimilarAspirantsSection(),
+            _buildHobbiesSection(),
+          ],
+        );
+      case 1: // Coaches
+        return _buildSuggestedGurusSection();
+      case 2: // Wellness
+        return _buildSuggestedWellnessSection();
+      case 3: // Community
+        return Column(
+          children: [
+            _buildEventsChallengesSection(),
+            _buildSocialLinksSection(),
+          ],
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  List<String> _toLowerTrimmedList(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw
+        .map((e) => e.toString().trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
+  String _commonMatchText(Map<String, dynamic> data) {
+    final mine = _interests
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet();
+    final theirs = <String>{
+      ..._toLowerTrimmedList(data['interests']),
+      ..._toLowerTrimmedList(data['specialties']),
+      ..._toLowerTrimmedList(data['services']),
+      (data['primaryCategory'] ?? '').toString().trim().toLowerCase(),
+      (data['category'] ?? '').toString().trim().toLowerCase(),
+      (data['wellness_category'] ?? '').toString().trim().toLowerCase(),
+    }..removeWhere((e) => e.isEmpty);
+
+    final common = mine.intersection(theirs).toList();
+    if (common.isNotEmpty) {
+      final first = common.first;
+      return '${first[0].toUpperCase()}${first.substring(1)} in common';
+    }
+
+    final fallback = (data['primaryCategory'] ??
+            data['category'] ??
+            data['wellness_category'] ??
+            '')
+        .toString()
+        .trim();
+    return fallback.isNotEmpty ? fallback : 'Suggested for you';
+  }
+
+  void _openSuggestedUserProfile(String userId) {
+    if (userId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfileRouterScreen(profileUserId: userId),
+      ),
+    );
+  }
+
+  Future<void> _toggleSuggestedFollow({
+    required String profileUserId,
+    required bool isCurrentlyFollowing,
+  }) async {
+    final currentUid = _currentUser?.uid;
+    if (currentUid == null || profileUserId.isEmpty || profileUserId == currentUid) {
+      return;
+    }
+    setState(() => _suggestedFollowLoading[profileUserId] = true);
+    try {
+      await _followService.setFollowState(
+        currentUserId: currentUid,
+        profileUserId: profileUserId,
+        shouldFollow: !isCurrentlyFollowing,
+      );
+    } catch (_) {
+      Fluttertoast.showToast(msg: 'Could not update follow right now');
+    } finally {
+      if (!mounted) return;
+      setState(() => _suggestedFollowLoading[profileUserId] = false);
+    }
+  }
+
+  Widget _buildSuggestedFollowButton(String targetUserId) {
+    final currentUid = _currentUser?.uid;
+    if (currentUid == null || currentUid == targetUserId) {
+      return const SizedBox.shrink();
+    }
+    final loading = _suggestedFollowLoading[targetUserId] == true;
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _firestore
+          .collection('users')
+          .doc(targetUserId)
+          .collection('followers')
+          .doc(currentUid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final isFollowing = snapshot.data?.exists ?? false;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: _firestore
+                  .collection('users')
+                  .doc(currentUid)
+                  .collection('followers')
+                  .doc(targetUserId)
+                  .snapshots(),
+              builder: (context, reverseSnap) {
+                final followsYou = reverseSnap.data?.exists ?? false;
+                final isFollowBack = followsYou && !isFollowing;
+                final topLabel = isFollowBack ? 'Follow back' : null;
+                return Column(
+                  children: [
+                    if (topLabel != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Text(
+                          topLabel,
+                          style: GoogleFonts.poppins(
+                            fontSize: 8.5,
+                            color: ProfileLayout.deepLavender,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    SizedBox(
+                      height: 26,
+                      child: OutlinedButton(
+                        onPressed: loading
+                            ? null
+                            : () => _toggleSuggestedFollow(
+                                  profileUserId: targetUserId,
+                                  isCurrentlyFollowing: isFollowing,
+                                ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                          side: BorderSide(
+                            color: isFollowing ? Colors.grey.shade400 : ProfileLayout.deepLavender,
+                          ),
+                          backgroundColor: isFollowing ? Colors.white : ProfileLayout.deepLavender,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: loading
+                            ? const SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Text(
+                                isFollowing ? 'Following' : 'Follow',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 9,
+                                  color: isFollowing ? Colors.black87 : Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                      ),
+                    ),
+                    if (followsYou)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Follows you',
+                          style: GoogleFonts.poppins(
+                            fontSize: 8,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
   // -------------------- Suggested Gurus --------------------
   Widget _buildSuggestedGurusSection() {
-    // Assume: users collection me field: profileType == 'guru'
+    // users collection standard field: accountType == 'guru'
     Query<Map<String, dynamic>> query = _firestore
         .collection('users')
-        .where('profileType', isEqualTo: 'guru');
+        .where('accountType', isEqualTo: 'guru');
 
     if (_interests.isNotEmpty) {
       final List<String> topInterests = _interests.length > 5
@@ -918,11 +952,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 }
                 final docs = snapshot.data?.docs ?? [];
                 if (docs.isEmpty) {
-                  return Text(
-                    'No gurus found yet for your interests.',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                    ),
+                  return const ProfileEmptyState(
+                    text: 'No gurus found yet for your interests.',
                   );
                 }
                 return ListView.separated(
@@ -936,50 +967,66 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final category =
                     (data['primaryCategory'] ?? '') as String;
                     final photo = data['profilePhoto'] as String?;
-                    return Container(
-                      width: 90,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 6,
-                            offset: const Offset(0, 3),
-                          )
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          CircleAvatar(
-                            radius: 22,
-                            backgroundImage: photo != null
-                                ? NetworkImage(photo)
-                                : const AssetImage(
-                              'assets/images/Profile.png',
-                            ) as ImageProvider,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                    final matchText = _commonMatchText(data);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => _openSuggestedUserProfile(d.id),
+                      child: Container(
+                        width: 110,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            )
+                          ],
+                        ),
+                        child: Column(
+                          children: [
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundImage: photo != null
+                                  ? NetworkImage(photo)
+                                  : const AssetImage(
+                                      'assets/images/Profile.png',
+                                    ) as ImageProvider,
                             ),
-                          ),
-                          if (category.isNotEmpty)
+                            const SizedBox(height: 6),
                             Text(
-                              category,
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              category.isNotEmpty ? category : matchText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.poppins(
                                 fontSize: 10,
+                                color: Colors.black54,
                               ),
                             ),
-                        ],
+                            Text(
+                              matchText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.poppins(
+                                fontSize: 9,
+                                color: Colors.blueGrey,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            _buildSuggestedFollowButton(d.id),
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -994,10 +1041,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Suggested Wellness --------------------
   Widget _buildSuggestedWellnessSection() {
-    // Assume: profileType == 'wellness'
+    // users collection standard field: accountType == 'wellness'
     Query<Map<String, dynamic>> query = _firestore
         .collection('users')
-        .where('profileType', isEqualTo: 'wellness');
+        .where('accountType', isEqualTo: 'wellness');
 
     if (_interests.isNotEmpty) {
       final List<String> topInterests = _interests.length > 5
@@ -1035,11 +1082,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 }
                 final docs = snapshot.data?.docs ?? [];
                 if (docs.isEmpty) {
-                  return Text(
-                    'No wellness profiles yet. They will appear here.',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                    ),
+                  return const ProfileEmptyState(
+                    text: 'No wellness profiles yet. They will appear here.',
                   );
                 }
                 return ListView.separated(
@@ -1053,60 +1097,74 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final category =
                     (data['primaryCategory'] ?? '') as String;
                     final photo = data['profilePhoto'] as String?;
-                    return Container(
-                      width: 140,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 6,
-                            offset: const Offset(0, 3),
-                          )
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 20,
-                            backgroundImage: photo != null
-                                ? NetworkImage(photo)
-                                : const AssetImage(
-                              'assets/images/Profile.png',
-                            ) as ImageProvider,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
-                              mainAxisAlignment:
-                              MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                if (category.isNotEmpty)
+                    final matchText = _commonMatchText(data);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => _openSuggestedUserProfile(d.id),
+                      child: Container(
+                        width: 150,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            )
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 20,
+                              backgroundImage: photo != null
+                                  ? NetworkImage(photo)
+                                  : const AssetImage(
+                                      'assets/images/Profile.png',
+                                    ) as ImageProvider,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
                                   Text(
-                                    category,
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    category.isNotEmpty ? category : matchText,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: GoogleFonts.poppins(
                                       fontSize: 10,
+                                      color: Colors.black54,
                                     ),
                                   ),
-                              ],
+                                  Text(
+                                    matchText,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 9,
+                                      color: Colors.blueGrey,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  _buildSuggestedFollowButton(d.id),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -1121,10 +1179,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Similar Aspirants --------------------
   Widget _buildSimilarAspirantsSection() {
-    // Assume: profileType == 'aspirant'
+    // users collection standard field: accountType == 'aspirant'
     Query<Map<String, dynamic>> query = _firestore
         .collection('users')
-        .where('profileType', isEqualTo: 'aspirant');
+        .where('accountType', isEqualTo: 'aspirant');
 
     if (_primaryCategory != null && _primaryCategory!.isNotEmpty) {
       query = query.where('primaryCategory', isEqualTo: _primaryCategory);
@@ -1180,43 +1238,71 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     final name = (data['name'] ?? 'User') as String;
                     final username = (data['username'] ?? '') as String;
                     final photo = data['profilePhoto'] as String?;
-                    return Column(
-                      children: [
-                        CircleAvatar(
-                          radius: 24,
-                          backgroundImage: photo != null
-                              ? NetworkImage(photo)
-                              : const AssetImage(
-                            'assets/images/Profile.png',
-                          ) as ImageProvider,
+                    final matchText = _commonMatchText(data);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => _openSuggestedUserProfile(d.id),
+                      child: Container(
+                        width: 110,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            )
+                          ],
                         ),
-                        const SizedBox(height: 4),
-                        SizedBox(
-                          width: 70,
-                          child: Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.poppins(
-                              fontSize: 10,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundImage: photo != null
+                                  ? NetworkImage(photo)
+                                  : const AssetImage(
+                                      'assets/images/Profile.png',
+                                    ) as ImageProvider,
                             ),
-                          ),
-                        ),
-                        if (username.isNotEmpty)
-                          SizedBox(
-                            width: 70,
-                            child: Text(
-                              '@$username',
+                            const SizedBox(height: 6),
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              username.isNotEmpty ? '@$username' : matchText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                color: Colors.black54,
+                              ),
+                            ),
+                            Text(
+                              matchText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
                               style: GoogleFonts.poppins(
                                 fontSize: 9,
+                                color: Colors.blueGrey,
                               ),
                             ),
-                          ),
-                      ],
+                            const SizedBox(height: 4),
+                            _buildSuggestedFollowButton(d.id),
+                          ],
+                        ),
+                      ),
                     );
                   },
                 );
@@ -1230,13 +1316,23 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Achievements & Badges --------------------
   Widget _buildAchievementsSection() {
+    if (!_isSectionEnabled('achievements')) return const SizedBox.shrink();
     if (_badges.isEmpty && !_isOwnProfile) {
       return const SizedBox.shrink();
     }
 
-    final displayBadges = _badges.isNotEmpty
-        ? _badges
-        : ['New to Halo'];
+    if (_badges.isEmpty && _isOwnProfile) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
+        child: ProfileEmptyStateRich(
+          text: 'Earn badges as you explore Halo',
+          icon: Icons.emoji_events_outlined,
+          actionLabel: 'Enable in Profile Sections',
+          onAction: _openProfileModules,
+          card: true,
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
@@ -1275,22 +1371,22 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: displayBadges
+            children: _badges
                 .map(
                   (b) => Container(
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: _chipBg,
+                  color: ProfileLayout.chipBg,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.emoji_events,
                       size: 16,
-                      color: Colors.orange,
+                      color: ProfileLayout.deepLavender,
                     ),
                     const SizedBox(width: 4),
                     Text(
@@ -1312,6 +1408,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // -------------------- Recent Activities --------------------
   Widget _buildLastWorkoutsSection() {
+    if (!_isSectionEnabled('recent_activities')) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Column(
@@ -1354,25 +1451,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           const SizedBox(height: 10),
           if (_lastWorkouts.isEmpty && _isOwnProfile)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.star_border, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
-                    Text(
-                      'No activities yet. Add your first match, session or practice!',
-                      style: GoogleFonts.poppins(),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
+            const ProfileEmptyStateRich(
+              text: 'No activities yet. Add your first match, session or practice!',
+              icon: Icons.star_border,
+              card: true,
             )
           else if (_lastWorkouts.isEmpty)
             const SizedBox.shrink()
@@ -1445,7 +1527,14 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       child: Container(
         width: double.infinity,
         decoration: BoxDecoration(
-          color: Colors.red[600],
+          gradient: LinearGradient(
+            colors: [
+              ProfileLayout.deepLavender,
+              ProfileLayout.lavender,
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
           borderRadius: BorderRadius.circular(14),
         ),
         padding: const EdgeInsets.all(16),
@@ -1491,12 +1580,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
             const SizedBox(height: 10),
             if (_eventsChallenges.isEmpty && _isOwnProfile)
-              Center(
-                child: Text(
-                  'No events yet. Add your first tournament, show or meetup!',
-                  style: GoogleFonts.poppins(color: Colors.white70),
-                  textAlign: TextAlign.center,
-                ),
+              const ProfileEmptyStateRich(
+                text: 'No events yet. Add your first tournament, show or meetup!',
+                textColor: Colors.white70,
               )
             else if (_eventsChallenges.isEmpty)
               const SizedBox.shrink()
@@ -1520,58 +1606,36 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildSocialLinksSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+    return ProfileSectionCard(
+      title: 'Social Links',
+      trailing: _isOwnProfile
+          ? TextButton.icon(
+              onPressed: () async {
+                final updated = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (ctx) => EditSocialLinksPage(
+                      initialLinks: _socialLinks,
+                    ),
+                  ),
+                );
+                if (updated != null) {
+                  setState(() {
+                    _socialLinks = Map<String, String>.from(updated);
+                  });
+                }
+              },
+              icon: const Icon(Icons.edit, size: 18),
+              label: const Text('Edit'),
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Social Links',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-              if (_isOwnProfile)
-                TextButton.icon(
-                  onPressed: () async {
-                    final updated = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (ctx) => EditSocialLinksPage(
-                          initialLinks: _socialLinks,
-                        ),
-                      ),
-                    );
-                    if (updated != null) {
-                      setState(() {
-                        _socialLinks = Map<String, String>.from(updated);
-                      });
-                      // Data is already saved to Firebase by EditSocialLinksPage
-                    }
-                  },
-                  icon: const Icon(Icons.edit, size: 18),
-                  label: const Text('Edit'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
           if (_socialLinks.isEmpty && _isOwnProfile)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Center(
-                child: Text(
-                  'No social links yet. Add your links!',
-                  style: GoogleFonts.poppins(),
-                ),
-              ),
+            const ProfileEmptyState(
+              text: 'No social links yet. Add your links!',
+              card: true,
             )
           else if (_socialLinks.isEmpty)
             const SizedBox.shrink()
@@ -1630,8 +1694,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             runSpacing: 8,
             children: _interests
                 .map(
-                  (i) => Chip(
-                label: Text(i),
+                  (i) => ActionChip(
+                label: Text(i, style: GoogleFonts.poppins(fontSize: 12)),
+                backgroundColor: ProfileLayout.chipBg,
+                side: BorderSide.none,
+                onPressed: () => _openInterestExplore(i),
               ),
             )
                 .toList(),
@@ -1642,6 +1709,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildFitnessArticlesSection() {
+    if (!_isSectionEnabled('learning_resources')) return const SizedBox.shrink();
     if (_fitnessArticles.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -1682,9 +1750,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildFitnessStatsSection() {
+    if (!_isSectionEnabled('activity_stats')) return const SizedBox.shrink();
     final steps = _fitnessStats['steps'] ?? 0;
     final calories = _fitnessStats['caloriesBurned'] ?? 0;
     final workouts = _fitnessStats['workouts'] ?? 0;
+    if (steps == 0 && calories == 0 && workouts == 0 && !_isOwnProfile) {
+      return const SizedBox.shrink();
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -1783,6 +1855,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   // ===================================================================
 
   Widget _buildProgressTrackingSection() {
+    if (!_isSectionEnabled('progress_tracking')) return const SizedBox.shrink();
     if (!_isOwnProfile) return const SizedBox.shrink();
     
     return Padding(
@@ -1813,10 +1886,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.trending_up, color: _lavender, size: 24),
+                        child: Icon(Icons.trending_up, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Flexible(
@@ -1838,7 +1911,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     'View',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1853,10 +1926,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     onTap: _isOwnProfile ? () => _editProgress('weight') : null,
                     child: _buildProgressCard(
                       'Weight',
-                      '${(_fitnessStats['currentWeight'] ?? 70).toString()} kg',
-                      'Goal: ${(_fitnessStats['targetWeight'] ?? 65).toString()} kg',
+                      '${(_fitnessStats['currentWeight'] ?? 0).toString()} kg',
+                      'Goal: ${(_fitnessStats['targetWeight'] ?? 0).toString()} kg',
                       Icons.monitor_weight,
-                      Colors.blue,
+                      ProfileLayout.lavender,
                     ),
                   ),
                 ),
@@ -1866,17 +1939,17 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     onTap: _isOwnProfile ? () => _editProgress('bodyFat') : null,
                     child: _buildProgressCard(
                       'Body Fat',
-                      '${(_fitnessStats['bodyFat'] ?? 18).toString()}%',
-                      'Target: ${(_fitnessStats['targetBodyFat'] ?? 15).toString()}%',
+                      '${(_fitnessStats['bodyFat'] ?? 0).toString()}%',
+                      'Target: ${(_fitnessStats['targetBodyFat'] ?? 0).toString()}%',
                       Icons.analytics,
-                      Colors.orange,
+                      ProfileLayout.deepLavender,
                     ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            if (_fitnessGoals.isNotEmpty)
+            if (_fitnessGoalItems.isNotEmpty)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1888,15 +1961,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ..._fitnessGoals.take(3).map((goal) => Padding(
+                  ..._fitnessGoalItems.take(3).map((goal) => Padding(
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(
                       children: [
-                        Icon(Icons.check_circle_outline, size: 18, color: _lavender),
+                        Icon(Icons.check_circle_outline, size: 18, color: ProfileLayout.lavender),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            goal,
+                            goal.name,
                             style: GoogleFonts.poppins(fontSize: 13),
                           ),
                         ),
@@ -1971,14 +2044,48 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildWorkoutCalendarSection() {
+    if (!_isSectionEnabled('workout_calendar')) return const SizedBox.shrink();
     if (!_isOwnProfile) return const SizedBox.shrink();
-    
+
     final now = DateTime.now();
     final currentMonth = now.month;
     final currentYear = now.year;
     final daysInMonth = DateTime(currentYear, currentMonth + 1, 0).day;
-    final workoutDays = List.generate(7, (i) => (i * 4) + 1); // Mock workout days
-    
+    final workoutDays = workoutDaysForMonth(
+      year: currentYear,
+      month: currentMonth,
+      lastWorkouts: _lastWorkouts,
+      storedCalendarDays: _workoutCalendarDays,
+    );
+
+    if (workoutDays.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: ProfileEmptyStateRich(
+          text: 'Log activities to see them on your calendar',
+          icon: Icons.calendar_today_outlined,
+          actionLabel: 'Add Activity',
+          onAction: () async {
+            final updated = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (ctx) => EditWorkoutsPage(
+                  initialWorkouts: _lastWorkouts,
+                  userType: 'aspirant',
+                ),
+              ),
+            );
+            if (updated != null) {
+              setState(() {
+                _lastWorkouts = List<Map<String, dynamic>>.from(updated);
+              });
+            }
+          },
+          card: true,
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Container(
@@ -2007,10 +2114,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.calendar_today, color: _lavender, size: 24),
+                        child: Icon(Icons.calendar_today, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Flexible(
@@ -2068,13 +2175,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   height: 40,
                   decoration: BoxDecoration(
                     color: isToday 
-                        ? _lavender 
+                        ? ProfileLayout.lavender 
                         : isWorkoutDay 
-                            ? _lavender.withOpacity(0.2)
+                            ? ProfileLayout.lavender.withOpacity(0.2)
                             : Colors.grey[100],
                     borderRadius: BorderRadius.circular(8),
                     border: isToday 
-                        ? Border.all(color: _lavender, width: 2)
+                        ? Border.all(color: ProfileLayout.lavender, width: 2)
                         : null,
                   ),
                   child: Center(
@@ -2086,7 +2193,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                         color: isToday 
                             ? Colors.white 
                             : isWorkoutDay 
-                                ? _lavender 
+                                ? ProfileLayout.lavender 
                                 : Colors.grey[600],
                       ),
                     ),
@@ -2097,9 +2204,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             const SizedBox(height: 12),
             Row(
               children: [
-                _buildLegendItem(_lavender, 'Workout'),
+                _buildLegendItem(ProfileLayout.lavender, 'Workout'),
                 const SizedBox(width: 16),
-                _buildLegendItem(_lavender.withOpacity(0.3), 'Today'),
+                _buildLegendItem(ProfileLayout.lavender.withOpacity(0.3), 'Today'),
               ],
             ),
           ],
@@ -2134,156 +2241,28 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildFitnessGoalsSection() {
-    if (!_isOwnProfile) return const SizedBox.shrink();
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [_lavender.withOpacity(0.1), _deepLavender.withOpacity(0.05)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _lavender.withOpacity(0.3)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: _lavender,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.flag, color: Colors.white, size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Fitness Goals',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
-                  onPressed: _addNewGoal,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (_fitnessGoals.isEmpty)
-              Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.flag_outlined, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
-                    Text(
-                      'No goals set yet',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addNewGoal,
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Set Your First Goal'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _lavender,
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              ..._fitnessGoals.map((goal) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(Icons.fitness_center, color: _lavender, size: 20),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              goal,
-                              style: GoogleFonts.poppins(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            LinearProgressIndicator(
-                              value: 0.6, // Mock progress
-                              backgroundColor: Colors.grey[200],
-                              valueColor: AlwaysStoppedAnimation<Color>(_lavender),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (_isOwnProfile)
-                        PopupMenuButton<String>(
-                          icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
-                          onSelected: (value) {
-                            if (value == 'edit') {
-                              _editGoal(goal);
-                            } else if (value == 'delete') {
-                              _deleteGoal(goal);
-                            }
-                          },
-                          itemBuilder: (context) => [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(value: 'delete', child: Text('Delete')),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              )),
-          ],
-        ),
-      ),
+    if (!_isSectionEnabled('fitness_goals')) return const SizedBox.shrink();
+    if (!_isOwnProfile && _fitnessGoalItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return AspirantFitnessGoalsSection(
+      goals: _fitnessGoalItems,
+      onAddGoal: _addNewGoal,
+      onEditGoal: _editGoal,
+      onDeleteGoal: _deleteGoal,
+      accentColor: ProfileLayout.lavender,
+      accentDarkColor: ProfileLayout.deepLavender,
     );
   }
 
   Widget _buildWorkoutStreakSection() {
-    final currentStreak = _fitnessStats['currentStreak'] ?? 5;
-    final longestStreak = _fitnessStats['longestStreak'] ?? 12;
-    
+    if (!_isSectionEnabled('workout_streak')) return const SizedBox.shrink();
+    final currentStreak = (_fitnessStats['currentStreak'] as num?)?.toInt() ?? 0;
+    final longestStreak = (_fitnessStats['longestStreak'] as num?)?.toInt() ?? 0;
+    if (currentStreak == 0 && longestStreak == 0 && !_isOwnProfile) {
+      return const SizedBox.shrink();
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Container(
@@ -2291,14 +2270,17 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.orange[100]!, Colors.orange[50]!],
+            colors: [
+              ProfileLayout.lavender.withValues(alpha: 0.25),
+              ProfileLayout.chipBg,
+            ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.orange.withOpacity(0.2),
+              color: ProfileLayout.lavender.withValues(alpha: 0.15),
               blurRadius: 12,
               offset: const Offset(0, 4),
             )
@@ -2309,14 +2291,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.local_fire_department, color: Colors.orange[700], size: 32),
+                Icon(Icons.local_fire_department,
+                    color: ProfileLayout.deepLavender, size: 32),
                 const SizedBox(width: 12),
                 Text(
                   '$currentStreak',
                   style: GoogleFonts.poppins(
                     fontSize: 36,
                     fontWeight: FontWeight.bold,
-                    color: Colors.orange[900],
+                    color: ProfileLayout.deepLavender,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -2325,17 +2308,19 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   style: GoogleFonts.poppins(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
-                    color: Colors.orange[900],
+                    color: ProfileLayout.deepLavender,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
             Text(
-              'Keep it up! Your longest streak is $longestStreak days',
+              longestStreak > 0
+                  ? 'Keep it up! Your longest streak is $longestStreak days'
+                  : 'Start logging activities to build your streak',
               style: GoogleFonts.poppins(
                 fontSize: 13,
-                color: Colors.orange[800],
+                color: ProfileLayout.deepLavender.withValues(alpha: 0.85),
               ),
               textAlign: TextAlign.center,
             ),
@@ -2346,14 +2331,24 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildPersonalRecordsSection() {
-    // Use Firebase data if available, otherwise use defaults
-    final defaultRecords = [
-      {'name': 'Fastest 5K', 'value': '28:45', 'icon': Icons.directions_run, 'color': Colors.blue},
-      {'name': 'Max Bench Press', 'value': '85 kg', 'icon': Icons.fitness_center, 'color': Colors.red},
-      {'name': 'Longest Plank', 'value': '3:15', 'icon': Icons.timer, 'color': Colors.green},
-    ];
-    
-    final records = _personalRecords.isNotEmpty ? _personalRecords : defaultRecords;
+    if (!_isSectionEnabled('personal_records')) return const SizedBox.shrink();
+    if (_personalRecords.isEmpty && !_isOwnProfile) {
+      return const SizedBox.shrink();
+    }
+    if (_personalRecords.isEmpty && _isOwnProfile) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: ProfileEmptyStateRich(
+          text: 'Track your personal bests',
+          icon: Icons.emoji_events_outlined,
+          actionLabel: 'Add Record',
+          onAction: () => _editPersonalRecord(-1, {}),
+          card: true,
+        ),
+      );
+    }
+
+    final records = _personalRecords;
     
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -2365,10 +2360,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: _lavender.withOpacity(0.15),
+                  color: ProfileLayout.lavender.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(Icons.emoji_events, color: _lavender, size: 24),
+                child: Icon(Icons.emoji_events, color: ProfileLayout.lavender, size: 24),
               ),
               const SizedBox(width: 12),
               Text(
@@ -2463,24 +2458,24 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildWeeklyProgressSection() {
+    if (!_isSectionEnabled('weekly_progress')) return const SizedBox.shrink();
     if (!_isOwnProfile) return const SizedBox.shrink();
-    
-    // Use Firebase data if available, otherwise use defaults
-    final weeklyData = _weeklyProgressData.isNotEmpty
-        ? _weeklyProgressData
-        : [
-            {'day': 'Mon', 'workouts': 2, 'calories': 450},
-            {'day': 'Tue', 'workouts': 1, 'calories': 320},
-            {'day': 'Wed', 'workouts': 3, 'calories': 680},
-            {'day': 'Thu', 'workouts': 2, 'calories': 520},
-            {'day': 'Fri', 'workouts': 1, 'calories': 380},
-            {'day': 'Sat', 'workouts': 2, 'calories': 490},
-            {'day': 'Sun', 'workouts': 0, 'calories': 0},
-          ];
-    
-    final maxCalories = weeklyData.isNotEmpty
-        ? weeklyData.map((d) => (d['calories'] as num?)?.toInt() ?? 0).reduce((a, b) => a > b ? a : b)
-        : 680;
+
+    if (_weeklyProgressData.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: ProfileEmptyStateRich(
+          text: 'Log weekly activity to see your progress chart',
+          icon: Icons.bar_chart_outlined,
+          card: true,
+        ),
+      );
+    }
+
+    final weeklyData = _weeklyProgressData;
+    final maxCalories = weeklyData
+        .map((d) => (d['calories'] as num?)?.toInt() ?? 0)
+        .fold<int>(0, (a, b) => a > b ? a : b);
     
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
@@ -2510,10 +2505,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.bar_chart, color: _lavender, size: 24),
+                        child: Icon(Icons.bar_chart, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -2560,7 +2555,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                       height: height,
                       decoration: BoxDecoration(
                         color: calories > 0 
-                            ? _lavender 
+                            ? ProfileLayout.lavender 
                             : Colors.grey[300],
                         borderRadius: BorderRadius.circular(4),
                       ),
@@ -2608,7 +2603,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           style: GoogleFonts.poppins(
             fontSize: 20,
             fontWeight: FontWeight.bold,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         const SizedBox(height: 4),
@@ -2623,478 +2618,43 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
-  // ===================================================================
-  //  POSTS GRID
-  // ===================================================================
-  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
-  static String? _getPostImageUrl(Map<String, dynamic> data) {
-    final imageUrl = data['imageUrl']?.toString();
-    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
-    final images = data['images'];
-    if (images is List && images.isNotEmpty) return images.first?.toString();
-    final media = data['media'];
-    if (media is List && media.isNotEmpty) {
-      final first = media.first;
-      if (first is Map && first['url'] != null) return first['url']?.toString();
-    }
-    return null;
-  }
-
-  Widget _buildRecentPostsGrid() {
-    // Private account handling (Instagram style)
-    if (_isPrivate && !_isFollowing && !_isOwnProfile) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16),
-        child: Text(
-          'This account is private.\nFollow to see their posts.',
-          style: GoogleFonts.poppins(),
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: ProfileLayout.bg,
+      body: DefaultTextStyle(
+        style: GoogleFonts.poppins(
+          color: ProfileLayout.textPrimary,
+          fontSize: 14,
         ),
-      );
-    }
-
-    final userId = widget.profileUserId;
-    final postsQuery = FirebaseFirestore.instance
-        .collection('posts')
-        .where('userId', isEqualTo: userId)
-        .limit(30);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Recent Posts',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
+        child: AspirantProfileShell(
+          key: _shellKey,
+          loading: _isLoading,
+          onBack: () => popOrGoHome(
+            context,
+            onBackToHome: widget.onBackToHome,
           ),
-          const SizedBox(height: 12),
-          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: postsQuery.snapshots(),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return SizedBox(
-                  height: 120,
-                  child: Center(
-                    child: CircularProgressIndicator(color: _lavender),
-                  ),
-                );
-              }
-              final allDocs = snap.data?.docs ?? [];
-              final sortedDocs = List.from(allDocs)..sort((a, b) {
-                final aData = a.data() as Map<String, dynamic>?;
-                final bData = b.data() as Map<String, dynamic>?;
-                final aTs = aData?['timestamp'] ?? aData?['createdAt'];
-                final bTs = bData?['timestamp'] ?? bData?['createdAt'];
-                if (aTs == null) return 1;
-                if (bTs == null) return -1;
-                if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
-                return 0;
-              });
-              final docs = sortedDocs.take(12).toList();
-              if (docs.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    'No posts yet',
-                    style: GoogleFonts.poppins(),
-                  ),
-                );
-              }
-              return GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: docs.length,
-                gridDelegate:
-                const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
+          cover: ProfileFlexibleSpaceCoverStack(
+            cover: _coverWidget(context),
+          ),
+          appBarActions: _buildAppBarActions(),
+          header: _buildProfileHeader(),
+          profileTab: _buildProfileTabContent(),
+          postsTab: AspirantPostsTab(
+            profileUserId: widget.profileUserId,
+            isPrivate: _isPrivate,
+            isFollowing: _isFollowing,
+            isOwnProfile: _isOwnProfile,
+            imageResolver: profilePostImageUrlFromMap,
+            onTapPost: (postId) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PostDetailsPage(postId: postId),
                 ),
-                itemBuilder: (context, idx) {
-                  final doc = docs[idx];
-                  final data = doc.data()! as Map<String, dynamic>;
-                  final imageUrl = _getPostImageUrl(data);
-                  return GestureDetector(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (ctx) => PostDetailsPage(postId: doc.id),
-                      ),
-                    ),
-                    child: Hero(
-                      tag: 'post-${doc.id}',
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          color: Colors.grey[200],
-                        ),
-                        clipBehavior: Clip.hardEdge,
-                        child: imageUrl != null && imageUrl.isNotEmpty
-                            ? Image.network(
-                          imageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.image, color: Colors.grey)),
-                        )
-                            : const Center(child: Icon(Icons.image, color: Colors.grey)),
-                      ),
-                    ),
-                  );
-                },
               );
             },
           ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => UserAllPostsPage(userId: userId),
-                ),
-              ),
-              child: const Text('View All Posts →'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ===================================================================
-  //  BUILD  (Yahin se text ka color global dark ho raha hai)
-// ===================================================================
-  @override
-  Widget build(BuildContext context) {
-    final baseTheme = Theme.of(context);
-    final textTheme = baseTheme.textTheme.apply(
-      bodyColor: Colors.black87,
-      displayColor: Colors.black87,
-    );
-
-    return Theme(
-      data: baseTheme.copyWith(textTheme: textTheme),
-      child: Scaffold(
-        backgroundColor: _bg,
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : CustomScrollView(
-          slivers: [
-            SliverAppBar(
-              pinned: true,
-              expandedHeight: _coverHeight,
-              backgroundColor: _lavender,
-              elevation: 0,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.pop(context),
-              ),
-              actions: [
-                if (_isOwnProfile) ...[
-                  IconButton(
-                    icon: const Icon(Icons.add_box_outlined),
-                    onPressed: _openGalleryForPost,
-                  ),
-                  PopupMenuButton<String>(
-                    onSelected: (value) async {
-                      if (value == 'Edit Profile') {
-                        await _handleEditProfile();
-                      } else if (value == 'Privacy') {
-                        if (_currentUser == null) return;
-                        final updated = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => PrivacySettingsPage(
-                              initialPrivacy: _isPrivate,
-                            ),
-                          ),
-                        );
-                        if (updated != null) {
-                          try {
-                            await _firestore
-                                .collection('users')
-                                .doc(_currentUser!.uid)
-                                .update({'isPrivate': updated});
-                            setState(() => _isPrivate = updated);
-                          } catch (e) {
-                            Fluttertoast.showToast(
-                                msg: 'Failed to update privacy');
-                          }
-                        }
-                      } else if (value == 'Saved') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => const SavedPostsPage(),
-                          ),
-                        );
-                      } else if (value == 'Settings') {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (ctx) => SettingsPage(),
-                          ),
-                        );
-                        if (result == 'logout') {
-                          await _signOut();
-                        }
-                      } else if (value == 'Logout') {
-                        await _signOut();
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: 'Saved',
-                        child: Text('Saved'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Settings',
-                        child: Text('Settings'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Privacy',
-                        child: Text('Privacy'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Edit Profile',
-                        child: Text('Edit Profile'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Logout',
-                        child: Text('Logout'),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-              flexibleSpace: FlexibleSpaceBar(
-                background: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _coverWidget(context),
-                  ],
-                ),
-              ),
-            ),
-
-            SliverToBoxAdapter(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(height: _avatarOverlap + 18),
-
-                  // Avatar + Name row (header)
-                  Padding(
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 20.0),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Transform.translate(
-                          offset: const Offset(0, -_avatarOverlap),
-                          child: _avatarWidget(),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Column(
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        _fullName.isNotEmpty
-                                            ? _fullName
-                                            : _username.isNotEmpty
-                                            ? '@$_username'
-                                            : 'No name',
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    // Online status green dot
-                                    StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                                      stream: _firestore
-                                          .collection('users')
-                                          .doc(widget.profileUserId)
-                                          .snapshots(),
-                                      builder: (context, snapshot) {
-                                        if (snapshot.hasData) {
-                                          final data = snapshot.data
-                                              ?.data()
-                                          as Map<String, dynamic>?;
-                                          bool isOnline = false;
-
-                                          if (data?['isOnline'] ==
-                                              true) {
-                                            isOnline = true;
-                                          } else if (data?['lastSeen'] !=
-                                              null) {
-                                            final lastSeen = (data![
-                                            'lastSeen']
-                                            as Timestamp?)
-                                                ?.toDate();
-                                            if (lastSeen != null) {
-                                              isOnline = DateTime.now()
-                                                  .difference(
-                                                  lastSeen)
-                                                  .inMinutes <
-                                                  2;
-                                            }
-                                          }
-
-                                          return Container(
-                                            width: 10,
-                                            height: 10,
-                                            decoration: BoxDecoration(
-                                              color: isOnline
-                                                  ? Colors.green
-                                                  : Colors.grey,
-                                              shape: BoxShape.circle,
-                                              border: Border.all(
-                                                color: Colors.white,
-                                                width: 2,
-                                              ),
-                                            ),
-                                          );
-                                        }
-                                        return const SizedBox.shrink();
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _username.isNotEmpty
-                                      ? '@$_username'
-                                      : '',
-                                  style: GoogleFonts.poppins(),
-                                ),
-                                const SizedBox(height: 6),
-                                if (_interests.isNotEmpty) ...[
-                                  Wrap(
-                                    spacing: 4,
-                                    runSpacing: 4,
-                                    children: [
-                                      ..._interests
-                                          .take(3)
-                                          .map((interest) {
-                                        return Text(
-                                          interest,
-                                          style:
-                                          GoogleFonts.poppins(
-                                            fontSize: 12,
-                                          ),
-                                        );
-                                      }).toList(),
-                                      if (_interests.length > 3)
-                                        Text(
-                                          '+${_interests.length - 3}',
-                                          style:
-                                          GoogleFonts.poppins(
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                ] else if (_fitnessTag.isNotEmpty) ...[
-                                  Text(
-                                    _fitnessTag,
-                                    style: GoogleFonts.poppins(),
-                                  ),
-                                  const SizedBox(height: 4),
-                                ],
-                                Row(
-                                  children: [
-                                    if (_city.isNotEmpty) ...[
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        width: 4,
-                                        height: 4,
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey[400],
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        _city,
-                                        style:
-                                        GoogleFonts.poppins(),
-                                      ),
-                                    ],
-                                    if (_age != null) ...[
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        width: 4,
-                                        height: 4,
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey[400],
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        '${_age} yrs',
-                                        style:
-                                        GoogleFonts.poppins(),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 14),
-                  _buildStatsCard(),
-                  const SizedBox(height: 12),
-                  _buildActionButtons(),
-                  _buildBioCard(),
-
-                  // Halo-style sections
-                  _buildAspirantTabsRow(),
-                  _buildSuggestedGurusSection(),
-                  _buildSuggestedWellnessSection(),
-                  _buildSimilarAspirantsSection(),
-                  _buildAchievementsSection(),
-                  _buildLastWorkoutsSection(),
-                  _buildRecentPostsGrid(),
-                  _buildEventsChallengesSection(),
-                  _buildSocialLinksSection(),
-                  _buildHobbiesSection(),
-                  _buildFitnessArticlesSection(),
-                  _buildFitnessStatsSection(),
-                  
-                  // New Professional Features for Aspirants
-                  _buildProgressTrackingSection(),
-                  _buildWorkoutCalendarSection(),
-                  _buildFitnessGoalsSection(),
-                  _buildWorkoutStreakSection(),
-                  _buildPersonalRecordsSection(),
-                  _buildWeeklyProgressSection(),
-
-                  const SizedBox(height: 80),
-                ],
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -3128,7 +2688,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Edit Progress',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -3143,10 +2703,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.monitor_weight, color: _lavender),
+                  prefixIcon: Icon(Icons.monitor_weight, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -3160,10 +2720,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.flag, color: _lavender),
+                  prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -3177,10 +2737,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.analytics, color: _lavender),
+                  prefixIcon: Icon(Icons.analytics, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -3194,10 +2754,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.track_changes, color: _lavender),
+                  prefixIcon: Icon(Icons.track_changes, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -3215,7 +2775,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3253,6 +2813,143 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
+  Future<void> _openProfileModules() async {
+    if (!_isOwnProfile) return;
+    final updated = await Navigator.push<AspirantProfileModules>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditProfileModulesPage(initial: _profileModules),
+      ),
+    );
+    if (updated != null && mounted) {
+      setState(() => _profileModules = updated);
+    }
+  }
+
+  void _openInterestExplore(String interest) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SearchPage(initialQuery: interest),
+      ),
+    );
+  }
+
+  List<Widget> _buildAppBarActions() {
+    if (!_isOwnProfile) return [];
+    return [
+      IconButton(
+        icon: const Icon(Icons.add_box_outlined, color: Colors.white),
+        onPressed: _openGalleryForPost,
+      ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        onSelected: (value) async {
+          if (value == 'Edit Profile') {
+            await _handleEditProfile();
+          } else if (value == 'Profile Sections') {
+            await _openProfileModules();
+          } else if (value == 'Privacy') {
+            if (_currentUser == null) return;
+            final updated = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (ctx) => PrivacySettingsPage(initialPrivacy: _isPrivate),
+              ),
+            );
+            if (updated != null) {
+              try {
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'isPrivate': updated});
+                setState(() => _isPrivate = updated);
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Failed to update privacy');
+              }
+            }
+          } else if (value == 'Saved') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SavedPostsPage()),
+            );
+          } else if (value == 'Settings') {
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => SettingsPage()),
+            );
+            if (result == 'logout') await _signOut();
+          } else if (value == 'Logout') {
+            await _signOut();
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(value: 'Saved', child: Text('Saved')),
+          PopupMenuItem(value: 'Settings', child: Text('Settings')),
+          PopupMenuItem(value: 'Privacy', child: Text('Privacy')),
+          PopupMenuItem(
+              value: 'Profile Sections', child: Text('Profile Sections')),
+          PopupMenuItem(value: 'Edit Profile', child: Text('Edit Profile')),
+          PopupMenuItem(value: 'Logout', child: Text('Logout')),
+        ],
+      ),
+    ];
+  }
+
+  Widget _buildProfileHeader() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: ProfileLayout.identityColumnTopInset),
+        AspirantIdentityBlock(
+          avatar: _avatarWidget(),
+          profileUserId: widget.profileUserId,
+          fullName: _fullName,
+          username: _username,
+          interests: _interests,
+          fitnessTag: _fitnessTag,
+          city: _city,
+          age: _age,
+          primaryCategory: _primaryCategory,
+          fitnessLevel: _fitnessLevel,
+          healthNotes: _healthNotes,
+          showHealthNotes: _isOwnProfile,
+          onInterestTap: _openInterestExplore,
+        ),
+        const SizedBox(height: 14),
+        _buildStatsCard(),
+        const SizedBox(height: 12),
+        _buildActionButtons(),
+        _buildBioCard(),
+        const SizedBox(height: 4),
+      ],
+    );
+  }
+
+  Widget _buildProfileTabContent() {
+    return ColoredBox(
+      color: ProfileLayout.bg,
+      child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildAspirantTabsRow(),
+        _buildAspirantTabContent(),
+        _buildAchievementsSection(),
+        _buildLastWorkoutsSection(),
+        _buildFitnessArticlesSection(),
+        _buildFitnessStatsSection(),
+        _buildProgressTrackingSection(),
+        _buildWorkoutCalendarSection(),
+        _buildFitnessGoalsSection(),
+        _buildWorkoutStreakSection(),
+        _buildPersonalRecordsSection(),
+        _buildWeeklyProgressSection(),
+        const SizedBox(height: 80),
+      ],
+      ),
+    );
+  }
+
   Future<void> _addNewGoal() async {
     if (!_isOwnProfile || _currentUser == null) return;
 
@@ -3265,7 +2962,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Add Fitness Goal',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: TextField(
@@ -3277,10 +2974,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
             ),
-            prefixIcon: Icon(Icons.flag, color: _lavender),
+            prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: _lavender, width: 2),
+              borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
             ),
           ),
           maxLines: 2,
@@ -3295,7 +2992,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3303,15 +3000,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
             onPressed: () async {
               if (goalCtrl.text.trim().isEmpty) return;
-              
+
               try {
-                final updatedGoals = List<String>.from(_fitnessGoals)..add(goalCtrl.text.trim());
-                await _firestore
-                    .collection('users')
-                    .doc(_currentUser!.uid)
-                    .update({'fitnessGoals': updatedGoals});
-                
-                setState(() => _fitnessGoals = updatedGoals);
+                final updated = List<FitnessGoalItem>.from(_fitnessGoalItems)
+                  ..add(FitnessGoalItem(name: goalCtrl.text.trim()));
+                await _firestore.collection('users').doc(_currentUser!.uid).update({
+                  'fitnessGoals': updated.map((g) => g.toMap()).toList(),
+                });
+
+                setState(() => _fitnessGoalItems = updated);
                 Navigator.pop(ctx);
                 Fluttertoast.showToast(msg: 'Goal added successfully!');
               } catch (e) {
@@ -3328,10 +3025,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
-  Future<void> _editGoal(String oldGoal) async {
+  Future<void> _editGoal(FitnessGoalItem oldGoal) async {
     if (!_isOwnProfile || _currentUser == null) return;
 
-    final goalCtrl = TextEditingController(text: oldGoal);
+    final goalCtrl = TextEditingController(text: oldGoal.name);
+    final progressCtrl = TextEditingController(
+      text: (oldGoal.progress * 100).round().toString(),
+    );
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -3340,24 +3040,39 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Edit Goal',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
-        content: TextField(
-          controller: goalCtrl,
-          decoration: InputDecoration(
-            labelText: 'Goal Description',
-            labelStyle: GoogleFonts.poppins(),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: goalCtrl,
+              decoration: InputDecoration(
+                labelText: 'Goal Description',
+                labelStyle: GoogleFonts.poppins(),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon: Icon(Icons.flag, color: ProfileLayout.lavender),
+              ),
+              maxLines: 2,
             ),
-            prefixIcon: Icon(Icons.flag, color: _lavender),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: _lavender, width: 2),
+            const SizedBox(height: 12),
+            TextField(
+              controller: progressCtrl,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Progress (%)',
+                labelStyle: GoogleFonts.poppins(),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon:
+                    Icon(Icons.percent, color: ProfileLayout.lavender),
+              ),
             ),
-          ),
-          maxLines: 2,
+          ],
         ),
         actions: [
           TextButton(
@@ -3369,7 +3084,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3377,18 +3092,25 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             ),
             onPressed: () async {
               if (goalCtrl.text.trim().isEmpty) return;
-              
+
               try {
-                final updatedGoals = List<String>.from(_fitnessGoals);
-                final index = updatedGoals.indexOf(oldGoal);
+                final pct =
+                    (double.tryParse(progressCtrl.text.trim()) ?? 0) / 100;
+                final updated = List<FitnessGoalItem>.from(_fitnessGoalItems);
+                final index = updated.indexWhere((g) => g.name == oldGoal.name);
                 if (index != -1) {
-                  updatedGoals[index] = goalCtrl.text.trim();
+                  updated[index] = FitnessGoalItem(
+                    name: goalCtrl.text.trim(),
+                    progress: pct.clamp(0.0, 1.0),
+                  );
                   await _firestore
                       .collection('users')
                       .doc(_currentUser!.uid)
-                      .update({'fitnessGoals': updatedGoals});
-                  
-                  setState(() => _fitnessGoals = updatedGoals);
+                      .update({
+                    'fitnessGoals': updated.map((g) => g.toMap()).toList(),
+                  });
+
+                  setState(() => _fitnessGoalItems = updated);
                   Navigator.pop(ctx);
                   Fluttertoast.showToast(msg: 'Goal updated successfully!');
                 }
@@ -3406,7 +3128,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
-  Future<void> _deleteGoal(String goal) async {
+  Future<void> _deleteGoal(FitnessGoalItem goal) async {
     if (!_isOwnProfile || _currentUser == null) return;
 
     final confirmed = await showDialog<bool>(
@@ -3417,11 +3139,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Delete Goal',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
-          'Are you sure you want to delete "$goal"?',
+          'Are you sure you want to delete "${goal.name}"?',
           style: GoogleFonts.poppins(),
         ),
         actions: [
@@ -3452,13 +3174,13 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
     if (confirmed == true) {
       try {
-        final updatedGoals = List<String>.from(_fitnessGoals)..remove(goal);
-        await _firestore
-            .collection('users')
-            .doc(_currentUser!.uid)
-            .update({'fitnessGoals': updatedGoals});
-        
-        setState(() => _fitnessGoals = updatedGoals);
+        final updated = List<FitnessGoalItem>.from(_fitnessGoalItems)
+          ..removeWhere((g) => g.name == goal.name);
+        await _firestore.collection('users').doc(_currentUser!.uid).update({
+          'fitnessGoals': updated.map((g) => g.toMap()).toList(),
+        });
+
+        setState(() => _fitnessGoalItems = updated);
         Fluttertoast.showToast(msg: 'Goal deleted successfully!');
       } catch (e) {
         Fluttertoast.showToast(msg: 'Error deleting goal: $e');
@@ -3543,7 +3265,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       backgroundColor: Colors.transparent,
       builder: (ctx) => _FullProgressPage(
         fitnessStats: _fitnessStats,
-        fitnessGoals: _fitnessGoals,
+        fitnessGoals: _fitnessGoalItems.map((g) => g.name).toList(),
         onUpdate: () async {
           await _loadProfileData();
         },
@@ -3565,7 +3287,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           'Edit Personal Record',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Column(
@@ -3582,7 +3304,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 prefixIcon: Icon(record['icon'] as IconData, color: record['color'] as Color),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: _lavender, width: 2),
+                  borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                 ),
               ),
             ),
@@ -3596,10 +3318,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                prefixIcon: Icon(Icons.edit, color: _lavender),
+                prefixIcon: Icon(Icons.edit, color: ProfileLayout.lavender),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: _lavender, width: 2),
+                  borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                 ),
               ),
             ),
@@ -3615,7 +3337,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3873,8 +3595,67 @@ class PostDetailsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Post')),
-      body: Center(child: Text('Post: $postId')),
+      backgroundColor: ProfileLayout.bg,
+      appBar: AppBar(
+        backgroundColor: ProfileLayout.bg,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: Text('Post', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+      ),
+      body: FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        future: FirebaseFirestore.instance.collection('posts').doc(postId).get(),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: ProfileLayout.lavender),
+            );
+          }
+          final data = snap.data?.data();
+          if (data == null) {
+            return const Center(child: Text('Post not found'));
+          }
+          final caption = (data['caption'] ?? '').toString();
+          final location = PostPlace.labelFromPostData(data);
+          final imageUrl = profilePostImageUrlFromMap(data);
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (imageUrl != null && imageUrl.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 1,
+                    child: Image.network(imageUrl, fit: BoxFit.cover),
+                  ),
+                ),
+              if (location.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Icon(Icons.location_on_outlined,
+                        size: 16, color: ProfileLayout.deepLavender),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        location,
+                        style: GoogleFonts.poppins(
+                          fontSize: 13,
+                          color: ProfileLayout.deepLavender,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (caption.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(caption, style: GoogleFonts.poppins(fontSize: 14)),
+              ],
+            ],
+          );
+        },
+      ),
     );
   }
 }

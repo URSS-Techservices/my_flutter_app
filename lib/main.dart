@@ -1,17 +1,25 @@
+import 'dart:async';
+
 import 'package:halo/Bottom Pages/HomePage.dart';
 import 'package:halo/Category/categorypage.dart';
 import 'package:halo/forgotpasswordpage.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'firebase_options.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:halo/services/blocked_url_memory.dart';
+import 'package:halo/services/firebase_bootstrap.dart';
+import 'package:halo/services/login_lookup.dart';
 import 'package:halo/widgets/google_sign_in_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
 import 'app_theme_mode.dart';
 import 'package:flutter/services.dart';
+import 'package:halo/services/app_logger.dart';
+import 'package:halo/services/video_memory_bridge.dart';
 
 // ----------------- HALO THEME CONSTANTS -----------------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -22,10 +30,8 @@ const Color kDarkBackgroundBottom = Color(0xFF050505);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-  await loadAppThemeMode();
+  AppLogger.init();
+  VideoMemoryBridge.install();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       systemNavigationBarColor: Colors.white,
@@ -34,7 +40,42 @@ void main() async {
       statusBarIconBrightness: Brightness.dark,
     ),
   );
-  runApp(MyApp());
+  unawaited(loadAppThemeMode());
+  unawaited(BlockedUrlMemory.instance.init());
+  runApp(const ProviderScope(child: _AppRoot()));
+}
+
+class _AppRoot extends StatefulWidget {
+  const _AppRoot({super.key});
+
+  @override
+  State<_AppRoot> createState() => _AppRootState();
+}
+
+class _AppRootState extends State<_AppRoot> {
+  late final Future<FirebaseApp> _firebaseInit;
+
+  @override
+  void initState() {
+    super.initState();
+    _firebaseInit = FirebaseBootstrap.initialize();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<FirebaseApp>(
+      future: _firebaseInit,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return MaterialApp(
+            debugShowCheckedModeBanner: false,
+            home: const _SplashScreen(),
+          );
+        }
+        return MyApp();
+      },
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -149,8 +190,150 @@ class MyApp extends StatelessWidget {
     );
   }
 }
+// ===================== SPLASH SCREEN =====================
+// Shown while Firebase / SharedPreferences are initialising.
+// No timer — it stays until the async work is actually done.
+
+class _SplashScreen extends StatefulWidget {
+  const _SplashScreen();
+  @override
+  State<_SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<_SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+    _scale = Tween<double>(begin: 0.88, end: 1.0).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: FadeTransition(
+          opacity: _fade,
+          child: ScaleTransition(
+            scale: _scale,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Logo image
+                Image.asset(
+                  'assets/images/Halo.png',
+                  height: 120,
+                  width: 120,
+                  fit: BoxFit.contain,
+                ),
+                const SizedBox(height: 20),
+                // App name
+                Text(
+                  'Halo',
+                  style: GoogleFonts.pacifico(
+                    fontSize: 40,
+                    color: kSecondaryColor,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Your wellness community',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.black38,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                const SizedBox(height: 48),
+                // Subtle loading dots
+                _LoadingDots(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Three bouncing dots like WhatsApp / Telegram loading
+class _LoadingDots extends StatefulWidget {
+  @override
+  State<_LoadingDots> createState() => _LoadingDotsState();
+}
+
+class _LoadingDotsState extends State<_LoadingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (i) {
+            // Each dot is offset by 0.2 of the cycle
+            final offset = i * 0.25;
+            final t = ((_ctrl.value - offset) % 1.0 + 1.0) % 1.0;
+            // bounce: up at t=0.3, back at t=0.6
+            final dy = t < 0.3
+                ? -8.0 * (t / 0.3)
+                : t < 0.6
+                    ? -8.0 * (1 - (t - 0.3) / 0.3)
+                    : 0.0;
+            return Transform.translate(
+              offset: Offset(0, dy),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: kPrimaryColor.withOpacity(0.7),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            );
+          }),
+        );
+      },
+    );
+  }
+}
+
 // ===================== AUTH GATE =====================
-// 🔑 This fixes login being asked every time
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
@@ -160,10 +343,9 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
+        // Show logo splash while Firebase determines auth state
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const _SplashScreen();
         }
 
         if (snapshot.hasData) {
@@ -177,30 +359,38 @@ class AuthGate extends StatelessWidget {
 }
 
 // ===================== STARTUP ROUTER =====================
-// Decides Home vs Interest on reopen
 
 class StartupRouter extends StatelessWidget {
   const StartupRouter({super.key});
 
-  Future<bool> _interestsCompleted() async {
+  static Future<bool>? _cachedInterestsFuture;
+  static String? _cachedUserId;
+
+  static Future<bool> _interestsCompleted() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('interests_completed') ?? false;
   }
 
+  static void resetCache() {
+    _cachedInterestsFuture = null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (_cachedUserId != currentUid) {
+      _cachedUserId = currentUid;
+      _cachedInterestsFuture = null;
+    }
     return FutureBuilder<bool>(
-      future: _interestsCompleted(),
+      future: _cachedInterestsFuture ??= _interestsCompleted(),
       builder: (context, snapshot) {
+        // Keep showing splash while reading SharedPreferences
         if (!snapshot.hasData) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const _SplashScreen();
         }
 
-        return snapshot.data!
-            ? HomePage()
-            : const InterestSelectionPage();
+        return snapshot.data! ? HomePage() : const InterestSelectionPage();
       },
     );
   }
@@ -380,97 +570,81 @@ Last updated: ${DateTime.now().year}''',
   }
 
   Future<void> _signin() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+  if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    String input = _usernameController.text.trim();
-    String password = _passwordController.text.trim();
+  String input = _usernameController.text.trim();
+  String password = _passwordController.text.trim();
 
-    try {
-      String email = '';
-
-      // If input looks like an email
-      if (input.contains('@')) {
-        email = input;
-      } else {
-        // Otherwise, search by username or mobile
-        QuerySnapshot querySnapshot = await _firestore
-            .collection('users')
-            .where('username', isEqualTo: input)
-            .get();
-
-        if (querySnapshot.docs.isEmpty) {
-          querySnapshot = await _firestore
-              .collection('users')
-              .where('mobile', isEqualTo: input)
-              .get();
-        }
-
-        if (querySnapshot.docs.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('User not found!')),
-          );
-          setState(() => _isLoading = false);
-          return;
-        }
-
-        email = querySnapshot.docs.first['email'];
-      }
-
-      // Login using Firebase Auth
-      UserCredential userCredential =
-      await _auth.signInWithEmailAndPassword(email: email, password: password);
-
-      // Update last seen
-      await _firestore.collection('users').doc(userCredential.user!.uid).set(
-        {
-          'lastSeen': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-
+  try {
+    final email = await resolveLoginEmail(input);
+    if (email == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login Successful')),
+        const SnackBar(content: Text('User not found!')),
       );
-
-      // Backfill interests from Firestore if present
-      try {
-        final uid = userCredential.user!.uid;
-        final doc = await _firestore.collection('users').doc(uid).get();
-        final interests = (doc.data()?['interests'] as List?)
-            ?.map((e) => e.toString())
-            .toList() ??
-            [];
-        if (interests.isNotEmpty) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setStringList('user_interests', interests.cast<String>());
-          await prefs.setBool('interests_completed', true);
-        }
-      } catch (_) {}
-
-      // After login, route to interests if not completed yet
-      final prefs = await SharedPreferences.getInstance();
-      final completed = prefs.getBool('interests_completed') ?? false;
-      if (!completed) {
-        await Navigator.push<bool>(
-          context,
-          MaterialPageRoute(builder: (_) => const InterestSelectionPage()),
-        );
-      }
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => HomePage()),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Login Failed: ${e.toString()}')),
-      );
-    } finally {
-      setState(() => _isLoading = false);
+      return;
     }
+
+    final userCredential = await _auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    // Update last seen
+    await _firestore.collection('users').doc(userCredential.user!.uid).set(
+      {'lastSeen': FieldValue.serverTimestamp()},
+      SetOptions(merge: true),
+    );
+
+    // Backfill interests from Firestore into SharedPreferences
+    try {
+      final uid = userCredential.user!.uid;
+      final doc = await _firestore.collection('users').doc(uid).get();
+      final interests = (doc.data()?['interests'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [];
+      if (interests.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setStringList('user_interests', interests.cast<String>());
+        await prefs.setBool('interests_completed', true);
+      }
+    } catch (_) {}
+    StartupRouter.resetCache();
+
+    // ✅ DO NOTHING HERE — AuthGate stream will automatically
+    // detect the login and rebuild with StartupRouter → HomePage
+    // No manual Navigator calls needed!
+
+  } on FirebaseAuthException catch (e) {
+    if (!mounted) return;
+    String msg = 'Login failed';
+    if (e.code == 'user-not-found') msg = 'User not found';
+    if (e.code == 'wrong-password') msg = 'Incorrect password';
+    if (e.code == 'invalid-email') msg = 'Invalid email';
+    if (e.code == 'invalid-credential') msg = 'Incorrect email or password';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg)),
+    );
+  } on FirebaseException catch (e) {
+    if (!mounted) return;
+    final msg = e.code == 'permission-denied'
+        ? 'Could not look up account (database access denied). '
+            'On web, set RECAPTCHA_SITE_KEY if App Check is enforced.'
+        : 'Login failed: ${e.message ?? e.code}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg)),
+    );
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Login Failed: ${e.toString()}')),
+    );
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   InputDecoration _inputDecoration({
     required String label,
@@ -742,7 +916,7 @@ Last updated: ${DateTime.now().year}''',
 
                     Column(
                       children: [
-                        GoogleSignInButton(),
+                        GoogleSignInButton(onSignedIn: StartupRouter.resetCache),
                         const SizedBox(height: 8),
                         const SocialButton(text: "Login with Facebook"),
                         const SocialButton(text: "Login with Instagram"),

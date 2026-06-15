@@ -1,5 +1,4 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:io';
 
 class ChatService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -576,14 +575,36 @@ class ChatService {
     }
   }
 
-  /// ✅ Get messages in a chat
-  Stream<QuerySnapshot<Map<String, dynamic>>> getMessages(String chatId) {
+  /// ✅ Get latest messages in a chat (paged realtime window)
+  Stream<QuerySnapshot<Map<String, dynamic>>> getMessages(
+    String chatId, {
+    int limit = 40,
+  }) {
     return _firestore
         .collection('chats')
         .doc(chatId)
         .collection('messages')
         .orderBy('timestamp', descending: true)
+        .limit(limit)
         .snapshots();
+  }
+
+  /// ✅ Fetch older messages page (non-realtime)
+  Future<QuerySnapshot<Map<String, dynamic>>> getMessagesPage(
+    String chatId, {
+    DocumentSnapshot<Map<String, dynamic>>? startAfter,
+    int limit = 40,
+  }) {
+    Query<Map<String, dynamic>> query = _firestore
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .orderBy('timestamp', descending: true)
+        .limit(limit);
+    if (startAfter != null) {
+      query = query.startAfterDocument(startAfter);
+    }
+    return query.get();
   }
 
   /// ✅ Get all chats for a user (with filters)
@@ -625,10 +646,26 @@ class ChatService {
           .collection('messages')
           .where('receiverId', isEqualTo: userId)
           .where('seen', isEqualTo: false)
+          .limit(100)
           .get();
 
-      for (var doc in unreadMessages.docs) {
-        await doc.reference.update({'seen': true});
+      if (unreadMessages.docs.isEmpty) return;
+
+      WriteBatch batch = _firestore.batch();
+      int ops = 0;
+
+      for (final doc in unreadMessages.docs) {
+        batch.update(doc.reference, {'seen': true});
+        ops++;
+        if (ops == 450) {
+          await batch.commit();
+          batch = _firestore.batch();
+          ops = 0;
+        }
+      }
+
+      if (ops > 0) {
+        await batch.commit();
       }
     } catch (e) {
       print('❌ Error marking messages as seen: $e');

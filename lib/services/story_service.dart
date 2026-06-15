@@ -16,6 +16,8 @@ class RankedStoriesResult {
 
 class StoryService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static const Duration _kRelationshipCacheTtl = Duration(minutes: 5);
+  static final Map<String, _TimedScoreCache> _relationshipCache = {};
 
   /// Existing stream: last 24h by createdAt (unchanged for backward compatibility).
   Stream<List<StoryModel>> fetchStories() {
@@ -66,22 +68,51 @@ class StoryService {
   ) async {
     if (currentUserId.isEmpty) return {};
     final map = <String, double>{};
-    for (final otherId in userIds) {
+    final unique = userIds.where((id) => id.isNotEmpty).toSet().toList();
+    final missing = <String>[];
+
+    for (final otherId in unique) {
       if (otherId.isEmpty) continue;
       if (otherId == currentUserId) {
         map[otherId] = 1.0;
         continue;
       }
-      try {
-        final doc = await _firestore
-            .collection('relationships')
-            .doc('${currentUserId}_$otherId')
-            .get();
-        final score = (doc.data()?['score'] as num?)?.toDouble();
-        map[otherId] = (score ?? 0.0).clamp(0.0, 1.0);
-      } catch (_) {
-        map[otherId] = 0.0;
+      final cacheKey = '${currentUserId}_$otherId';
+      final cached = _relationshipCache[cacheKey];
+      if (cached != null && !cached.isExpired) {
+        map[otherId] = cached.score;
+      } else {
+        missing.add(otherId);
       }
+    }
+
+    const chunkSize = 25;
+    for (int i = 0; i < missing.length; i += chunkSize) {
+      final chunk = missing.sublist(
+        i,
+        (i + chunkSize > missing.length) ? missing.length : i + chunkSize,
+      );
+      final results = await Future.wait(chunk.map((otherId) async {
+        try {
+          final doc = await _firestore
+              .collection('relationships')
+              .doc('${currentUserId}_$otherId')
+              .get();
+          final score = ((doc.data()?['score'] as num?)?.toDouble() ?? 0.0).clamp(0.0, 1.0);
+          return MapEntry(otherId, score);
+        } catch (_) {
+          return MapEntry(otherId, 0.0);
+        }
+      }));
+      for (final entry in results) {
+        map[entry.key] = entry.value;
+        _relationshipCache['${currentUserId}_${entry.key}'] =
+            _TimedScoreCache(entry.value);
+      }
+    }
+
+    for (final otherId in unique) {
+      map[otherId] = map[otherId] ?? 0.0;
     }
     return map;
   }
@@ -128,4 +159,14 @@ class _ScoredUser {
   final String uid;
   final double score;
   _ScoredUser({required this.uid, required this.score});
+}
+
+class _TimedScoreCache {
+  final double score;
+  final DateTime fetchedAt;
+
+  _TimedScoreCache(this.score) : fetchedAt = DateTime.now();
+
+  bool get isExpired =>
+      DateTime.now().difference(fetchedAt) > StoryService._kRelationshipCacheTtl;
 }

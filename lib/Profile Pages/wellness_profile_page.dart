@@ -1,7 +1,6 @@
 // wellness_profile_page.dart
 // WELLNESS PROFILE PAGE - Updated with tabs and all sections
 
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -26,35 +25,37 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
 import 'package:halo/newpostpage.dart';
-
-// ===================================================================
-//  SLIVER APP BAR DELEGATE (for TabBar)
-// ===================================================================
-class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
-  final TabBar tabBar;
-
-  _SliverAppBarDelegate(this.tabBar);
-
-  @override
-  double get minExtent => tabBar.preferredSize.height;
-
-  @override
-  double get maxExtent => tabBar.preferredSize.height;
-
-  @override
-  Widget build(
-      BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      color: Colors.white,
-      child: tabBar,
-    );
-  }
-
-  @override
-  bool shouldRebuild(_SliverAppBarDelegate oldDelegate) {
-    return false;
-  }
-}
+import 'package:halo/services/follow_service.dart';
+import 'package:halo/widgets/follow_button.dart';
+import 'package:halo/widgets/profile_image_interactions.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_identity_block.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_recent_posts_section.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_action_row.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_bio_card.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_profile_shell.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
+import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
+import 'package:halo/screens/profile/pages/follow_list_page.dart';
+import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsPage;
+import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
+import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
+import 'package:halo/screens/profile/core/profile_posts_queries.dart';
+import 'package:halo/screens/profile/core/profile_refresh_helpers.dart';
+import 'package:halo/screens/profile/core/profile_reviews_queries.dart';
+import 'package:halo/screens/profile/core/profile_state_helpers.dart';
+import 'package:halo/platform/profile_avatar_provider.dart';
+import 'package:halo/platform/profile_local_photo.dart';
+import 'package:halo/platform/storage_upload.dart';
+import 'package:halo/screens/profile/core/profile_media_upload.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
+import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
+import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
+import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
+import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
+import 'package:halo/utils/shell_back.dart';
 
 // ===================================================================
 //  WELLNESS PROFILE PAGE
@@ -62,9 +63,13 @@ class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
 
 class WellnessProfilePage extends StatefulWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const WellnessProfilePage({Key? key, required this.profileUserId})
-      : super(key: key);
+  const WellnessProfilePage({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   State<WellnessProfilePage> createState() => _WellnessProfilePageState();
@@ -75,11 +80,16 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   // -------------------- FIREBASE --------------------
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FollowService _followService = FollowService();
 
   User? _currentUser;
   bool _isOwnProfile = false;
   bool _isFollowing = false;
   bool _isLoading = true;
+  bool _isPrivate = false;
+
+  final GlobalKey<WellnessProfileShellState> _shellKey =
+      GlobalKey<WellnessProfileShellState>();
 
   // -------------------- PROFILE DATA --------------------
   String _businessName = '';
@@ -108,20 +118,14 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   List<Map<String, dynamic>> _recentPosts = [];
   List<Map<String, dynamic>> _reviews = [];
 
-  // -------------------- UI CONSTANTS --------------------
-  static const double _coverHeight = 220.0;
-  static const double _avatarSize = 90.0;
-  static const double _avatarOverlap = 30.0;
-  static const Color _lavender = Color(0xFFA58CE3);
-  static const Color _deepLavender = Color(0xFF6F4BC2);
-  static const Color _bg = Color(0xFFF4F1FB);
+  // -------------------- UI CONSTANTS (wellness-only) --------------------
   static const Color _cardColor = Color(0xFFFFFFFF);
   static const Color _mutedText = Color(0xFF6B6B6B);
 
   // -------------------- IMAGE PICKER --------------------
   final ImagePicker _picker = ImagePicker();
-  File? _profilePhotoFile;
-  File? _coverPhotoFile;
+  ProfileLocalPhoto? _profilePhotoLocal;
+  ProfileLocalPhoto? _coverPhotoLocal;
 
   // -------------------- STATE --------------------
   late final TabController _tabController;
@@ -159,6 +163,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       if (doc.exists) {
         final data = doc.data()!;
 
+        // For wellness owners, open directly on Business tab.
+        if (_isOwnProfile && mounted && _tabController.index == 0) {
+          _tabController.animateTo(1);
+        }
+
         _businessName = data['name'] ?? data['business_name'] ?? '';
         _username = data['username'] ?? '';
         _bio = data['bio'] ?? '';
@@ -174,6 +183,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         _rating = (data['rating'] is num) ? (data['rating'] as num).toDouble() : 0.0;
         _reviewCount = data['reviewCount'] ?? 0;
         _isOnline = data['isOnline'] ?? false;
+        _isPrivate = (data['isPrivate'] ?? false) as bool;
 
         // Services
         _services = List<String>.from(data['services'] ?? []);
@@ -197,11 +207,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         // Load events
         await _loadEvents();
 
-        // Load posts
-        await _loadPosts();
-
-        // Load reviews
-        await _loadReviews();
+        await ProfileRefreshHelpers.runInOrder([
+          _loadPosts,
+          _loadReviews,
+        ]);
       }
 
       // Check follow status
@@ -285,92 +294,21 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   }
 
   Future<void> _loadPosts() async {
-    try {
-      final snapshot = await _firestore
-          .collection('posts')
-          .where('userId', isEqualTo: widget.profileUserId)
-          .limit(30)
-          .get();
-
-      final list = snapshot.docs.map((doc) {
-        final d = doc.data();
-        return {
-          'id': doc.id,
-          'imageUrl': _getPostImageUrl(d),
-          'caption': d['caption'] ?? '',
-          'timestamp': d['timestamp'] ?? d['createdAt'],
-        };
-      }).toList();
-
-      list.sort((a, b) {
-        final aTs = a['timestamp'];
-        final bTs = b['timestamp'];
-        if (aTs == null) return 1;
-        if (bTs == null) return -1;
-        if (aTs is Timestamp && bTs is Timestamp) return bTs.compareTo(aTs);
-        return 0;
-      });
-
-      _recentPosts = list;
-      if (mounted) setState(() {});
-    } catch (e) {
-      debugPrint('Error loading posts: $e');
-      _recentPosts = [];
-      if (mounted) setState(() {});
-    }
-  }
-
-  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
-  static String? _getPostImageUrl(Map<String, dynamic> data) {
-    final imageUrl = data['imageUrl']?.toString();
-    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
-    final images = data['images'];
-    if (images is List && images.isNotEmpty) return images.first?.toString();
-    final media = data['media'];
-    if (media is List && media.isNotEmpty) {
-      final first = media.first;
-      if (first is Map && first['url'] != null) return first['url']?.toString();
-    }
-    return null;
+    final list = await ProfilePostsQueries.fetchWellnessProfilePostsPreview(
+      firestore: _firestore,
+      profileUserId: widget.profileUserId,
+    );
+    _recentPosts = list;
+    ProfileStateHelpers.rebuildIfMounted(this);
   }
 
   Future<void> _loadReviews() async {
-    try {
-      QuerySnapshot<Map<String, dynamic>>? reviewsSnapshot;
-      try {
-        reviewsSnapshot = await _firestore
-            .collection('reviews')
-            .where('wellnessId', isEqualTo: widget.profileUserId)
-            .orderBy('createdAt', descending: true)
-            .limit(3)
-            .get();
-      } catch (_) {
-        try {
-          reviewsSnapshot = await _firestore
-              .collection('reviews')
-              .where('wellnessId', isEqualTo: widget.profileUserId)
-              .limit(3)
-              .get();
-        } catch (_) {
-          reviewsSnapshot = null;
-        }
-      }
-
-      if (reviewsSnapshot != null) {
-        _reviews = reviewsSnapshot.docs.map((doc) {
-          final d = doc.data();
-          return {
-            'id': doc.id,
-            'userName': d['userName'] ?? 'User',
-            'rating': d['rating'] ?? 5,
-            'text': d['text'] ?? '',
-            'profilePhoto': d['profilePhoto'],
-            'createdAt': d['createdAt'],
-          };
-        }).toList();
-      }
-    } catch (e) {
-      debugPrint('Error loading reviews: $e');
+    final result = await ProfileReviewsQueries.fetchWellnessProfileReviewsOrSkip(
+      firestore: _firestore,
+      profileUserId: widget.profileUserId,
+    );
+    if (result != null) {
+      _reviews = result;
     }
   }
 
@@ -382,45 +320,26 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
     final uid = _currentUser!.uid;
     final pid = widget.profileUserId;
+    final wasFollowing = _isFollowing;
 
-    final refFollower = _firestore
-        .collection('users')
-        .doc(pid)
-        .collection('followers')
-        .doc(uid);
-
-    final refFollowing = _firestore
-        .collection('users')
-        .doc(uid)
-        .collection('following')
-        .doc(pid);
-
-    setState(() {
-      _isFollowing = !_isFollowing;
-      _followersCount += _isFollowing ? 1 : -1;
-    });
-
-    try {
-      await _firestore.runTransaction((tx) async {
-        if (_isFollowing) {
-          tx.set(refFollower, {'createdAt': FieldValue.serverTimestamp()});
-          tx.set(refFollowing, {'createdAt': FieldValue.serverTimestamp()});
-          tx.update(_firestore.collection('users').doc(pid),
-              {'followersCount': FieldValue.increment(1)});
-        } else {
-          tx.delete(refFollower);
-          tx.delete(refFollowing);
-          tx.update(_firestore.collection('users').doc(pid),
-              {'followersCount': FieldValue.increment(-1)});
-        }
-      });
-    } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update follow status');
-      setState(() {
-        _isFollowing = !_isFollowing;
-        _followersCount += _isFollowing ? 1 : -1;
-      });
-    }
+    await ProfileFollowToggle.runOptimisticToggle(
+      followService: _followService,
+      currentUserId: uid,
+      profileUserId: pid,
+      wasFollowing: wasFollowing,
+      applyOptimisticUi: () => setState(() {
+        _isFollowing = !wasFollowing;
+        _followersCount += wasFollowing ? -1 : 1;
+        if (_followersCount < 0) _followersCount = 0;
+      }),
+      rollbackUi: () => setState(() {
+        _isFollowing = wasFollowing;
+        _followersCount += wasFollowing ? 1 : -1;
+        if (_followersCount < 0) _followersCount = 0;
+      }),
+      errorToast: 'Failed to update follow status',
+      debugLogOnError: false,
+    );
   }
 
   // ===================================================================
@@ -432,33 +351,32 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
 
-    setState(() => _profilePhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      picked: picked,
+      outputNamePrefix: 'profile',
+    );
+    if (edited == null) return;
+    setState(() => _profilePhotoLocal = edited);
 
     try {
-      final fileName =
-          'profile_${_currentUser!.uid}_${DateTime.now().millisecondsSinceEpoch}';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('users')
-          .child(_currentUser!.uid)
-          .child(fileName);
-      final snap = await ref.putFile(_profilePhotoFile!);
-      final url = await snap.ref.getDownloadURL();
+      final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
+        firestore: _firestore,
+        userId: _currentUser!.uid,
+        media: await edited.toXFile(),
+        isCover: false,
+      );
 
-      await _firestore
-          .collection('users')
-          .doc(_currentUser!.uid)
-          .update({'profilePhoto': url});
-
+      if (!mounted) return;
       setState(() {
         _profilePhotoUrl = url;
-        _profilePhotoFile = null;
+        _profilePhotoLocal = null;
       });
 
       Fluttertoast.showToast(msg: 'Profile photo updated');
     } catch (e) {
       Fluttertoast.showToast(msg: 'Failed to upload photo');
-      setState(() => _profilePhotoFile = null);
+      setState(() => _profilePhotoLocal = null);
     }
   }
 
@@ -468,104 +386,87 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
 
-    setState(() => _coverPhotoFile = File(picked.path));
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      picked: picked,
+      outputNamePrefix: 'cover',
+    );
+    if (edited == null) return;
+    setState(() => _coverPhotoLocal = edited);
 
     try {
-      final fileName =
-          'cover_${_currentUser!.uid}_${DateTime.now().millisecondsSinceEpoch}';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('users')
-          .child(_currentUser!.uid)
-          .child(fileName);
-      final snap = await ref.putFile(_coverPhotoFile!);
-      final url = await snap.ref.getDownloadURL();
+      final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
+        firestore: _firestore,
+        userId: _currentUser!.uid,
+        media: await edited.toXFile(),
+        isCover: true,
+      );
 
-      await _firestore
-          .collection('users')
-          .doc(_currentUser!.uid)
-          .update({'coverPhoto': url});
-
+      if (!mounted) return;
       setState(() {
         _coverPhotoUrl = url;
-        _coverPhotoFile = null;
+        _coverPhotoLocal = null;
       });
 
       Fluttertoast.showToast(msg: 'Cover photo updated');
     } catch (e) {
       Fluttertoast.showToast(msg: 'Failed to upload photo');
-      setState(() => _coverPhotoFile = null);
+      setState(() => _coverPhotoLocal = null);
     }
+  }
+
+  void _previewCoverImage() {
+    openProfileStoredImagePreview(
+      context: context,
+      localPath: _coverPhotoLocal?.path,
+      localBytes: _coverPhotoLocal?.previewBytes,
+      remoteUrl: _coverPhotoUrl,
+      heroTag: 'wellness-cover-${widget.profileUserId}',
+    );
+  }
+
+  void _previewProfileImage() {
+    openProfileStoredImagePreview(
+      context: context,
+      localPath: _profilePhotoLocal?.path,
+      localBytes: _profilePhotoLocal?.previewBytes,
+      remoteUrl: _profilePhotoUrl,
+      heroTag: 'wellness-avatar-${widget.profileUserId}',
+    );
   }
 
   // ===================================================================
   //  UI HELPERS (HEADER)
   // ===================================================================
   Widget _coverWidget(BuildContext context) {
-    final ImageProvider cover = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : (_coverPhotoUrl != null
-        ? NetworkImage(_coverPhotoUrl!)
-        : const AssetImage('assets/images/bio.png')) as ImageProvider;
+    final cover = profileHeroImageProvider(
+      local: _coverPhotoLocal,
+      remoteUrl: _coverPhotoUrl,
+      defaultAsset: const AssetImage('assets/images/bio.png'),
+    );
 
-    return GestureDetector(
-      onTap: _isOwnProfile ? _pickCoverImage : null,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              image: DecorationImage(image: cover, fit: BoxFit.cover),
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.black.withOpacity(0.25), Colors.transparent],
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return ProfileCoverHero(
+      cover: cover,
+      heroTag: 'wellness-cover-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
+      onLongPress: _previewCoverImage,
     );
   }
 
   Widget _avatarWidget() {
-    final ImageProvider avatar = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : (_profilePhotoUrl != null
-        ? NetworkImage(_profilePhotoUrl!)
-        : const AssetImage('assets/images/Profile.png')) as ImageProvider;
+    final avatar = profileHeroImageProvider(
+      local: _profilePhotoLocal,
+      remoteUrl: _profilePhotoUrl,
+      defaultAsset: const AssetImage('assets/images/Profile.png'),
+    );
 
-    return Hero(
-      tag: 'wellness-avatar-${widget.profileUserId}',
-      child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : null,
-        child: Stack(
-          children: [
-            Container(
-              width: _avatarSize + 6,
-              height: _avatarSize + 6,
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.12),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3),
-                  )
-                ],
-              ),
-              child: CircleAvatar(
-                radius: _avatarSize / 2,
-                backgroundImage: avatar,
-              ),
-            ),
-            if (_isOnline)
+    return ProfileAvatarHeroShell(
+      avatar: avatar,
+      heroTag: 'wellness-avatar-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+      onLongPress: _previewProfileImage,
+      extraStackChildren: _isOnline
+          ? [
               Positioned(
                 bottom: 0,
                 right: 0,
@@ -579,9 +480,8 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   ),
                 ),
               ),
-          ],
-        ),
-      ),
+            ]
+          : const [],
     );
   }
 
@@ -589,378 +489,154 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(height: _avatarOverlap + 18),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Transform.translate(
-                offset: const Offset(0, -_avatarOverlap),
-                child: _avatarWidget(),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _businessName.isNotEmpty ? _businessName : 'Business Name',
-                              style: GoogleFonts.poppins(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _username.isNotEmpty ? '@$_username' : '',
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          color: _mutedText,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      if (_category.isNotEmpty)
-                        GestureDetector(
-                          onTap: _isOwnProfile ? _editCategory : null,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _lavender.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: _lavender.withOpacity(0.3), width: 1),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    _category,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: _deepLavender,
-                                      letterSpacing: 0.2,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (_isOwnProfile) ...[
-                                  const SizedBox(width: 4),
-                                  const Icon(Icons.edit, size: 12, color: _lavender),
-                                ],
-                              ],
-                            ),
-                          ),
-                        )
-                      else if (_isOwnProfile)
-                        GestureDetector(
-                          onTap: _editCategory,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _lavender.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: _lavender.withOpacity(0.3), width: 1),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'Add Category',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: _deepLavender,
-                                    letterSpacing: 0.2,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                const Icon(Icons.add, size: 12, color: _lavender),
-                              ],
-                            ),
-                          ),
-                        ),
-                      const SizedBox(height: 6),
-                      if (_location.isNotEmpty)
-                        Row(
-                          children: [
-                            const Icon(Icons.location_on_outlined,
-                                size: 14, color: _mutedText),
-                            const SizedBox(width: 4),
-                            Text(
-                              _location,
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: _mutedText,
-                                fontWeight: FontWeight.w400,
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+        SizedBox(height: ProfileLayout.identityColumnTopInset),
+        WellnessIdentityBlock(
+          avatar: _avatarWidget(),
+          businessName: _businessName,
+          username: _username,
+          category: _category,
+          location: _location,
+          isOwnProfile: _isOwnProfile,
+          onEditCategory: _editCategory,
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 10),
         _buildStatsBar(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         _buildActionButtons(),
-        if (_bio.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          _buildBioCard(),
-        ],
+        _buildBioCard(),
+        const SizedBox(height: 4),
       ],
     );
   }
 
   Widget _buildStatsBar() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(vertical: 20),
-      decoration: BoxDecoration(
-        color: _cardColor,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: _lavender.withOpacity(0.08),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
-            spreadRadius: 0,
+    return ProfileWellnessStatsCard(
+      followers: _followersCount,
+      following: _followingCount,
+      posts: _postsCount,
+      likes: _likesCount,
+      cardColor: ProfileLayout.cardBg,
+      lavenderAccent: ProfileLayout.lavender,
+      onTapFollowers: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.followers,
+            ),
           ),
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-            spreadRadius: 0,
+        );
+      },
+      onTapFollowing: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.following,
+            ),
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _statTile(_followersCount.toString(), 'Followers'),
-          Container(width: 1, height: 40, color: Colors.grey[200]),
-          _statTile(_followingCount.toString(), 'Following'),
-          Container(width: 1, height: 40, color: Colors.grey[200]),
-          _statTile(_postsCount.toString(), 'Posts'),
-          Container(width: 1, height: 40, color: Colors.grey[200]),
-          _statTile(_likesCount.toString(), 'Likes'),
-        ],
-      ),
-    );
-  }
-
-  Widget _statTile(String count, String label) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          count,
-          style: GoogleFonts.poppins(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: Colors.black87,
-            letterSpacing: -0.5,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          label,
-          style: GoogleFonts.poppins(
-            fontSize: 12,
-            color: _mutedText,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.2,
-          ),
-        ),
-      ],
+        );
+      },
+      onTapPosts: () {
+        final postsTabIndex = _isOwnProfile ? 0 : 1;
+        _shellKey.currentState?.jumpToTab(postsTabIndex);
+      },
     );
   }
 
   Widget _buildActionButtons() {
-    if (_isOwnProfile) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0),
-        child: SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
-            onPressed: () async {
-              await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => EditProfilePage(
-                        initialName: _businessName,
-                        initialUsername: _username,
-                        initialBio: _bio,
-                        initialGender: '',
-                        initialprofessiontype: '',
-                      )));
-              _loadProfileData();
-            },
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(30),
-              ),
-              side: const BorderSide(color: _lavender),
-            ),
-            child: Text(
-              'Edit Profile',
-              style: GoogleFonts.poppins(
-                color: _lavender,
-                fontWeight: FontWeight.w600,
-              ),
+    return WellnessActionRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onBook: _openBooking,
+      onEditProfile: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => EditProfilePage(
+              initialName: _businessName,
+              initialUsername: _username,
+              initialBio: _bio,
+              initialGender: '',
+              initialprofessiontype: '',
             ),
           ),
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Row(
-        children: [
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _toggleFollow,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _lavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                elevation: 3,
-                shadowColor: _lavender.withOpacity(0.4),
-              ),
-              child: Text(
-                _isFollowing ? 'Following' : 'Follow',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton(
-              onPressed: _openMessage,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                side: BorderSide(color: Colors.grey.shade300, width: 1.5),
-              ),
-              child: Text(
-                'Message',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _openBooking,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _deepLavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                elevation: 3,
-                shadowColor: _deepLavender.withOpacity(0.4),
-              ),
-              child: Text(
-                'Book',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+        );
+        _loadProfileData();
+      },
+      lavender: ProfileLayout.lavender,
+      deepLavender: ProfileLayout.deepLavender,
     );
   }
 
   Widget _buildBioCard() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: _lavender.withOpacity(0.08),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
-              spreadRadius: 0,
-            ),
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Text(
-                _bio,
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  height: 1.6,
-                  color: Colors.black87,
-                  fontWeight: FontWeight.w400,
-                  letterSpacing: 0.1,
-                ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (_isOwnProfile)
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                  onPressed: _editBio,
-                  color: _lavender,
-                  iconSize: 20,
-                ),
-              ),
-          ],
-        ),
-      ),
+    return WellnessBioCard(
+      bio: _bio,
+      isOwnProfile: _isOwnProfile,
+      onEditBio: _editBio,
     );
+  }
+
+  List<Widget> _buildAppBarActions() {
+    if (!_isOwnProfile) return [];
+    return [
+      IconButton(
+        icon: const Icon(Icons.add_box_outlined, color: Colors.white),
+        onPressed: _openPostCreation,
+      ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        onSelected: (value) {
+          if (value == 'Edit Profile') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditProfilePage(
+                  initialName: _businessName,
+                  initialUsername: _username,
+                  initialBio: _bio,
+                  initialGender: '',
+                  initialprofessiontype: '',
+                ),
+              ),
+            ).then((_) {
+              if (!mounted) return;
+              _loadProfileData();
+            });
+          } else if (value == 'Settings') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => SettingsPage(),
+              ),
+            ).then((result) async {
+              if (result == 'logout') {
+                await _auth.signOut();
+                if (!mounted) return;
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => LoginPage()),
+                );
+              }
+            });
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(
+            value: 'Edit Profile',
+            child: Text('Edit Profile'),
+          ),
+          PopupMenuItem(
+            value: 'Settings',
+            child: Text('Settings'),
+          ),
+        ],
+      ),
+    ];
   }
 
   // ===================================================================
@@ -994,7 +670,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -1043,7 +719,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -1113,7 +789,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -1188,139 +864,79 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   // ===================================================================
   //  BUILD
   // ===================================================================
+  Widget _buildWellnessPostsTab() {
+    return AspirantPostsTab(
+      profileUserId: widget.profileUserId,
+      isPrivate: _isPrivate,
+      isFollowing: _isFollowing,
+      isOwnProfile: _isOwnProfile,
+      imageResolver: profilePostImageUrlFromMap,
+      onTapPost: (postId) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PostDetailsPage(postId: postId),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: Theme.of(context).copyWith(
-        textTheme: Theme.of(context).textTheme.apply(
-          bodyColor: Colors.black87,
-          displayColor: Colors.black87,
+    final tabs = _isOwnProfile
+        ? const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Business'),
+          ]
+        : const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Posts'),
+          ];
+
+    final tabViews = _isOwnProfile
+        ? [
+            _buildProfileTabContent(),
+            _buildBusinessTabContent(),
+          ]
+        : [
+            _buildProfileTabContent(),
+            _buildWellnessPostsTab(),
+          ];
+
+    return Scaffold(
+      backgroundColor: ProfileLayout.bg,
+      body: DefaultTextStyle(
+        style: GoogleFonts.poppins(
+          color: ProfileLayout.textPrimary,
+          fontSize: 14,
         ),
-      ),
-      child: Scaffold(
-        backgroundColor: _bg,
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : NestedScrollView(
-          headerSliverBuilder:
-              (BuildContext context, bool innerBoxIsScrolled) {
-            return [
-              SliverAppBar(
-                pinned: true,
-                expandedHeight: _coverHeight,
-                backgroundColor: _lavender,
-                elevation: 0,
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => Navigator.pop(context),
-                ),
-                actions: _isOwnProfile
-                    ? [
-                  IconButton(
-                    icon: const Icon(Icons.add_box_outlined),
-                    onPressed: _openPostCreation,
-                  ),
-
-                  /// ⚡ OPTIMIZED POPUP MENU
-                  PopupMenuButton<String>(
-                    onSelected: (value) {
-                      if (value == 'Edit Profile') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => EditProfilePage(
-                              initialName: _businessName,
-                              initialUsername: _username,
-                              initialBio: _bio,
-                              initialGender: '',
-                              initialprofessiontype: '',
-                            ),
-                          ),
-                        ).then((_) {
-                          // reload AFTER coming back, non-blocking
-                          if (!mounted) return;
-                          _loadProfileData();
-                        });
-                      } else if (value == 'Settings') {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => SettingsPage(),
-                          ),
-                        ).then((result) async {
-                          if (result == 'logout') {
-                            await _auth.signOut();
-                            if (!mounted) return;
-
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => LoginPage(),
-                              ),
-                            );
-                          }
-                        });
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: 'Edit Profile',
-                        child: Text('Edit Profile'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Settings',
-                        child: Text('Settings'),
-                      ),
-                    ],
-                  ),
-                ]
-                    : [],
-                flexibleSpace: FlexibleSpaceBar(
-                  background: _coverWidget(context),
-                ),
-              ),
-
-              SliverToBoxAdapter(
-                child: _buildProfileHeaderSection(),
-              ),
-
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _SliverAppBarDelegate(
-                  TabBar(
-                    controller: _tabController,
-                    indicatorColor: _lavender,
-                    indicatorWeight: 3,
-                    labelColor: Colors.black87,
-                    unselectedLabelColor: Colors.black54,
-                    labelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    unselectedLabelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.normal,
-                    ),
-                    tabs: const [
-                      Tab(
-                        icon: Icon(Icons.grid_on_outlined, size: 24),
-                      ),
-                      Tab(
-                        icon:
-                        Icon(Icons.dashboard_outlined, size: 24),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ];
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) {
+            final vx = details.primaryVelocity ?? 0;
+            if (vx.abs() < 250) return;
+            if (vx < 0 && _tabController.index < _tabController.length - 1) {
+              _tabController.animateTo(_tabController.index + 1);
+            } else if (vx > 0 && _tabController.index > 0) {
+              _tabController.animateTo(_tabController.index - 1);
+            }
           },
-          body: TabBarView(
-            controller: _tabController,
-            children: [
-              _buildFirstTab(),
-              _buildSecondTab(),
-            ],
+          child: WellnessProfileShell(
+            key: _shellKey,
+            loading: _isLoading,
+            onBack: () => popOrGoHome(
+              context,
+              onBackToHome: widget.onBackToHome,
+            ),
+            cover: ProfileFlexibleSpaceCoverStack(
+              cover: _coverWidget(context),
+            ),
+            appBarActions: _buildAppBarActions(),
+            header: _buildProfileHeaderSection(),
+            tabController: _tabController,
+            tabs: tabs,
+            tabViews: tabViews,
           ),
         ),
       ),
@@ -1331,86 +947,74 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   // ===================================================================
   //  TAB CONTENT BUILDERS
   // ===================================================================
-  Widget _buildFirstTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 20),
-              // Popular Products Section
-              _buildPopularProductsSection(),
-              const SizedBox(height: 24),
-              // Featured Staff Section
-              _buildFeaturedStaffSection(),
-              const SizedBox(height: 24),
-              // Recent Posts Section
-              _buildRecentPostsSection(),
-              const SizedBox(height: 24),
-              // Fitness Events Section
-              _buildFitnessEventsSection(),
-              const SizedBox(height: 24),
-              // Location Section
-              _buildLocationSection(),
-              const SizedBox(height: 24),
-              // Services & Availability Section
-              _buildServicesAndAvailabilitySection(),
-              const SizedBox(height: 24),
-              // Reviews Section
-              _buildReviewsSection(),
-              const SizedBox(height: 24),
-              // Social Links Section
-              _buildSocialLinksSection(),
-              const SizedBox(height: 24),
-              // New Professional Features for Wellness
-              _buildFacilityGallerySection(),
-              _buildAmenitiesShowcaseSection(),
-              _buildMembershipPlansSection(),
-              _buildSpecialOffersSection(),
-              _buildFacilityStatusSection(),
-              _buildAwardsCertificationsSection(),
-              const SizedBox(height: 40),
-            ],
+  Widget _buildProfileTabContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 20),
+        _buildPopularProductsSection(),
+        const SizedBox(height: 24),
+        _buildFeaturedStaffSection(),
+        const SizedBox(height: 24),
+        if (_isOwnProfile) ...[
+          _buildRecentPostsSection(),
+          const SizedBox(height: 24),
+        ],
+        _buildFitnessEventsSection(),
+        const SizedBox(height: 24),
+        _buildLocationSection(),
+        const SizedBox(height: 24),
+        _buildServicesAndAvailabilitySection(),
+        const SizedBox(height: 24),
+        _buildReviewsSection(),
+        const SizedBox(height: 24),
+        _buildSocialLinksSection(),
+        const SizedBox(height: 24),
+        if (!_isOwnProfile) ...[
+          WellnessBookingSection(
+            wellnessUserId: widget.profileUserId,
+            isOwner: false,
           ),
-        ),
+          const SizedBox(height: 24),
+        ],
+        _buildFacilityGallerySection(),
+        _buildAmenitiesShowcaseSection(),
+        _buildMembershipPlansSection(),
+        _buildSpecialOffersSection(),
+        _buildFacilityStatusSection(),
+        _buildAwardsCertificationsSection(),
+        const SizedBox(height: 40),
       ],
     );
   }
 
-  Widget _buildSecondTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 8),
-              WellnessProductsSection(
-                wellnessUserId: widget.profileUserId,
-                isOwner: _isOwnProfile,
-              ),
-              WellnessServicesSection(
-                wellnessUserId: widget.profileUserId,
-                isOwner: _isOwnProfile,
-              ),
-              WellnessBookingSection(
-                wellnessUserId: widget.profileUserId,
-                isOwner: _isOwnProfile,
-              ),
-              WellnessReviewsSection(
-                wellnessUserId: widget.profileUserId,
-              ),
-              if (_isOwnProfile) ...[
-                const SizedBox(height: 16),
-                WellnessAnalyticsSection(
-                  wellnessUserId: widget.profileUserId,
-                ),
-              ],
-              const SizedBox(height: 80),
-            ],
-          ),
+  Widget _buildBusinessTabContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        WellnessProductsSection(
+          wellnessUserId: widget.profileUserId,
+          isOwner: _isOwnProfile,
         ),
+        WellnessServicesSection(
+          wellnessUserId: widget.profileUserId,
+          isOwner: _isOwnProfile,
+        ),
+        WellnessBookingSection(
+          wellnessUserId: widget.profileUserId,
+          isOwner: _isOwnProfile,
+        ),
+        WellnessReviewsSection(
+          wellnessUserId: widget.profileUserId,
+        ),
+        if (_isOwnProfile) ...[
+          const SizedBox(height: 16),
+          WellnessAnalyticsSection(
+            wellnessUserId: widget.profileUserId,
+          ),
+        ],
+        const SizedBox(height: 80),
       ],
     );
   }
@@ -1442,7 +1046,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                 'View All',
                 style: GoogleFonts.poppins(
                   fontSize: 13,
-                  color: _deepLavender,
+                  color: ProfileLayout.deepLavender,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.2,
                 ),
@@ -1481,7 +1085,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
-                        color: _lavender.withOpacity(0.1),
+                        color: ProfileLayout.lavender.withOpacity(0.1),
                         blurRadius: 16,
                         offset: const Offset(0, 4),
                         spreadRadius: 0,
@@ -1547,7 +1151,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                                 '₹${product['price']}',
                                 style: GoogleFonts.poppins(
                                   fontSize: 13,
-                                  color: _deepLavender,
+                                  color: ProfileLayout.deepLavender,
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: -0.2,
                                 ),
@@ -1612,12 +1216,12 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                         backgroundImage: staff['photoUrl'] != null
                             ? NetworkImage(staff['photoUrl'].toString())
                             : null,
-                        backgroundColor: _lavender.withOpacity(0.2),
+                        backgroundColor: ProfileLayout.lavender.withOpacity(0.2),
                         child: staff['photoUrl'] == null
                             ? Text(
                           staff['name']?.toString()[0].toUpperCase() ?? 'S',
                           style: GoogleFonts.poppins(
-                            color: _lavender,
+                            color: ProfileLayout.lavender,
                             fontWeight: FontWeight.bold,
                           ),
                         )
@@ -1650,90 +1254,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   }
 
   Widget _buildRecentPostsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Recent Posts',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              TextButton(
-                onPressed: () => _showAllPosts(),
-                child: Text(
-                  'View All Posts →',
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    color: _deepLavender,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_recentPosts.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Text(
-              'No posts yet',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: _mutedText,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-          )
-        else
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 4,
-                mainAxisSpacing: 4,
-              ),
-              itemCount: _recentPosts.length > 9 ? 9 : _recentPosts.length,
-              itemBuilder: (context, index) {
-                final post = _recentPosts[index];
-                return Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: post['imageUrl'] != null &&
-                      post['imageUrl'].toString().isNotEmpty
-                      ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      post['imageUrl'].toString(),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const Center(
-                        child: Icon(Icons.image, color: Colors.grey),
-                      ),
-                    ),
-                  )
-                      : const Center(
-                    child: Icon(Icons.image, color: Colors.grey),
-                  ),
-                );
-              },
-            ),
-          ),
-      ],
+    return WellnessRecentPostsSection(
+      recentPosts: _recentPosts,
+      onViewAll: _showAllPosts,
+      mutedTextColor: _mutedText,
+      accentColor: ProfileLayout.deepLavender,
     );
   }
 
@@ -1748,7 +1273,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: _lavender.withOpacity(0.08),
+              color: ProfileLayout.lavender.withOpacity(0.08),
               blurRadius: 20,
               offset: const Offset(0, 4),
               spreadRadius: 0,
@@ -1794,7 +1319,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                           width: 8,
                           height: 8,
                           decoration: BoxDecoration(
-                            color: _lavender,
+                            color: ProfileLayout.lavender,
                             shape: BoxShape.circle,
                           ),
                         ),
@@ -1831,7 +1356,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: _lavender.withOpacity(0.08),
+              color: ProfileLayout.lavender.withOpacity(0.08),
               blurRadius: 20,
               offset: const Offset(0, 4),
               spreadRadius: 0,
@@ -1879,14 +1404,14 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     width: double.infinity,
                     child: OutlinedButton.icon(
                       onPressed: _openMaps,
-                      icon: Icon(Icons.map_outlined, color: _lavender),
+                      icon: Icon(Icons.map_outlined, color: ProfileLayout.lavender),
                       label: Text(
                         'Open in Maps',
                         style: GoogleFonts.poppins(
                           fontWeight: FontWeight.w600,
                           fontSize: 14,
                           letterSpacing: 0.2,
-                          color: _lavender,
+                          color: ProfileLayout.lavender,
                         ),
                       ),
                       style: OutlinedButton.styleFrom(
@@ -1894,7 +1419,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        side: BorderSide(color: _lavender, width: 1.5),
+                        side: BorderSide(color: ProfileLayout.lavender, width: 1.5),
                       ),
                     ),
                   ),
@@ -1918,7 +1443,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: _lavender.withOpacity(0.08),
+              color: ProfileLayout.lavender.withOpacity(0.08),
               blurRadius: 20,
               offset: const Offset(0, 4),
               spreadRadius: 0,
@@ -1950,7 +1475,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   IconButton(
                     icon: const Icon(Icons.edit_outlined, size: 20),
                     onPressed: _editServices,
-                    color: _lavender,
+                    color: ProfileLayout.lavender,
                   ),
               ],
             ),
@@ -1975,11 +1500,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                       style: GoogleFonts.poppins(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: _deepLavender,
+                        color: ProfileLayout.deepLavender,
                       ),
                     ),
-                    backgroundColor: _lavender.withOpacity(0.12),
-                    side: BorderSide(color: _lavender.withOpacity(0.2), width: 1),
+                    backgroundColor: ProfileLayout.lavender.withOpacity(0.12),
+                    side: BorderSide(color: ProfileLayout.lavender.withOpacity(0.2), width: 1),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
@@ -2004,7 +1529,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   IconButton(
                     icon: const Icon(Icons.edit_outlined, size: 20),
                     onPressed: _editAvailability,
-                    color: _lavender,
+                    color: ProfileLayout.lavender,
                   ),
               ],
             ),
@@ -2041,7 +1566,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                           style: GoogleFonts.poppins(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
-                            color: _deepLavender,
+                            color: ProfileLayout.deepLavender,
                             letterSpacing: 0.1,
                           ),
                         ),
@@ -2062,46 +1587,30 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Reviews',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              if (_reviewCount > 0)
-                TextButton(
-                  onPressed: () => _showAllReviews(),
-                  child: Text(
-                    'View All Reviews',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: _deepLavender,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
+          child: ProfileSectionTitle(
+            title: 'Reviews',
+            fontSize: 18,
+            trailing: _reviewCount > 0
+                ? TextButton(
+                    onPressed: () => _showAllReviews(),
+                    child: Text(
+                      'View All Reviews',
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: ProfileLayout.deepLavender,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2,
+                      ),
                     ),
-                  ),
-                ),
-            ],
+                  )
+                : null,
           ),
         ),
         const SizedBox(height: 12),
         if (_reviews.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Text(
-              'No reviews yet',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: _mutedText,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
+            child: const ProfileEmptyState(text: 'No reviews yet'),
           )
         else
           Column(
@@ -2116,7 +1625,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
-                        color: _lavender.withOpacity(0.06),
+                        color: ProfileLayout.lavender.withOpacity(0.06),
                         blurRadius: 16,
                         offset: const Offset(0, 4),
                         spreadRadius: 0,
@@ -2137,13 +1646,13 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                         backgroundImage: review['profilePhoto'] != null
                             ? NetworkImage(review['profilePhoto'].toString())
                             : null,
-                        backgroundColor: _lavender.withOpacity(0.2),
+                        backgroundColor: ProfileLayout.lavender.withOpacity(0.2),
                         child: review['profilePhoto'] == null
                             ? Text(
                           (review['userName']?.toString()[0] ?? 'U').toUpperCase(),
                           style: GoogleFonts.poppins(
                             fontSize: 12,
-                            color: _lavender,
+                            color: ProfileLayout.lavender,
                             fontWeight: FontWeight.bold,
                           ),
                         )
@@ -2205,41 +1714,22 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   }
 
   Widget _buildSocialLinksSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+    return ProfileSectionCard(
+      title: 'Social Links',
+      titleFontSize: 18,
+      margin: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
+      trailing: _isOwnProfile
+          ? IconButton(
+              icon: const Icon(Icons.edit_outlined, size: 20),
+              onPressed: _editSocialLinks,
+              color: ProfileLayout.lavender,
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Social Links',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                  onPressed: _editSocialLinks,
-                  color: _lavender,
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
           if (_socialLinks.isEmpty)
-            Text(
-              'No social links added',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: _mutedText,
-                fontWeight: FontWeight.w400,
-              ),
-            )
+            const ProfileEmptyState(text: 'No social links added')
           else
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -2375,7 +1865,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -2423,10 +1913,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.photo_library, color: _lavender, size: 24),
+                    child: Icon(Icons.photo_library, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -2442,7 +1932,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addGalleryImage,
                 )
               else if (galleryImages.isNotEmpty)
@@ -2452,7 +1942,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     'View All',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _deepLavender,
+                      color: ProfileLayout.deepLavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -2532,7 +2022,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: _lavender.withOpacity(0.08),
+              color: ProfileLayout.lavender.withOpacity(0.08),
               blurRadius: 20,
               offset: const Offset(0, 4),
             ),
@@ -2546,10 +2036,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: _lavender.withOpacity(0.15),
+                    color: ProfileLayout.lavender.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(Icons.spa, color: _lavender, size: 24),
+                  child: Icon(Icons.spa, color: ProfileLayout.lavender, size: 24),
                 ),
                 const SizedBox(width: 12),
                 Text(
@@ -2572,12 +2062,12 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
                     color: isAvailable 
-                        ? _lavender.withOpacity(0.1)
+                        ? ProfileLayout.lavender.withOpacity(0.1)
                         : Colors.grey[100],
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
                       color: isAvailable 
-                          ? _lavender.withOpacity(0.3)
+                          ? ProfileLayout.lavender.withOpacity(0.3)
                           : Colors.grey[300]!,
                     ),
                   ),
@@ -2587,7 +2077,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                       Icon(
                         amenity['icon'] as IconData,
                         size: 20,
-                        color: isAvailable ? _lavender : Colors.grey[400],
+                        color: isAvailable ? ProfileLayout.lavender : Colors.grey[400],
                       ),
                       const SizedBox(width: 8),
                       Text(
@@ -2634,10 +2124,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.card_membership, color: _lavender, size: 24),
+                    child: Icon(Icons.card_membership, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -2652,7 +2142,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addMembershipPlan,
                 ),
             ],
@@ -2675,10 +2165,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   margin: const EdgeInsets.only(right: 12),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: isPopular ? _lavender.withOpacity(0.1) : _cardColor,
+                    color: isPopular ? ProfileLayout.lavender.withOpacity(0.1) : _cardColor,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: isPopular ? _lavender : Colors.grey[300]!,
+                      color: isPopular ? ProfileLayout.lavender : Colors.grey[300]!,
                       width: isPopular ? 2 : 1,
                     ),
                     boxShadow: [
@@ -2696,7 +2186,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: _lavender,
+                            color: ProfileLayout.lavender,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
@@ -2728,7 +2218,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                             style: GoogleFonts.poppins(
                               fontSize: 24,
                               fontWeight: FontWeight.bold,
-                              color: _lavender,
+                              color: ProfileLayout.lavender,
                             ),
                           ),
                           const SizedBox(width: 4),
@@ -2746,7 +2236,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                         padding: const EdgeInsets.only(bottom: 6),
                         child: Row(
                           children: [
-                            Icon(Icons.check_circle, size: 16, color: _lavender),
+                            Icon(Icons.check_circle, size: 16, color: ProfileLayout.lavender),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
@@ -2783,7 +2273,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                         ElevatedButton(
                           onPressed: () => _subscribeToPlan(plan),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: isPopular ? _lavender : Colors.grey[300],
+                          backgroundColor: isPopular ? ProfileLayout.lavender : Colors.grey[300],
                           foregroundColor: isPopular ? Colors.white : Colors.black87,
                           minimumSize: const Size(double.infinity, 40),
                           shape: RoundedRectangleBorder(
@@ -2969,7 +2459,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: _lavender.withOpacity(0.08),
+              color: ProfileLayout.lavender.withOpacity(0.08),
               blurRadius: 20,
               offset: const Offset(0, 4),
             ),
@@ -3008,7 +2498,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                 ),
                 if (_isOwnProfile)
                   IconButton(
-                    icon: Icon(Icons.edit, color: _lavender),
+                    icon: Icon(Icons.edit, color: ProfileLayout.lavender),
                     onPressed: _editFacilityStatus,
                   )
                 else
@@ -3227,7 +2717,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Add Membership Plan',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -3242,10 +2732,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.card_membership, color: _lavender),
+                  prefixIcon: Icon(Icons.card_membership, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3258,10 +2748,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  prefixIcon: Icon(Icons.currency_rupee, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -3275,10 +2765,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3292,10 +2782,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.checklist, color: _lavender),
+                  prefixIcon: Icon(Icons.checklist, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -3313,7 +2803,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3370,7 +2860,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Edit Membership Plan',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -3385,10 +2875,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.card_membership, color: _lavender),
+                  prefixIcon: Icon(Icons.card_membership, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3401,10 +2891,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  prefixIcon: Icon(Icons.currency_rupee, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -3418,10 +2908,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3434,10 +2924,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.checklist, color: _lavender),
+                  prefixIcon: Icon(Icons.checklist, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -3455,7 +2945,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3502,7 +2992,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Delete Membership Plan',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -3561,7 +3051,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Add Special Offer',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -3576,10 +3066,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.local_offer, color: _lavender),
+                  prefixIcon: Icon(Icons.local_offer, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3592,10 +3082,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.percent, color: _lavender),
+                  prefixIcon: Icon(Icons.percent, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3609,10 +3099,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3629,7 +3119,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3683,7 +3173,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Edit Special Offer',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -3698,10 +3188,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.local_offer, color: _lavender),
+                  prefixIcon: Icon(Icons.local_offer, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3714,10 +3204,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.percent, color: _lavender),
+                  prefixIcon: Icon(Icons.percent, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3730,10 +3220,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3750,7 +3240,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3789,7 +3279,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Delete Special Offer',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -3848,7 +3338,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Edit Facility Hours',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -3863,10 +3353,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3879,10 +3369,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3895,10 +3385,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -3915,7 +3405,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4019,8 +3509,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   .ref()
                   .child('posts')
                   .child(fileName);
-              final snap = await ref.putFile(File(image.path));
-              final url = await snap.ref.getDownloadURL();
+              final url = await uploadReferenceXFileAndGetUrl(
+                ref,
+                image,
+                metadata: SettableMetadata(contentType: 'image/jpeg'),
+              );
               await FirebaseFirestore.instance.collection('posts').add({
                 'imageUrl': url,
                 'caption': caption,
@@ -4175,7 +3668,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Subscribe to Plan',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Column(
@@ -4211,7 +3704,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4255,7 +3748,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           'Add Award/Certification',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4270,10 +3763,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.workspace_premium, color: _lavender),
+                  prefixIcon: Icon(Icons.workspace_premium, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4286,10 +3779,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.business, color: _lavender),
+                  prefixIcon: Icon(Icons.business, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4302,10 +3795,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -4323,7 +3816,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4842,3 +4335,4 @@ class _OfferDetailsPage extends StatelessWidget {
     );
   }
 }
+

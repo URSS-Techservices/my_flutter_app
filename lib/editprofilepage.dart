@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'dart:io';
 
+import 'package:halo/platform/storage_upload.dart';
 import 'package:halo/utils/search_utils.dart';
 
 void saveProfileData({
@@ -84,8 +85,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
   Future<String?> _uploadImage(File file) async {
     final uid = _auth.currentUser!.uid;
     final ref = FirebaseStorage.instance.ref().child('profile_pics/$uid.jpg');
-    await ref.putFile(file);
-    return await ref.getDownloadURL();
+    return uploadReferenceXFileAndGetUrl(
+      ref,
+      XFile(file.path),
+      metadata: SettableMetadata(contentType: 'image/jpeg'),
+    );
   }
 
   Future<void> _saveProfile() async {

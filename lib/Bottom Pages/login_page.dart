@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:halo/services/login_lookup.dart';
 import '../widgets/google_sign_in_button.dart';
 import '../signuppage.dart';
+import '../forgotpasswordpage.dart';
 
 // THEME CONSTANTS FOR THIS PAGE
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -51,56 +52,15 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _isLoading = true);
 
     try {
-      String emailToUse;
-
-      if (input.contains('@')) {
-        // User typed an email directly
-        emailToUse = input;
-      } else {
-        // User typed username or phone
-        final lower = input.toLowerCase();
-        QuerySnapshot snap;
-
-        // 1) Try username
-        snap = await FirebaseFirestore.instance
-            .collection('users')
-            .where('username_lower', isEqualTo: lower)
-            .limit(1)
-            .get();
-
-        // 2) If not found, try phone
-        if (snap.docs.isEmpty) {
-          snap = await FirebaseFirestore.instance
-              .collection('users')
-              .where('phone', isEqualTo: input)
-              .limit(1)
-              .get();
-        }
-
-        if (snap.docs.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('User not found')),
-          );
-          setState(() => _isLoading = false);
-          return;
-        }
-
-        final data = snap.docs.first.data() as Map<String, dynamic>;
-        final email = data['email'] as String?;
-
-        if (email == null || email.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('This account does not have an email set.')),
-          );
-          setState(() => _isLoading = false);
-          return;
-        }
-
-        emailToUse = email;
+      final emailToUse = await resolveLoginEmail(input);
+      if (emailToUse == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('User not found')),
+        );
+        return;
       }
 
-      // Sign in with FirebaseAuth
       await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: emailToUse,
         password: password,
@@ -113,6 +73,14 @@ class _LoginPageState extends State<LoginPage> {
       if (e.code == 'user-not-found') msg = 'User not found';
       if (e.code == 'wrong-password') msg = 'Incorrect password';
       if (e.code == 'invalid-email') msg = 'Invalid email';
+      if (e.code == 'invalid-credential') msg = 'Incorrect email or password';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    } on FirebaseException catch (e) {
+      final msg = e.code == 'permission-denied'
+          ? 'Could not look up account (database access denied).'
+          : 'Login failed: ${e.message ?? e.code}';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg)),
       );
@@ -289,7 +257,7 @@ class _LoginPageState extends State<LoginPage> {
                                 "Login ID",
                                 style: textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.grey.shade900,
+                                  color: Colors.white,
                                 ),
                               ),
                             ),
@@ -319,7 +287,7 @@ class _LoginPageState extends State<LoginPage> {
                                 "Password / OTP",
                                 style: textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.grey.shade900,
+                                  color: Colors.white,
                                 ),
                               ),
                             ),
@@ -370,7 +338,12 @@ class _LoginPageState extends State<LoginPage> {
                                     MaterialTapTargetSize.shrinkWrap,
                                   ),
                                   onPressed: () {
-                                    // TODO: Forgot password action
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ForgotPasswordPage(),
+                                      ),
+                                    );
                                   },
                                   child: Text(
                                     "Forgot password?",

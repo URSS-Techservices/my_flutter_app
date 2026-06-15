@@ -3,6 +3,9 @@ import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:location/location.dart' as loc;
+import 'package:geocoding/geocoding.dart';
+import 'package:halo/widgets/gps_location_suffix.dart';
 
 // HALO THEME COLORS
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -70,6 +73,8 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
   bool _promotional = true;
 
   bool _isSubmitting = false;
+  bool _obscurePassword = true;
+  bool _isFetchingLocation = false;
 
   @override
   void dispose() {
@@ -204,6 +209,63 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
     );
   }
 
+  Future<void> _detectCurrentCity() async {
+    if (_isFetchingLocation) return;
+    setState(() => _isFetchingLocation = true);
+    try {
+      final location = loc.Location();
+      bool serviceEnabled = await location.serviceEnabled();
+      if (!serviceEnabled) {
+        serviceEnabled = await location.requestService();
+      }
+      if (!serviceEnabled) {
+        _showSnack('Please enable location service.');
+        return;
+      }
+
+      var permission = await location.hasPermission();
+      if (permission == loc.PermissionStatus.denied) {
+        permission = await location.requestPermission();
+      }
+      if (permission != loc.PermissionStatus.granted &&
+          permission != loc.PermissionStatus.grantedLimited) {
+        _showSnack('Location permission is required.');
+        return;
+      }
+
+      final data = await location.getLocation();
+      final lat = data.latitude;
+      final lng = data.longitude;
+      if (lat == null || lng == null) {
+        _showSnack('Unable to fetch your location.');
+        return;
+      }
+
+      final places = await placemarkFromCoordinates(lat, lng);
+      if (places.isEmpty) {
+        _showSnack('City not found from current location.');
+        return;
+      }
+
+      final p = places.first;
+      final city = (p.locality ?? p.subAdministrativeArea ?? p.administrativeArea ?? '').trim();
+      if (city.isEmpty) {
+        _showSnack('City not found from current location.');
+        return;
+      }
+      _locationController.text = city;
+      _showSnack('Location updated to $city');
+    } catch (e) {
+      _showSnack('Could not fetch location: $e');
+    } finally {
+      if (mounted) setState(() => _isFetchingLocation = false);
+    }
+  }
+
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   // Move to next step after validating current step
   void _goToNext() {
     if (_currentStep == 0) {
@@ -233,6 +295,14 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
   void _goToPrevious() {
     if (_currentStep > 0) setState(() => _currentStep -= 1);
+  }
+
+  Future<bool> _onWillPop() async {
+    if (_currentStep > 0) {
+      setState(() => _currentStep -= 1);
+      return false;
+    }
+    return true;
   }
 
   // Final submit - uses FirebaseAuth + Firestore
@@ -372,6 +442,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           width: 1.5,
         ),
       ),
+      errorMaxLines: 4,
       contentPadding:
       const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
@@ -500,8 +571,16 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
               label: 'Password',
               prefixIcon: const Icon(Icons.lock_outline_rounded,
                   color: Colors.white70),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                  color: Colors.white70,
+                ),
+                onPressed: () => setState(
+                    () => _obscurePassword = !_obscurePassword),
+              ),
             ),
-            obscureText: true,
+            obscureText: _obscurePassword,
             validator: _passwordValidator,
           ),
           const SizedBox(height: 16),
@@ -555,10 +634,17 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           TextFormField(
             controller: _locationController,
             style: const TextStyle(color: Colors.white),
+            textCapitalization: TextCapitalization.words,
+            keyboardType: TextInputType.streetAddress,
             decoration: _inputDecoration(
               label: 'City / Location',
+              hint: 'Type your city or tap GPS',
               prefixIcon:
               const Icon(Icons.location_on_outlined, color: Colors.white70),
+              suffixIcon: gpsLocationSuffix(
+                isFetching: _isFetchingLocation,
+                onPressed: _detectCurrentCity,
+              ),
             ),
             validator: (v) {
               if (v == null || v.trim().isEmpty) {
@@ -841,9 +927,11 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
     final textTheme =
     GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
         title: Text(
           'Aspirant · $stepTitle',
           style: textTheme.titleMedium?.copyWith(
@@ -855,6 +943,13 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
         centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () async {
+            final allowPop = await _onWillPop();
+            if (allowPop && mounted) Navigator.of(context).pop();
+          },
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -886,6 +981,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

@@ -1,7 +1,6 @@
 // guru_profile_page.dart  (Guru Profile – advanced features)
 
 // -------------------- IMPORTS --------------------
-import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -19,9 +18,39 @@ import '../../main.dart'; // LoginPage
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/utils/search_utils.dart';
+import 'package:halo/utils/shell_back.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
+import 'package:halo/services/follow_service.dart';
+import 'package:halo/widgets/follow_button.dart';
+import 'package:halo/widgets/profile_image_interactions.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_identity_block.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_recent_posts_section.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_action_row.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_bio_card.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_cta_row.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
+import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
+import 'package:halo/screens/profile/core/profile_posts_queries.dart';
+import 'package:halo/screens/profile/core/profile_reviews_queries.dart';
+import 'package:halo/platform/profile_avatar_provider.dart';
+import 'package:halo/platform/profile_local_photo.dart';
+import 'package:halo/platform/storage_upload.dart';
+import 'package:halo/screens/profile/core/profile_media_upload.dart';
+import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
+import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
+import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
+import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
+import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
+import 'package:halo/screens/profile/profile_theme.dart';
+import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_profile_shell.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
+import 'package:halo/screens/profile/pages/follow_list_page.dart';
+import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsPage;
 
 // GURU SECTIONS
 import '../Sections/Guru Section/guru_booking_section.dart';
@@ -31,55 +60,37 @@ import '../Sections/Guru Section/guru_students_section.dart';
 import '../Sections/Guru Section/guru_analytics_section.dart';
 
 // ===================================================================
-//  SLIVER APP BAR DELEGATE (for TabBar)
-// ===================================================================
-class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
-  final TabBar tabBar;
-
-  _SliverAppBarDelegate(this.tabBar);
-
-  @override
-  double get minExtent => tabBar.preferredSize.height;
-
-  @override
-  double get maxExtent => tabBar.preferredSize.height;
-
-  @override
-  Widget build(
-      BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      color: Colors.white,
-      child: tabBar,
-    );
-  }
-
-  @override
-  bool shouldRebuild(_SliverAppBarDelegate oldDelegate) {
-    return false;
-  }
-}
-
-// ===================================================================
 //  GURU PROFILE PAGE
 // ===================================================================
 
 class GuruProfilePage extends StatelessWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const GuruProfilePage({Key? key, required this.profileUserId})
-      : super(key: key);
+  const GuruProfilePage({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return _GuruProfilePageStateful(profileUserId: profileUserId);
+    return _GuruProfilePageStateful(
+      profileUserId: profileUserId,
+      onBackToHome: onBackToHome,
+    );
   }
 }
 
 class _GuruProfilePageStateful extends StatefulWidget {
   final String profileUserId;
+  final VoidCallback? onBackToHome;
 
-  const _GuruProfilePageStateful({Key? key, required this.profileUserId})
-      : super(key: key);
+  const _GuruProfilePageStateful({
+    Key? key,
+    required this.profileUserId,
+    this.onBackToHome,
+  }) : super(key: key);
 
   @override
   State<_GuruProfilePageStateful> createState() =>
@@ -91,6 +102,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // -------------------- FIREBASE --------------------
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FollowService _followService = FollowService();
   User? _currentUser;
   bool _isOwnProfile = false;
 
@@ -108,7 +120,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   int _followingCount = 0;
   int _postsCount = 0;
 
-  double _rating = 4.8;
+  double _rating = 0.0;
   int _reviewCount = 0;
   bool _isPrivate = false;
 
@@ -149,21 +161,13 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   List<Map<String, dynamic>> _programs = [];
   List<Map<String, dynamic>> _lastWorkouts = [];
 
-  // -------------------- UI CONSTANTS --------------------
-  static const double _coverHeight = 220.0;
-  static const double _avatarSize = 90.0;
-  static const double _avatarOverlap = 30.0;
-  static const Color _lavender = Color(0xFFA58CE3);
-  static const Color _deepLavender = Color(0xFF6D4DB3);
-  static const Color _bg = Color(0xFFF4F1FB);
-
   // -------------------- STATE --------------------
   bool _isFollowing = false;
   bool _isLoading = true;
 
   final ImagePicker _picker = ImagePicker();
-  File? _profilePhotoFile;
-  File? _coverPhotoFile;
+  ProfileLocalPhoto? _profilePhotoLocal;
+  ProfileLocalPhoto? _coverPhotoLocal;
 
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
@@ -171,6 +175,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
   late final AnimationController _followAnimController;
   late final TabController _tabController;
+  final GlobalKey<GuruProfileShellState> _shellKey =
+      GlobalKey<GuruProfileShellState>();
 
   @override
   void initState() {
@@ -206,13 +212,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         final data = doc.data()!;
 
         // --------- DEBUG: account type (with fallbacks) ----------
-        final rawAccountType =
-        (data['accountType'] ?? data['category'] ?? data['profileType'] ?? 'guru')
-            .toString();
+        final rawAccountType = (data['accountType'] ?? 'guru').toString();
         final accountType = rawAccountType.toLowerCase();
         debugPrint('🔍 Guru Profile Page - Account Type: $accountType');
         debugPrint('🔍 Guru Profile Page - Is Own Profile: $_isOwnProfile');
         // ---------------------------------------------------------
+        if (_isOwnProfile && mounted && _tabController.index == 0) {
+          _tabController.animateTo(1);
+        }
 
         // Guru signup uses full_name; also support name / business_name
         final nameRaw = data['full_name'] ?? data['name'] ?? data['business_name'] ?? '';
@@ -234,7 +241,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
         _rating = (data['rating'] is num)
             ? (data['rating'] as num).toDouble()
-            : 4.8;
+            : 0.0;
         _reviewCount = (data['reviewCount'] ?? 0) as int;
 
         _languages = List<String>.from(data['languages'] ?? []);
@@ -526,79 +533,16 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             : <String>[];
 
         // Load posts for first tab
-        try {
-          QuerySnapshot<Map<String, dynamic>> postsSnapshot;
-          try {
-            postsSnapshot = await _firestore
-                .collection('posts')
-                .where('userId', isEqualTo: widget.profileUserId)
-                .orderBy('timestamp', descending: true)
-                .limit(9)
-                .get();
-          } catch (_) {
-            // Try with createdAt if timestamp doesn't work
-            try {
-              postsSnapshot = await _firestore
-                  .collection('posts')
-                  .where('userId', isEqualTo: widget.profileUserId)
-                  .orderBy('createdAt', descending: true)
-                  .limit(9)
-                  .get();
-            } catch (_) {
-              // If both fail, get without orderBy
-              postsSnapshot = await _firestore
-                  .collection('posts')
-                  .where('userId', isEqualTo: widget.profileUserId)
-                  .limit(9)
-                  .get();
-            }
-          }
-
-          _recentPosts = postsSnapshot.docs.map((doc) {
-            final d = doc.data() as Map<String, dynamic>;
-            return <String, dynamic>{
-              'id': doc.id,
-              'imageUrl': d['imageUrl'] ?? '',
-              'caption': d['caption'] ?? '',
-              'timestamp': d['timestamp'] ?? d['createdAt'],
-            };
-          }).toList();
-        } catch (e) {
-          debugPrint('Error loading posts: $e');
-          _recentPosts = [];
-        }
+        _recentPosts = await ProfilePostsQueries.fetchGuruProfilePostsPreview(
+          firestore: _firestore,
+          profileUserId: widget.profileUserId,
+        );
 
         // Load reviews for first tab
-        try {
-          final QuerySnapshot<Map<String, dynamic>> reviewsSnapshot =
-          await _firestore
-              .collection('reviews')
-              .where('guruId', isEqualTo: widget.profileUserId)
-              .orderBy('createdAt', descending: true)
-              .orderBy(FieldPath.documentId, descending: true)
-              .limit(2)
-              .get();
-
-          if (reviewsSnapshot.docs.isNotEmpty) {
-            _reviews = reviewsSnapshot.docs.map((doc) {
-              final d = doc.data();
-              return <String, dynamic>{
-                'id': doc.id,
-                'name': d['userName'] ?? d['name'] ?? 'User',
-                'rating': d['rating'] ?? 5,
-                'text': d['text'] ?? '',
-                'createdAt': d['createdAt'],
-                'profilePhoto': d['profilePhoto'],
-              };
-            }).toList();
-          } else {
-            _reviews = [];
-          }
-        } catch (e) {
-          debugPrint('Error loading reviews: $e');
-          _reviews = [];
-        }
-
+        _reviews = await ProfileReviewsQueries.fetchGuruProfileReviewsPreview(
+          firestore: _firestore,
+          profileUserId: widget.profileUserId,
+        );
 
         // Load programs/services (from classes or popularProducts)
         try {
@@ -706,8 +650,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _profilePhotoFile = File(picked.path));
-    await _uploadAndSavePhoto(_profilePhotoFile!, isCover: false);
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      picked: picked,
+      outputNamePrefix: 'profile',
+    );
+    if (edited == null) return;
+    setState(() => _profilePhotoLocal = edited);
+    await _uploadAndSavePhoto(edited, isCover: false);
   }
 
   Future<void> _pickCoverImage() async {
@@ -715,35 +665,57 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     final XFile? picked =
     await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
-    setState(() => _coverPhotoFile = File(picked.path));
-    await _uploadAndSavePhoto(_coverPhotoFile!, isCover: true);
+    final edited = await editProfileImageWithInstagramStyle(
+      context,
+      picked: picked,
+      outputNamePrefix: 'cover',
+    );
+    if (edited == null) return;
+    setState(() => _coverPhotoLocal = edited);
+    await _uploadAndSavePhoto(edited, isCover: true);
   }
 
-  Future<void> _uploadAndSavePhoto(File file, {required bool isCover}) async {
+  void _previewCoverImage() {
+    openProfileStoredImagePreview(
+      context: context,
+      localPath: _coverPhotoLocal?.path,
+      localBytes: _coverPhotoLocal?.previewBytes,
+      remoteUrl: _coverPhotoUrl,
+      heroTag: 'guru-cover-${widget.profileUserId}',
+    );
+  }
+
+  void _previewProfileImage() {
+    openProfileStoredImagePreview(
+      context: context,
+      localPath: _profilePhotoLocal?.path,
+      localBytes: _profilePhotoLocal?.previewBytes,
+      remoteUrl: _profilePhotoUrl,
+      heroTag: 'guru-avatar-${widget.profileUserId}',
+    );
+  }
+
+  Future<void> _uploadAndSavePhoto(
+    ProfileLocalPhoto local, {
+    required bool isCover,
+  }) async {
     if (_currentUser == null) return;
     try {
-      final fileName =
-          '${isCover ? 'cover' : 'profile'}_${_currentUser!.uid}_${DateTime.now().millisecondsSinceEpoch}';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('users')
-          .child(_currentUser!.uid)
-          .child(fileName);
-      final snap = await ref.putFile(file);
-      final url = await snap.ref.getDownloadURL();
-      final key = isCover ? 'coverPhoto' : 'profilePhoto';
-
-      await _firestore
-          .collection('users')
-          .doc(_currentUser!.uid)
-          .update({key: url});
+      final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
+        firestore: _firestore,
+        userId: _currentUser!.uid,
+        media: await local.toXFile(),
+        isCover: isCover,
+      );
 
       if (!mounted) return;
       setState(() {
         if (isCover) {
           _coverPhotoUrl = url;
+          _coverPhotoLocal = null;
         } else {
           _profilePhotoUrl = url;
+          _profilePhotoLocal = null;
         }
       });
       Fluttertoast.showToast(msg: 'Photo updated');
@@ -761,76 +733,26 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
     final String currentUserId = _currentUser!.uid;
     final String profileUserId = widget.profileUserId;
-
-    final followersDocRef = _firestore
-        .collection('users')
-        .doc(profileUserId)
-        .collection('followers')
-        .doc(currentUserId);
-
-    final followingDocRef = _firestore
-        .collection('users')
-        .doc(currentUserId)
-        .collection('following')
-        .doc(profileUserId);
-
     final bool wasFollowing = _isFollowing;
 
-    setState(() {
-      _isFollowing = !wasFollowing;
-      _followersCount += wasFollowing ? -1 : 1;
-      if (_followersCount < 0) _followersCount = 0;
-    });
-    _followAnimController.forward(from: 0);
-
-    try {
-      await _firestore.runTransaction((transaction) async {
-        final profileUserRef =
-        _firestore.collection('users').doc(profileUserId);
-        final currentUserRef =
-        _firestore.collection('users').doc(currentUserId);
-
-        if (!wasFollowing) {
-          transaction.set(followersDocRef, {
-            'followerId': currentUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.set(followingDocRef, {
-            'followingId': profileUserId,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(1),
-          });
-        } else {
-          transaction.delete(followersDocRef);
-          transaction.delete(followingDocRef);
-
-          transaction.update(profileUserRef, {
-            'followersCount': FieldValue.increment(-1),
-          });
-
-          transaction.update(currentUserRef, {
-            'followingCount': FieldValue.increment(-1),
-          });
-        }
-      });
-    } catch (e) {
-      debugPrint('follow toggle error: $e');
-      setState(() {
+    await ProfileFollowToggle.runOptimisticToggle(
+      followService: _followService,
+      currentUserId: currentUserId,
+      profileUserId: profileUserId,
+      wasFollowing: wasFollowing,
+      applyOptimisticUi: () => setState(() {
+        _isFollowing = !wasFollowing;
+        _followersCount += wasFollowing ? -1 : 1;
+        if (_followersCount < 0) _followersCount = 0;
+      }),
+      rollbackUi: () => setState(() {
         _isFollowing = wasFollowing;
         _followersCount += wasFollowing ? 1 : -1;
         if (_followersCount < 0) _followersCount = 0;
-      });
-      Fluttertoast.showToast(
-          msg: 'Something went wrong. Please try again later.');
-    }
+      }),
+      afterOptimisticUi: () => _followAnimController.forward(from: 0),
+      errorToast: 'Something went wrong. Please try again later.',
+    );
   }
 
   Future<void> _openMessage() async {
@@ -884,8 +806,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   .ref()
                   .child('posts')
                   .child(fileName);
-              final snap = await ref.putFile(File(image.path));
-              final url = await snap.ref.getDownloadURL();
+              final url = await uploadReferenceXFileAndGetUrl(
+                ref,
+                image,
+                metadata: SettableMetadata(contentType: 'image/jpeg'),
+              );
               await FirebaseFirestore.instance.collection('posts').add({
                 'imageUrl': url,
                 'caption': caption,
@@ -915,60 +840,27 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // ===================================================================
   Future<void> _handleManageSlots() async {
     if (!_isOwnProfile || _currentUser == null) return;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Manage Booking Slots',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Current Settings:',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              Text('Base Price: ₹${_bookingSettings['basePrice'] ?? 'Not set'}'),
-              Text('Duration: ${_bookingSettings['duration'] ?? 60} min'),
-              Text('Online: ${_bookingSettings['online'] == true ? 'Yes' : 'No'}'),
-              Text('Offline: ${_bookingSettings['offline'] == true ? 'Yes' : 'No'}'),
-              const SizedBox(height: 16),
-              const Text(
-                'Full booking management feature coming soon! You will be able to set your availability, pricing, and manage all your slots here.',
-                style: TextStyle(fontSize: 12),
-              ),
-            ],
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: ProfileLayout.bg,
+          appBar: AppBar(
+            title: const Text('Booking Management'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruBookingSection(
+              guruid: _currentUser!.uid,
+              isOwnProfile: true,
+              bookingSettings: _bookingSettings,
+              upcomingSessions: _upcomingSessions,
+              pastSessions: _pastSessions,
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruBookingSection(
-                    guruid: _currentUser!.uid,
-                    isOwnProfile: true,
-                    bookingSettings: _bookingSettings,
-                    upcomingSessions: _upcomingSessions,
-                    pastSessions: _pastSessions,
-                  ),
-                ),
-              );
-            },
-            child: const Text('Edit Settings'),
-          ),
-        ],
       ),
     );
   }
@@ -981,189 +873,79 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       return;
     }
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Book a Session',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Guru: $_fullName'),
-            const SizedBox(height: 8),
-            Text(
-                'Starting from: ₹${_bookingSettings['basePrice'] ?? 'Contact for pricing'}'),
-            Text('Duration: ${_bookingSettings['duration'] ?? 60} min'),
-            const SizedBox(height: 16),
-            const Text(
-              'Booking feature coming soon! You will be able to select a time slot and book a session.',
-              style: TextStyle(fontSize: 12),
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: ProfileLayout.bg,
+          appBar: AppBar(
+            title: Text('Book with $_fullName'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruBookingSection(
+              guruid: widget.profileUserId,
+              isOwnProfile: false,
+              bookingSettings: _bookingSettings,
+              upcomingSessions: _upcomingSessions,
+              pastSessions: _pastSessions,
             ),
-          ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruBookingSection(
-                    guruid: widget.profileUserId,
-                    isOwnProfile: false,
-                    bookingSettings: _bookingSettings,
-                    upcomingSessions: _upcomingSessions,
-                    pastSessions: _pastSessions,
-                  ),
-                ),
-              );
-            },
-            child: const Text('Continue'),
-          ),
-        ],
       ),
     );
   }
 
   Future<void> _handleManageClasses() async {
     if (!_isOwnProfile || _currentUser == null) return;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Manage Classes & Batches',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Active Classes: ${_classes.length}'),
-            const SizedBox(height: 16),
-            const Text(
-              'Class management feature coming soon! You will be able to create, edit, and manage your batches here.',
-              style: TextStyle(fontSize: 12),
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: ProfileLayout.bg,
+          appBar: AppBar(
+            title: const Text('Classes & Batches'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruClassesSection(
+              guruid: _currentUser!.uid,
+              isOwnProfile: true,
+              classes: _classes,
+              specialties: _specialties,
             ),
-          ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruClassesSection(
-                    guruid: _currentUser!.uid,
-                    isOwnProfile: true,
-                    classes: _classes,
-                    specialties: _specialties,
-                  ),
-                ),
-              );
-            },
-            child: const Text('Create New Class'),
-          ),
-        ],
       ),
     );
   }
 
   Future<void> _handleViewPayoutDetails() async {
     if (!_isOwnProfile || _currentUser == null) return;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Payout Details',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildPayoutRow('Total Earnings', '₹${_earningsSummary['total'] ?? 0}'),
-              _buildPayoutRow('This Month', '₹${_earningsSummary['thisMonth'] ?? 0}'),
-              _buildPayoutRow('Pending', '₹${_earningsSummary['pending'] ?? 0}'),
-              const Divider(),
-              const SizedBox(height: 8),
-              const Text(
-                'Recent Transactions:',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              if (_recentEarnings.isEmpty)
-                const Text(
-                  'No transactions yet.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                )
-              else
-                ..._recentEarnings.take(5).map((e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          e['label']?.toString() ?? 'Session',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                      Text(
-                        '₹${e['amount'] ?? 0}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                )),
-              const SizedBox(height: 16),
-              const Text(
-                'Withdrawal options and bank details management coming soon!',
-                style: TextStyle(fontSize: 11, color: Colors.grey),
-              ),
-            ],
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          backgroundColor: ProfileLayout.bg,
+          appBar: AppBar(
+            title: const Text('Earnings Overview'),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            elevation: 0,
+          ),
+          body: SingleChildScrollView(
+            child: GuruEarningsSection(
+              guruid: _currentUser!.uid,
+              isOwnProfile: true,
+              earningsSummary: _earningsSummary,
+              recentEarnings: _recentEarnings,
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => GuruEarningsSection(
-                    guruid: _currentUser!.uid,
-                    isOwnProfile: true,
-                    earningsSummary: _earningsSummary,
-                    recentEarnings: _recentEarnings,
-                  ),
-                ),
-              );
-            },
-            child: const Text('View All'),
-          ),
-        ],
       ),
     );
   }
@@ -1241,201 +1023,78 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   //  UI HELPERS (HEADER)
   // ===================================================================
   Widget _coverWidget(BuildContext context) {
-    final ImageProvider cover = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : (_coverPhotoUrl != null
-        ? NetworkImage(_coverPhotoUrl!)
-        : const AssetImage('assets/images/bio.png')) as ImageProvider;
+    final cover = profileHeroImageProvider(
+      local: _coverPhotoLocal,
+      remoteUrl: _coverPhotoUrl,
+      defaultAsset: const AssetImage('assets/images/bio.png'),
+    );
 
-    return GestureDetector(
-      onTap: _isOwnProfile ? _pickCoverImage : null,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              image: DecorationImage(image: cover, fit: BoxFit.cover),
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.black.withOpacity(0.25), Colors.transparent],
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-              ),
-            ),
-          ),
-        ],
-      ),
+    return ProfileCoverHero(
+      cover: cover,
+      heroTag: 'guru-cover-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickCoverImage : _previewCoverImage,
+      onLongPress: _previewCoverImage,
     );
   }
 
   Widget _avatarWidget() {
-    final ImageProvider avatar = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : (_profilePhotoUrl != null
-        ? NetworkImage(_profilePhotoUrl!)
-        : const AssetImage('assets/images/Profile.png')) as ImageProvider;
+    final avatar = profileHeroImageProvider(
+      local: _profilePhotoLocal,
+      remoteUrl: _profilePhotoUrl,
+      defaultAsset: const AssetImage('assets/images/Profile.png'),
+    );
 
-    return Hero(
-      tag: 'guru-avatar-${widget.profileUserId}',
-      child: GestureDetector(
-        onTap: _isOwnProfile ? _pickProfileImage : null,
-        child: Container(
-          width: _avatarSize + 6,
-          height: _avatarSize + 6,
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              )
-            ],
-          ),
-          child: CircleAvatar(
-            radius: _avatarSize / 2,
-            backgroundImage: avatar,
-          ),
-        ),
-      ),
+    return ProfileAvatarHeroShell(
+      avatar: avatar,
+      heroTag: 'guru-avatar-${widget.profileUserId}',
+      onTap: _isOwnProfile ? _pickProfileImage : _previewProfileImage,
+      onLongPress: _previewProfileImage,
     );
   }
 
   Widget _buildStatsCard() {
-    Widget tile(String count, String label) {
-      return Expanded(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              count,
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
+    return ProfileThreeColumnStatsCard(
+      followers: _followersCount,
+      following: _followingCount,
+      posts: _postsCount,
+      onTapFollowers: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.followers,
             ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                color: Colors.black87,
-              ),
+          ),
+        );
+      },
+      onTapFollowing: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FollowListPage(
+              userId: widget.profileUserId,
+              kind: FollowListKind.following,
             ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          )
-        ],
-      ),
-      child: Row(
-        children: [
-          tile(_followersCount.toString(), 'Followers'),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_followingCount.toString(), 'Following'),
-          Container(width: 1, height: 36, color: Colors.grey[200]),
-          tile(_postsCount.toString(), 'Posts'),
-        ],
-      ),
+          ),
+        );
+      },
+      onTapPosts: () {
+        final postsTabIndex = _isOwnProfile ? 0 : 1;
+        _shellKey.currentState?.jumpToTab(postsTabIndex);
+      },
     );
   }
 
   Widget _buildActionButtons() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
-      child: _isOwnProfile
-          ? SizedBox(
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: _handleEditProfile,
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30),
-            ),
-            side: const BorderSide(color: _lavender),
-          ),
-          child: const Text(
-            'Edit Profile',
-            style: TextStyle(color: Colors.black87),
-          ),
-        ),
-      )
-          : Row(
-        children: [
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, anim) =>
-                  ScaleTransition(scale: anim, child: child),
-              child: ElevatedButton.icon(
-                key: ValueKey(_isFollowing),
-                onPressed: _toggleFollow,
-                icon: Icon(
-                  _isFollowing ? Icons.check : Icons.person_add,
-                  color: _isFollowing ? Colors.black : Colors.white,
-                ),
-                label: Text(
-                  _isFollowing ? 'Following' : 'Follow',
-                  style: TextStyle(
-                    color: _isFollowing ? Colors.black : Colors.white,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                  _isFollowing ? Colors.white : _lavender,
-                  side: _isFollowing
-                      ? const BorderSide(color: _deepLavender)
-                      : null,
-                  elevation: 4,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: _openMessage,
-              icon: const Icon(Icons.message_outlined,
-                  color: Colors.black87),
-              label: const Text(
-                'Message',
-                style: TextStyle(color: Colors.black87),
-              ),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                side: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return GuruActionRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onEditProfile: _handleEditProfile,
+      lavender: ProfileLayout.lavender,
+      deepLavender: ProfileLayout.deepLavender,
     );
   }
 
@@ -1451,7 +1110,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               (b) => Chip(
             label: Text(
               b,
-              style: GoogleFonts.poppins(color: Colors.black87),
+              style: GoogleFonts.poppins(
+                color: ProfileLayout.textPrimary,
+                fontSize: 12,
+              ),
+            ),
+            backgroundColor: ProfileLayout.chipBg,
+            side: BorderSide(
+              color: ProfileLayout.deepLavender.withValues(alpha: 0.15),
             ),
           ),
         )
@@ -1461,39 +1127,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildBioCard() {
-    final displayBio = _bio.isNotEmpty
-        ? _bio
-        : (_isOwnProfile
-        ? 'Tell aspirants how you train, your style and experience.'
-        : '');
-
-    if (displayBio.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        padding: const EdgeInsets.all(14),
-        child: Text(
-          displayBio,
-          style: GoogleFonts.poppins(
-            fontSize: 14,
-            height: 1.4,
-            color: Colors.black87,
-          ),
-        ),
-      ),
+    return GuruBioCard(
+      bio: _bio,
+      isOwnProfile: _isOwnProfile,
     );
   }
 
@@ -1501,184 +1137,19 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(height: _avatarOverlap + 18),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Transform.translate(
-                offset: const Offset(0, -_avatarOverlap),
-                child: _avatarWidget(),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _fullName.isNotEmpty ? _fullName : (_username.isNotEmpty ? '@$_username' : 'Guru'),
-                              style: GoogleFonts.poppins(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          StreamBuilder<DocumentSnapshot>(
-                            stream: _firestore
-                                .collection('users')
-                                .doc(widget.profileUserId)
-                                .snapshots(),
-                            builder: (context, snapshot) {
-                              if (snapshot.hasData) {
-                                final data = snapshot.data?.data()
-                                as Map<String, dynamic>?;
-                                bool isOnline = false;
-
-                                if (data?['isOnline'] == true) {
-                                  isOnline = true;
-                                } else if (data?['lastSeen'] != null) {
-                                  final lastSeen =
-                                  (data!['lastSeen'] as Timestamp?)
-                                      ?.toDate();
-                                  if (lastSeen != null) {
-                                    isOnline = DateTime.now()
-                                        .difference(lastSeen)
-                                        .inMinutes <
-                                        2;
-                                  }
-                                }
-
-                                return Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: BoxDecoration(
-                                    color:
-                                    isOnline ? Colors.green : Colors.grey,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2,
-                                    ),
-                                  ),
-                                );
-                              }
-                              return const SizedBox.shrink();
-                            },
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _username.isNotEmpty ? '@$_username' : '',
-                        style: GoogleFonts.poppins(
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      if (_primaryCategory.isNotEmpty)
-                        Text(
-                          _primaryCategory,
-                          style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            color: Colors.black87,
-                          ),
-                        ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          if (_city.isNotEmpty) ...[
-                            const Icon(Icons.location_on_outlined,
-                                size: 14, color: Colors.black87),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                _city,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.black87,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                          if (_experienceYears != null) ...[
-                            const SizedBox(width: 12),
-                            const Icon(Icons.school_outlined,
-                                size: 14, color: Colors.black87),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                '${_experienceYears}+ yrs exp',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.black87,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      if (_languages.isNotEmpty)
-                        Text(
-                          'Languages: ${_languages.join(', ')}',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.black87,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      if (_trainingStyle.isNotEmpty)
-                        Text(
-                          'Training style: $_trainingStyle',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.black87,
-                          ),
-                        ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Icon(Icons.star,
-                              color: Colors.amber[700], size: 18),
-                          const SizedBox(width: 4),
-                          Text(
-                            _rating.toStringAsFixed(1),
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '($_reviewCount reviews)',
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+        SizedBox(height: ProfileLayout.identityColumnTopInset),
+        GuruIdentityBlock(
+          avatar: _avatarWidget(),
+          profileUserId: widget.profileUserId,
+          fullName: _fullName,
+          username: _username,
+          primaryCategory: _primaryCategory,
+          city: _city,
+          experienceYears: _experienceYears,
+          languages: _languages,
+          trainingStyle: _trainingStyle,
+          rating: _rating,
+          reviewCount: _reviewCount,
         ),
         const SizedBox(height: 6),
         _buildBadgesRow(),
@@ -1687,7 +1158,164 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         const SizedBox(height: 12),
         _buildActionButtons(),
         _buildBioCard(),
+        const SizedBox(height: 4),
       ],
+    );
+  }
+
+  List<Widget> _buildAppBarActions() {
+    if (!_isOwnProfile) return [];
+    return [
+      IconButton(
+        icon: const Icon(Icons.add_box_outlined, color: Colors.white),
+        onPressed: _openGalleryForPost,
+      ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        onSelected: (value) async {
+          if (value == 'Edit Profile') {
+            await _handleEditProfile();
+          } else if (value == 'Privacy') {
+            if (_currentUser == null) return;
+            final updated = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (ctx) => PrivacySettingsPage(
+                  initialPrivacy: _isPrivate,
+                ),
+              ),
+            );
+            if (updated != null) {
+              try {
+                await _firestore
+                    .collection('users')
+                    .doc(_currentUser!.uid)
+                    .update({'isPrivate': updated});
+                setState(() => _isPrivate = updated);
+              } catch (e) {
+                Fluttertoast.showToast(msg: 'Failed to update privacy');
+              }
+            }
+          } else if (value == 'Settings') {
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (ctx) => SettingsPage()),
+            );
+            if (result == 'logout') await _signOut();
+          } else if (value == 'Logout') {
+            await _signOut();
+          }
+        },
+        itemBuilder: (context) => const [
+          PopupMenuItem(value: 'Settings', child: Text('Settings')),
+          PopupMenuItem(value: 'Privacy', child: Text('Privacy')),
+          PopupMenuItem(value: 'Edit Profile', child: Text('Edit Profile')),
+          PopupMenuItem(value: 'Logout', child: Text('Logout')),
+        ],
+      ),
+    ];
+  }
+
+  Widget _buildProfileTabContent() {
+    return ColoredBox(
+      color: ProfileLayout.bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 16),
+          if (_isOwnProfile) ...[
+            _buildCTAButtons(),
+            const SizedBox(height: 12),
+            _buildBusinessFeaturesShortcut(),
+            const SizedBox(height: 24),
+          ],
+          _buildPopularProductsSection(),
+          const SizedBox(height: 24),
+          _buildLastWorkoutsSection(),
+          const SizedBox(height: 24),
+          if (_isOwnProfile) _buildRecentPostsSection(),
+          if (_isOwnProfile) const SizedBox(height: 24),
+          _buildSpecializationsSection(),
+          const SizedBox(height: 24),
+          _buildReviewsSection(),
+          const SizedBox(height: 24),
+          _buildSocialLinksSection(),
+          const SizedBox(height: 24),
+          _buildTestimonialsSection(),
+          _buildCertificationsDisplaySection(),
+          _buildTrainingProgramsShowcase(),
+          _buildSuccessStoriesSection(),
+          _buildVideoTutorialsPreview(),
+          const SizedBox(height: 24),
+          _buildFooter(),
+          const SizedBox(height: 40),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBusinessTabContent() {
+    return ColoredBox(
+      color: ProfileLayout.bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 8),
+          GuruBookingSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            bookingSettings: _bookingSettings,
+            upcomingSessions: _upcomingSessions,
+            pastSessions: _pastSessions,
+            onManageSlots: _isOwnProfile ? _handleManageSlots : null,
+            onBookNow: !_isOwnProfile ? _handleBookNow : null,
+          ),
+          GuruClassesSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            classes: _classes,
+            specialties: _specialties,
+            onManage: _isOwnProfile ? _handleManageClasses : null,
+          ),
+          GuruEarningsSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            earningsSummary: _earningsSummary,
+            recentEarnings: _recentEarnings,
+            onViewPayoutDetails:
+                _isOwnProfile ? _handleViewPayoutDetails : null,
+          ),
+          GuruStudentsSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            students: _students,
+          ),
+          GuruAnalyticsSection(
+            guruid: widget.profileUserId,
+            isOwnProfile: _isOwnProfile,
+            analytics: _analytics,
+          ),
+          const SizedBox(height: 80),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuruPostsTab() {
+    return AspirantPostsTab(
+      profileUserId: widget.profileUserId,
+      isPrivate: _isPrivate,
+      isFollowing: _isFollowing,
+      isOwnProfile: _isOwnProfile,
+      imageResolver: profilePostImageUrlFromMap,
+      onTapPost: (postId) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PostDetailsPage(postId: postId),
+          ),
+        );
+      },
     );
   }
 
@@ -1696,199 +1324,62 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // ===================================================================
   @override
   Widget build(BuildContext context) {
-    final baseTheme = Theme.of(context);
-    final textTheme = baseTheme.textTheme.apply(
-      bodyColor: Colors.black87,
-      displayColor: Colors.black87,
-    );
+    final tabs = _isOwnProfile
+        ? const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Business'),
+          ]
+        : const [
+            Tab(text: 'Profile'),
+            Tab(text: 'Posts'),
+          ];
 
-    return Theme(
-      data: baseTheme.copyWith(textTheme: textTheme),
-      child: Scaffold(
-        backgroundColor: _bg,
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : NestedScrollView(
-          headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
-            return [
-              SliverAppBar(
-                pinned: true,
-                expandedHeight: _coverHeight,
-                backgroundColor: _lavender,
-                elevation: 0,
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => Navigator.pop(context),
-                ),
-                actions: [
-                  if (_isOwnProfile) ...[
-                    IconButton(
-                      icon: const Icon(Icons.add_box_outlined),
-                      onPressed: _openGalleryForPost,
-                    ),
-                    PopupMenuButton<String>(
-                      onSelected: (value) async {
-                        if (value == 'Edit Profile') {
-                          await _handleEditProfile();
-                        } else if (value == 'Privacy') {
-                          if (_currentUser == null) return;
-                          final updated = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (ctx) => PrivacySettingsPage(
-                                initialPrivacy: _isPrivate,
-                              ),
-                            ),
-                          );
-                          if (updated != null) {
-                            try {
-                              await _firestore
-                                  .collection('users')
-                                  .doc(_currentUser!.uid)
-                                  .update({'isPrivate': updated});
-                              setState(() => _isPrivate = updated);
-                            } catch (e) {
-                              Fluttertoast.showToast(
-                                  msg: 'Failed to update privacy');
-                            }
-                          }
-                        } else if (value == 'Settings') {
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (ctx) => SettingsPage(),
-                            ),
-                          );
-                          if (result == 'logout') {
-                            await _signOut();
-                          }
-                        } else if (value == 'Logout') {
-                          await _signOut();
-                        }
-                      },
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: 'Settings',
-                          child: Text('Settings'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Privacy',
-                          child: Text('Privacy'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Edit Profile',
-                          child: Text('Edit Profile'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Logout',
-                          child: Text('Logout'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-                flexibleSpace: FlexibleSpaceBar(
-                  background: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _coverWidget(context),
-                    ],
-                  ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: _buildProfileHeaderSection(),
-              ),
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _SliverAppBarDelegate(
-                  TabBar(
-                    controller: _tabController,
-                    indicatorColor: _lavender,
-                    indicatorWeight: 3,
-                    labelColor: Colors.black87,
-                    unselectedLabelColor: Colors.black54,
-                    labelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    unselectedLabelStyle: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.normal,
-                    ),
-                    tabs: const [
-                      Tab(
-                        icon: Icon(Icons.grid_on_outlined, size: 24),
-                      ),
-                      Tab(
-                        icon: Icon(Icons.dashboard_outlined, size: 24),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ];
+    final tabViews = _isOwnProfile
+        ? [
+            _buildProfileTabContent(),
+            _buildBusinessTabContent(),
+          ]
+        : [
+            _buildProfileTabContent(),
+            _buildGuruPostsTab(),
+          ];
+
+    return Scaffold(
+      backgroundColor: ProfileLayout.bg,
+      body: DefaultTextStyle(
+        style: GoogleFonts.poppins(
+          color: ProfileLayout.textPrimary,
+          fontSize: 14,
+        ),
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) {
+            final vx = details.primaryVelocity ?? 0;
+            if (vx.abs() < 250) return;
+            if (vx < 0 && _tabController.index < _tabController.length - 1) {
+              _tabController.animateTo(_tabController.index + 1);
+            } else if (vx > 0 && _tabController.index > 0) {
+              _tabController.animateTo(_tabController.index - 1);
+            }
           },
-          body: TabBarView(
-            controller: _tabController,
-            children: [
-              // First Tab - Posts/Content (placeholder for future features)
-              _buildFirstTab(),
-              // Second Tab - Existing Guru Sections
-              _buildSecondTab(),
-            ],
+          child: GuruProfileShell(
+            key: _shellKey,
+            loading: _isLoading,
+            onBack: () => popOrGoHome(
+              context,
+              onBackToHome: widget.onBackToHome,
+            ),
+            cover: ProfileFlexibleSpaceCoverStack(
+              cover: _coverWidget(context),
+            ),
+            appBarActions: _buildAppBarActions(),
+            header: _buildProfileHeaderSection(),
+            tabController: _tabController,
+            tabs: tabs,
+            tabViews: tabViews,
           ),
         ),
       ),
-    );
-  }
-
-  // ===================================================================
-  //  TAB CONTENT BUILDERS
-  // ===================================================================
-  Widget _buildFirstTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 20),
-              // CTA Buttons
-              _buildCTAButtons(),
-              const SizedBox(height: 24),
-              // Popular Products Section (Figma Design)
-              _buildPopularProductsSection(),
-              const SizedBox(height: 24),
-              // Last Workouts Section (Figma Design)
-              _buildLastWorkoutsSection(),
-              const SizedBox(height: 24),
-              // Recent Posts (Figma Design - Full Cards)
-              _buildRecentPostsSection(),
-              const SizedBox(height: 24),
-              // Specializations (Figma Design - Red Background)
-              _buildSpecializationsSection(),
-              const SizedBox(height: 24),
-              // Reviews & Ratings (Figma Design - Grey Background)
-              _buildReviewsSection(),
-              const SizedBox(height: 24),
-              // Social Links (Figma Design - YouTube, Apple Music, Instagram)
-              _buildSocialLinksSection(),
-              const SizedBox(height: 24),
-              // New Professional Features for Gurus
-              _buildTestimonialsSection(),
-              _buildCertificationsDisplaySection(),
-              _buildTrainingProgramsShowcase(),
-              _buildSuccessStoriesSection(),
-              _buildVideoTutorialsPreview(),
-              const SizedBox(height: 24),
-              // Footer
-              _buildFooter(),
-              const SizedBox(height: 40),
-            ],
-          ),
-        ),
-      ],
     );
   }
 
@@ -1896,79 +1387,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   //  FIRST TAB SECTION BUILDERS
   // ===================================================================
   Widget _buildCTAButtons() {
-    if (_isOwnProfile) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _toggleFollow,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _lavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                elevation: 2,
-              ),
-              child: Text(
-                _isFollowing ? 'Following' : 'Follow',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: OutlinedButton(
-              onPressed: _openMessage,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                side: BorderSide(color: Colors.grey.shade300),
-              ),
-              child: Text(
-                'DM',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: ElevatedButton(
-              onPressed: _handleBookNow,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _deepLavender,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                elevation: 2,
-              ),
-              child: Text(
-                'Book',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return GuruCtaRow(
+      isOwnProfile: _isOwnProfile,
+      isFollowing: _isFollowing,
+      onToggleFollow: _toggleFollow,
+      onMessage: _openMessage,
+      onBook: _handleBookNow,
+      lavender: ProfileLayout.lavender,
+      deepLavender: ProfileLayout.deepLavender,
     );
   }
 
@@ -2005,7 +1431,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 IconButton(
                   icon: const Icon(Icons.edit_outlined, size: 20),
                   onPressed: _editBio,
-                  color: _lavender,
+                  color: ProfileLayout.lavender,
                 ),
             ],
           ),
@@ -2024,7 +1450,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               onPressed: _editBio,
               icon: const Icon(Icons.add_circle_outline, size: 18),
               label: const Text('Add bio'),
-              style: TextButton.styleFrom(foregroundColor: _lavender),
+              style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
             )
           else
             Text(
@@ -2123,7 +1549,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -2153,13 +1579,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Text(
-            'Specialties (with certification)',
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
+          child: const ProfileSectionTitle(
+            title: 'Specialties (with certification)',
+            fontSize: 18,
           ),
         ),
         const SizedBox(height: 12),
@@ -2171,15 +1593,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _editSpecializations,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add specializations'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
-                : Text(
-                    'No specializations yet',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.black54,
-                    ),
-                  ),
+                : const ProfileEmptyState(text: 'No specializations yet'),
           )
         else
           Container(
@@ -2268,7 +1684,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Save'),
           ),
         ],
@@ -2315,7 +1731,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 IconButton(
                   icon: const Icon(Icons.add_photo_alternate_outlined, size: 20),
                   onPressed: _addGalleryImage,
-                  color: _lavender,
+                  color: ProfileLayout.lavender,
                 ),
             ],
           ),
@@ -2329,7 +1745,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _addGalleryImage,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add gallery images'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
                 : Text(
                     'No gallery images',
@@ -2387,8 +1803,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           .child(_currentUser!.uid)
           .child('gallery')
           .child(fileName);
-      final snap = await ref.putFile(File(picked.path));
-      final url = await snap.ref.getDownloadURL();
+      final url = await uploadReferenceXFileAndGetUrl(
+        ref,
+        picked,
+        metadata: SettableMetadata(contentType: 'image/jpeg'),
+      );
 
       final updated = List<String>.from(_galleryImages)..add(url);
       await _firestore
@@ -2484,7 +1903,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _addProgram,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add products'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
                 : Text(
                     'No products available',
@@ -2629,26 +2048,16 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Text(
-            'Last workouts',
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
+          child: const ProfileSectionTitle(
+            title: 'Last workouts',
+            fontSize: 18,
           ),
         ),
         const SizedBox(height: 12),
         if (_lastWorkouts.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Text(
-              'No workouts yet',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: Colors.black54,
-              ),
-            ),
+            child: const ProfileEmptyState(text: 'No workouts yet'),
           )
         else
           Padding(
@@ -2813,7 +2222,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 Navigator.pop(ctx, true);
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Add'),
           ),
         ],
@@ -2844,289 +2253,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     }
   }
 
-  /// Resolves post image URL from AddPostPage format (images/media) or legacy (imageUrl).
-  static String? _getPostImageUrl(Map<String, dynamic> data) {
-    final imageUrl = data['imageUrl']?.toString();
-    if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
-    final images = data['images'];
-    if (images is List && images.isNotEmpty) return images.first?.toString();
-    final media = data['media'];
-    if (media is List && media.isNotEmpty) {
-      final first = media.first;
-      if (first is Map && first['url'] != null) return first['url']?.toString();
-    }
-    return null;
-  }
-
   Widget _buildRecentPostsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Recent Posts',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_box_outlined, size: 20),
-                  onPressed: _openGalleryForPost,
-                  color: _lavender,
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: _firestore
-              .collection('posts')
-              .where('userId', isEqualTo: widget.profileUserId)
-              .snapshots()
-              .handleError((error) {
-            debugPrint('Error in posts stream: $error');
-          }),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20.0, vertical: 20),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            if (snapshot.hasError) {
-              debugPrint('Posts stream error: ${snapshot.error}');
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Column(
-                  children: [
-                    Icon(Icons.error_outline, color: Colors.red[300], size: 48),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Error loading posts',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.red,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            final allDocs = snapshot.data?.docs ?? [];
-            final sortedDocs = List.from(allDocs)
-              ..sort((a, b) {
-                try {
-                  final aTime = a.data();
-                  final bTime = b.data();
-                  if (aTime is! Map<String, dynamic> || bTime is! Map<String, dynamic>) {
-                    return 0;
-                  }
-                  final aTimestamp = aTime['timestamp'] ?? aTime['createdAt'];
-                  final bTimestamp = bTime['timestamp'] ?? bTime['createdAt'];
-                  if (aTimestamp == null) return 1;
-                  if (bTimestamp == null) return -1;
-                  if (aTimestamp is Timestamp && bTimestamp is Timestamp) {
-                    return bTimestamp.compareTo(aTimestamp);
-                  }
-                  return 0;
-                } catch (e) {
-                  debugPrint('Error sorting posts: $e');
-                  return 0;
-                }
-              });
-            final docs = sortedDocs.take(9).toList();
-
-            if (docs.isEmpty) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: _isOwnProfile
-                    ? TextButton.icon(
-                        onPressed: _openGalleryForPost,
-                        icon: const Icon(Icons.add_circle_outline, size: 18),
-                        label: const Text('Create your first post'),
-                        style: TextButton.styleFrom(foregroundColor: _lavender),
-                      )
-                    : Column(
-                        children: [
-                          Icon(Icons.camera_alt_outlined,
-                              size: 64, color: Colors.grey[400]),
-                          const SizedBox(height: 12),
-                          Text(
-                            'No posts yet',
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ],
-                      ),
-              );
-            }
-
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Column(
-                children: docs.take(2).map((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  final imageUrl = _getPostImageUrl(data);
-                  final caption = data['caption']?.toString() ?? '';
-                  final timestamp = data['timestamp'] ?? data['createdAt'];
-                  
-                  // Extract tags from caption (hashtags)
-                  final tags = RegExp(r'#\w+').allMatches(caption).map((m) => m.group(0)!).toList();
-                  
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.04),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Profile Header
-                        Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 20,
-                                backgroundColor: _lavender.withOpacity(0.2),
-                                backgroundImage: _profilePhotoUrl != null
-                                    ? NetworkImage(_profilePhotoUrl!)
-                                    : null,
-                                child: _profilePhotoUrl == null
-                                    ? Text(
-                                        _username.isNotEmpty
-                                            ? _username[0].toUpperCase()
-                                            : 'U',
-                                        style: GoogleFonts.poppins(
-                                          color: _lavender,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      )
-                                    : null,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _username.isNotEmpty ? '@$_username' : '@user',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.black87,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${_formatPostTime(timestamp)} - ${_city.isNotEmpty ? _city : "Gym"}',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 12,
-                                        color: Colors.black54,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.more_vert, size: 20),
-                                onPressed: () {},
-                                color: Colors.black54,
-                              ),
-                            ],
-                          ),
-                        ),
-                        // Post Image
-                        if (imageUrl != null && imageUrl.isNotEmpty)
-                          Container(
-                            width: double.infinity,
-                            height: 300,
-                            color: Colors.grey[200],
-                            child: Image.network(
-                              imageUrl,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => const Center(
-                                child: Icon(Icons.image, color: Colors.grey),
-                              ),
-                            ),
-                          )
-                        else
-                          Container(
-                            width: double.infinity,
-                            height: 300,
-                            color: Colors.grey[200],
-                            child: const Center(
-                              child: Icon(Icons.image, color: Colors.grey),
-                            ),
-                          ),
-                        // Caption and Tags
-                        Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (caption.isNotEmpty)
-                                Text(
-                                  caption,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 14,
-                                    color: Colors.black87,
-                                    height: 1.4,
-                                  ),
-                                ),
-                              if (tags.isNotEmpty) ...[
-                                const SizedBox(height: 8),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: tags.map((tag) {
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 6),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey[200],
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: Text(
-                                        tag,
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 12,
-                                          color: Colors.black87,
-                                        ),
-                                      ),
-                                    );
-                                  }).toList(),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-            );
-          },
-        ),
-      ],
+    return GuruRecentPostsSection(
+      profileUserId: widget.profileUserId,
+      isOwnProfile: _isOwnProfile,
+      accentColor: ProfileLayout.lavender,
+      onCreatePost: _openGalleryForPost,
+      profilePhotoUrl: _profilePhotoUrl,
+      username: _username,
+      city: _city,
+      formatPostTime: _formatPostTime,
+      imageResolver: profilePostImageUrlFromMap,
     );
   }
 
@@ -3157,7 +2294,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'Write a Review',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -3228,20 +2365,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             if (docs.isEmpty) {
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Column(
-                  children: [
-                    Icon(Icons.rate_review_outlined,
-                        size: 64, color: Colors.grey[400]),
-                    const SizedBox(height: 12),
-                    Text(
-                      'No reviews yet',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
-                    ),
-                  ],
-                ),
+                child: const ProfileEmptyState(text: 'No reviews yet'),
               );
             }
 
@@ -3339,7 +2463,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 IconButton(
                   icon: const Icon(Icons.add_circle_outline, size: 20),
                   onPressed: _addAchievement,
-                  color: _lavender,
+                  color: ProfileLayout.lavender,
                 ),
             ],
           ),
@@ -3353,15 +2477,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     onPressed: _addAchievement,
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add achievements'),
-                    style: TextButton.styleFrom(foregroundColor: _lavender),
+                    style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
                   )
-                : Text(
-                    'No achievements yet',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.black54,
-                    ),
-                  ),
+                : const ProfileEmptyState(text: 'No achievements yet'),
           )
         else
           SizedBox(
@@ -3445,7 +2563,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 Navigator.pop(ctx, true);
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: _lavender),
+            style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
             child: const Text('Add'),
           ),
         ],
@@ -3475,20 +2593,14 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildSocialLinksSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+    return ProfileSectionCard(
+      title: 'Social Links',
+      titleFontSize: 18,
+      margin: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Social Links',
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 10),
           // YouTube Section
           if (_socialLinks.containsKey('youtube') ||
               _socialLinks.containsKey('YouTube'))
@@ -3625,7 +2737,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(color: Colors.grey, width: 2),
-            color: selected ? _lavender : Colors.transparent,
+            color: selected ? ProfileLayout.lavender : Colors.transparent,
           ),
           child: selected
               ? const Icon(Icons.check, size: 14, color: Colors.white)
@@ -3712,8 +2824,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           end: Alignment.bottomCenter,
           colors: [
             Colors.white,
-            _bg,
-            _lavender.withOpacity(0.1),
+            ProfileLayout.bg,
+            ProfileLayout.lavender.withOpacity(0.1),
           ],
         ),
       ),
@@ -3738,10 +2850,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.format_quote, color: _lavender, size: 24),
+                    child: Icon(Icons.format_quote, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -3761,7 +2873,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'View All',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -3773,27 +2885,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         if (_reviews.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.rate_review_outlined, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
-                    Text(
-                      'No testimonials yet',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            child: const ProfileEmptyState(
+              text: 'No testimonials yet',
+              card: true,
             ),
           )
         else
@@ -3826,11 +2920,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                         children: [
                           CircleAvatar(
                             radius: 20,
-                            backgroundColor: _lavender.withOpacity(0.2),
+                            backgroundColor: ProfileLayout.lavender.withOpacity(0.2),
                             child: Text(
                               name[0].toUpperCase(),
                               style: GoogleFonts.poppins(
-                                color: _lavender,
+                                color: ProfileLayout.lavender,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -3901,10 +2995,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.verified, color: _lavender, size: 24),
+                    child: Icon(Icons.verified, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -3919,7 +3013,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addCertification,
                 ),
             ],
@@ -3967,7 +3061,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _lavender.withOpacity(0.3)),
+                    border: Border.all(color: ProfileLayout.lavender.withOpacity(0.3)),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withOpacity(0.04),
@@ -3982,10 +3076,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: _lavender.withOpacity(0.15),
+                          color: ProfileLayout.lavender.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.verified_user, color: _lavender, size: 24),
+                        child: Icon(Icons.verified_user, color: ProfileLayout.lavender, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -4051,10 +3145,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _lavender.withOpacity(0.15),
+                      color: ProfileLayout.lavender.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.fitness_center, color: _lavender, size: 24),
+                    child: Icon(Icons.fitness_center, color: ProfileLayout.lavender, size: 24),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -4074,7 +3168,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'View All',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -4114,7 +3208,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                         icon: Icon(Icons.add, size: 18),
                         label: Text('Add Program'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _lavender,
+                          backgroundColor: ProfileLayout.lavender,
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -4143,25 +3237,25 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [_lavender.withOpacity(0.1), _deepLavender.withOpacity(0.05)],
+                        colors: [ProfileLayout.lavender.withOpacity(0.1), ProfileLayout.deepLavender.withOpacity(0.05)],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _lavender.withOpacity(0.3)),
+                      border: Border.all(color: ProfileLayout.lavender.withOpacity(0.3)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.play_circle_outline, color: _lavender, size: 24),
+                            Icon(Icons.play_circle_outline, color: ProfileLayout.lavender, size: 24),
                             const Spacer(),
                             if (program['price'] != null && (program['price'] as num) > 0)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: _lavender,
+                                  color: ProfileLayout.lavender,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
@@ -4215,7 +3309,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                           ElevatedButton(
                             onPressed: () => _showProgramDetails(program),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: _lavender,
+                              backgroundColor: ProfileLayout.lavender,
                               foregroundColor: Colors.white,
                             minimumSize: const Size(double.infinity, 36),
                             shape: RoundedRectangleBorder(
@@ -4289,7 +3383,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addSuccessStory,
                 ),
             ],
@@ -4453,7 +3547,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               ),
               if (_isOwnProfile)
                 IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: _lavender),
+                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
                   onPressed: _addVideoTutorial,
                 )
               else if (tutorials.isNotEmpty)
@@ -4463,7 +3557,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     'View All',
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      color: _lavender,
+                      color: ProfileLayout.lavender,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -4672,7 +3766,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Certification',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4687,10 +3781,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.verified_user, color: _lavender),
+                  prefixIcon: Icon(Icons.verified_user, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4703,10 +3797,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.business, color: _lavender),
+                  prefixIcon: Icon(Icons.business, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4719,10 +3813,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -4740,7 +3834,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4794,7 +3888,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Certification',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4809,10 +3903,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.verified_user, color: _lavender),
+                  prefixIcon: Icon(Icons.verified_user, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4825,10 +3919,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.business, color: _lavender),
+                  prefixIcon: Icon(Icons.business, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -4841,10 +3935,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -4862,7 +3956,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -4913,7 +4007,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Certification',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -4978,7 +4072,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Training Program',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -4993,10 +4087,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.fitness_center, color: _lavender),
+                  prefixIcon: Icon(Icons.fitness_center, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5009,10 +4103,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5025,10 +4119,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  prefixIcon: Icon(Icons.currency_rupee, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -5042,10 +4136,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.description, color: _lavender),
+                  prefixIcon: Icon(Icons.description, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -5063,7 +4157,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5119,7 +4213,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Training Program',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5134,10 +4228,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.fitness_center, color: _lavender),
+                  prefixIcon: Icon(Icons.fitness_center, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5150,10 +4244,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.calendar_today, color: _lavender),
+                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5166,10 +4260,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.currency_rupee, color: _lavender),
+                  prefixIcon: Icon(Icons.currency_rupee, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 keyboardType: TextInputType.number,
@@ -5183,10 +4277,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.description, color: _lavender),
+                  prefixIcon: Icon(Icons.description, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -5204,7 +4298,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5256,7 +4350,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Program',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -5320,7 +4414,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Success Story',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5335,10 +4429,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.person, color: _lavender),
+                  prefixIcon: Icon(Icons.person, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5351,10 +4445,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.emoji_events, color: _lavender),
+                  prefixIcon: Icon(Icons.emoji_events, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5367,10 +4461,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.format_quote, color: _lavender),
+                  prefixIcon: Icon(Icons.format_quote, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -5388,7 +4482,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5444,7 +4538,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Success Story',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5459,10 +4553,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.person, color: _lavender),
+                  prefixIcon: Icon(Icons.person, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5475,10 +4569,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.emoji_events, color: _lavender),
+                  prefixIcon: Icon(Icons.emoji_events, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5491,10 +4585,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.format_quote, color: _lavender),
+                  prefixIcon: Icon(Icons.format_quote, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
                 maxLines: 3,
@@ -5512,7 +4606,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5557,7 +4651,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Success Story',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -5616,7 +4710,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Add Video Tutorial',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5631,10 +4725,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.play_circle_outline, color: _lavender),
+                  prefixIcon: Icon(Icons.play_circle_outline, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5647,10 +4741,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5663,10 +4757,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.link, color: _lavender),
+                  prefixIcon: Icon(Icons.link, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5683,7 +4777,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5738,7 +4832,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Edit Video Tutorial',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5753,10 +4847,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.play_circle_outline, color: _lavender),
+                  prefixIcon: Icon(Icons.play_circle_outline, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5769,10 +4863,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.access_time, color: _lavender),
+                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5785,10 +4879,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.link, color: _lavender),
+                  prefixIcon: Icon(Icons.link, color: ProfileLayout.lavender),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: _lavender, width: 2),
+                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
                   ),
                 ),
               ),
@@ -5805,7 +4899,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5844,7 +4938,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Delete Video Tutorial',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: Text(
@@ -5958,7 +5052,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           'Write a Review',
           style: GoogleFonts.poppins(
             fontWeight: FontWeight.w600,
-            color: _lavender,
+            color: ProfileLayout.lavender,
           ),
         ),
         content: SingleChildScrollView(
@@ -5977,7 +5071,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.star, color: _lavender),
+                  prefixIcon: Icon(Icons.star, color: ProfileLayout.lavender),
                 ),
                 keyboardType: TextInputType.number,
               ),
@@ -5989,7 +5083,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  prefixIcon: Icon(Icons.rate_review, color: _lavender),
+                  prefixIcon: Icon(Icons.rate_review, color: ProfileLayout.lavender),
                 ),
                 maxLines: 4,
               ),
@@ -6006,7 +5100,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _lavender,
+              backgroundColor: ProfileLayout.lavender,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -6114,56 +5208,39 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     );
   }
 
-  Widget _buildSecondTab() {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildBusinessFeaturesShortcut() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _tabController.animateTo(1),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: ProfileLayout.lavender.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: ProfileLayout.lavender.withOpacity(0.25)),
+          ),
+          child: Row(
             children: [
-              const SizedBox(height: 8),
-              GuruBookingSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                bookingSettings: _bookingSettings,
-                upcomingSessions: _upcomingSessions,
-                pastSessions: _pastSessions,
-                onManageSlots:
-                _isOwnProfile ? _handleManageSlots : null,
-                onBookNow: !_isOwnProfile ? _handleBookNow : null,
+              Icon(Icons.dashboard_customize_outlined, color: ProfileLayout.deepLavender),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Open Business Tools: Booking, Classes, Earnings, Students, Analytics',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: ProfileLayout.deepLavender,
+                  ),
+                ),
               ),
-              GuruClassesSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                classes: _classes,
-                specialties: _specialties,
-                onManage:
-                _isOwnProfile ? _handleManageClasses : null,
-              ),
-              GuruEarningsSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                earningsSummary: _earningsSummary,
-                recentEarnings: _recentEarnings,
-                onViewPayoutDetails: _isOwnProfile
-                    ? _handleViewPayoutDetails
-                    : null,
-              ),
-              GuruStudentsSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                students: _students,
-              ),
-              GuruAnalyticsSection(
-                guruid: widget.profileUserId,
-                isOwnProfile: _isOwnProfile,
-                analytics: _analytics,
-              ),
-              const SizedBox(height: 80),
+              Icon(Icons.arrow_forward_ios_rounded, size: 16, color: ProfileLayout.deepLavender),
             ],
           ),
         ),
-      ],
+      ),
     );
   }
 }
@@ -6571,3 +5648,5 @@ class _AllVideosPage extends StatelessWidget {
     );
   }
 }
+
+

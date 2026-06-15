@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:halo/utils/shell_back.dart';
 
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
 const Color kBackgroundColor = Color(0xFFF4F1FB); // Light lavender-gray;
 
 class NotificationPage extends StatefulWidget {
-  const NotificationPage({Key? key}) : super(key: key);
+  final VoidCallback? onBackToHome;
+
+  const NotificationPage({Key? key, this.onBackToHome}) : super(key: key);
 
   @override
   State<NotificationPage> createState() => _NotificationPageState();
@@ -130,7 +133,10 @@ class _NotificationPageState extends State<NotificationPage> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => popOrGoHome(
+            context,
+            onBackToHome: widget.onBackToHome,
+          ),
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(

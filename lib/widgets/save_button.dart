@@ -5,6 +5,7 @@ import 'package:halo/services/save_service.dart';
 class SaveButton extends StatelessWidget {
   final String postId;
   final String? currentUserId;
+  final Map<String, dynamic>? savedPostsMap;
   final double iconSize;
   final Color? color;
 
@@ -12,6 +13,7 @@ class SaveButton extends StatelessWidget {
     Key? key,
     required this.postId,
     required this.currentUserId,
+    this.savedPostsMap,
     this.iconSize = 26,
     this.color,
   }) : super(key: key);
@@ -23,6 +25,19 @@ class SaveButton extends StatelessWidget {
         Icons.bookmark_border,
         size: iconSize,
         color: color ?? Colors.grey,
+      );
+    }
+
+    if (savedPostsMap != null) {
+      final saved = savedPostsMap![postId] == true;
+      return IconButton(
+        icon: Icon(
+          saved ? Icons.bookmark : Icons.bookmark_border,
+          size: iconSize,
+          color: color ?? Theme.of(context).iconTheme.color,
+        ),
+        onPressed: () => _onTap(context),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       );
     }
 

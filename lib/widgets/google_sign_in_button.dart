@@ -1,11 +1,15 @@
-import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-import '../home_page.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:halo/config/firebase_web_config.dart';
 
 class GoogleSignInButton extends StatefulWidget {
+  const GoogleSignInButton({super.key, this.onSignedIn});
+
+  /// Called after Firebase auth succeeds (e.g. reset startup routing cache).
+  final VoidCallback? onSignedIn;
+
   @override
   State<GoogleSignInButton> createState() => _GoogleSignInButtonState();
 }
@@ -16,10 +20,7 @@ class _GoogleSignInButtonState extends State<GoogleSignInButton> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // OLD-STABLE compatible constructor
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: ['email'],
-  );
+  final _googleSignIn = FirebaseWebConfig.createGoogleSignIn();
 
   Future<void> _signInWithGoogle() async {
     setState(() => _isSigningIn = true);
@@ -68,12 +69,14 @@ class _GoogleSignInButtonState extends State<GoogleSignInButton> {
         });
       }
 
-      // 6️⃣ Navigate
+      widget.onSignedIn?.call();
+      // AuthGate listens to authStateChanges and routes automatically.
+    } on FirebaseAuthException catch (e) {
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => HomePage()),
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_googleAuthMessage(e))),
       );
+      debugPrint('❌ Google Sign-In Error: $e');
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Google Sign-In failed')),
@@ -81,6 +84,21 @@ class _GoogleSignInButtonState extends State<GoogleSignInButton> {
       debugPrint('❌ Google Sign-In Error: $e');
     } finally {
       setState(() => _isSigningIn = false);
+    }
+  }
+
+  String _googleAuthMessage(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'account-exists-with-different-credential':
+        return 'An account already exists with this email.';
+      case 'invalid-credential':
+        return 'Google sign-in credentials are invalid. Try again.';
+      case 'operation-not-allowed':
+        return 'Google sign-in is not enabled for this app.';
+      case 'user-disabled':
+        return 'This account has been disabled.';
+      default:
+        return 'Google Sign-In failed';
     }
   }
 

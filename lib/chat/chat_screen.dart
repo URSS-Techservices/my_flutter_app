@@ -29,8 +29,18 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const int _kMessagePageSize = 40;
+
   final ChatService _chatService = ChatService();
   final TextEditingController _controller = TextEditingController();
+  final ScrollController _messagesScrollController = ScrollController();
+
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> _olderMessages = [];
+  final Set<String> _olderMessageIds = <String>{};
+  DocumentSnapshot<Map<String, dynamic>>? _oldestLoadedDoc;
+  bool _loadingOlder = false;
+  bool _hasMoreOlder = true;
+  String? _lastSeenTopMessageId;
 
   Timer? _presenceTimer;
   Timer? _typingClearTimer;
@@ -41,6 +51,43 @@ class _ChatScreenState extends State<ChatScreen> {
     // Mark messages as seen when entering the chat
     _chatService.markMessagesAsSeen(widget.chatId, widget.currentUserId);
     _startPresenceHeartbeat();
+    _messagesScrollController.addListener(_onMessagesScroll);
+  }
+
+  void _onMessagesScroll() {
+    if (!_hasMoreOlder || _loadingOlder || !_messagesScrollController.hasClients) {
+      return;
+    }
+    final position = _messagesScrollController.position;
+    // In reverse ListView, maxScrollExtent is older message end.
+    if (position.pixels >= position.maxScrollExtent - 220) {
+      _loadOlderMessages();
+    }
+  }
+
+  Future<void> _loadOlderMessages() async {
+    if (_loadingOlder || !_hasMoreOlder || _oldestLoadedDoc == null) return;
+    setState(() => _loadingOlder = true);
+    try {
+      final page = await _chatService.getMessagesPage(
+        widget.chatId,
+        startAfter: _oldestLoadedDoc,
+        limit: _kMessagePageSize,
+      );
+      final docs = page.docs;
+      if (docs.isEmpty) {
+        _hasMoreOlder = false;
+      } else {
+        for (final doc in docs) {
+          if (_olderMessageIds.add(doc.id)) {
+            _olderMessages.add(doc);
+          }
+        }
+        _oldestLoadedDoc = docs.last;
+      }
+    } finally {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
   }
 
   void _startPresenceHeartbeat() {
@@ -105,6 +152,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _presenceTimer?.cancel();
     _typingClearTimer?.cancel();
+    _messagesScrollController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -136,7 +184,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 const Divider(height: 1, thickness: 0.2),
                 Expanded(
                   child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _chatService.getMessages(widget.chatId),
+                    stream: _chatService.getMessages(
+                      widget.chatId,
+                      limit: _kMessagePageSize,
+                    ),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
                         return const Center(
@@ -144,13 +195,36 @@ class _ChatScreenState extends State<ChatScreen> {
                         );
                       }
 
-                      final messages = snapshot.data!.docs;
+                      final liveMessages = snapshot.data!.docs;
+                      if (_oldestLoadedDoc == null && liveMessages.isNotEmpty) {
+                        _oldestLoadedDoc = liveMessages.last;
+                      }
+
+                      final messageMap = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+                      for (final doc in liveMessages) {
+                        messageMap[doc.id] = doc;
+                      }
+                      for (final doc in _olderMessages) {
+                        messageMap.putIfAbsent(doc.id, () => doc);
+                      }
+
+                      final messages = messageMap.values.toList()
+                        ..sort((a, b) {
+                          final aTs = (a.data()['createdAt'] ?? a.data()['timestamp']) as Timestamp?;
+                          final bTs = (b.data()['createdAt'] ?? b.data()['timestamp']) as Timestamp?;
+                          final aMs = aTs?.millisecondsSinceEpoch ?? 0;
+                          final bMs = bTs?.millisecondsSinceEpoch ?? 0;
+                          return bMs.compareTo(aMs);
+                        });
 
                       // Mark as seen whenever new messages arrive
-                      _chatService.markMessagesAsSeen(
-                        widget.chatId,
-                        widget.currentUserId,
-                      );
+                      if (messages.isNotEmpty && _lastSeenTopMessageId != messages.first.id) {
+                        _lastSeenTopMessageId = messages.first.id;
+                        _chatService.markMessagesAsSeen(
+                          widget.chatId,
+                          widget.currentUserId,
+                        );
+                      }
 
                       if (messages.isEmpty) {
                         return Center(
@@ -164,13 +238,31 @@ class _ChatScreenState extends State<ChatScreen> {
                       }
 
                       return ListView.builder(
+                        controller: _messagesScrollController,
                         reverse: true, // newest at bottom
                         padding: const EdgeInsets.symmetric(
                           horizontal: 6,
                           vertical: 8,
                         ),
-                        itemCount: messages.length,
+                        itemCount: messages.length + (_hasMoreOlder ? 1 : 0),
                         itemBuilder: (context, index) {
+                          if (index == messages.length) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              child: Center(
+                                child: _loadingOlder
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Text(
+                                        'Pull up to load older messages',
+                                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                                      ),
+                              ),
+                            );
+                          }
                           final msgDoc = messages[index];
                           final msg = msgDoc.data();
                           final isMe =
@@ -592,53 +684,59 @@ class _InputBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: Colors.white, // 🔴 IMPORTANT: solid color
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    return Material(
+      color: Colors.white,
       child: SafeArea(
         top: false,
-        child: Row(
-          children: [
-            IconButton(
-              onPressed: () {},
-              icon: const Icon(Icons.camera_alt_outlined, color: Colors.black87),
-            ),
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF2F2F2),
-                  borderRadius: BorderRadius.circular(20),
-                ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            children: [
+              IconButton(
+                onPressed: () {},
+                icon: const Icon(Icons.camera_alt_outlined, color: Colors.black87),
+              ),
+              Expanded(
                 child: TextField(
                   controller: controller,
                   minLines: 1,
                   maxLines: 5,
                   onChanged: onChanged,
                   textCapitalization: TextCapitalization.sentences,
-
-                  // ✅ FIX VISIBILITY
                   style: const TextStyle(
                     color: Colors.black,
                     fontSize: 14,
                   ),
                   cursorColor: Colors.black,
-
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     isDense: true,
                     hintText: 'Message...',
-                    hintStyle: TextStyle(color: Colors.black54),
-                    border: InputBorder.none,
+                    hintStyle: const TextStyle(color: Colors.black54),
+                    filled: true,
+                    fillColor: const Color(0xFFF2F2F2),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
                   onSubmitted: (_) => onSend(),
                 ),
               ),
-            ),
-            IconButton(
-              onPressed: onSend,
-              icon: const Icon(Icons.send_rounded, color: kSecondaryColor),
-            ),
-          ],
+              IconButton(
+                onPressed: onSend,
+                icon: const Icon(Icons.send_rounded, color: kSecondaryColor),
+              ),
+            ],
+          ),
         ),
       ),
     );
