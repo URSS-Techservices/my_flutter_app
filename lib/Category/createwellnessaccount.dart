@@ -11,6 +11,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
+import 'package:halo/widgets/gps_location_suffix.dart';
 
 // ---------- HALO THEME COLORS ----------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -614,24 +615,24 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Location
         TextFormField(
           controller: _location,
-          readOnly: true,
           style: const TextStyle(color: Colors.white),
+          textCapitalization: TextCapitalization.words,
+          keyboardType: TextInputType.streetAddress,
           decoration: _inputDecoration(
             label: 'Location (City)',
+            hint: 'Type your city or tap GPS',
             icon: Icons.location_on,
-            suffixIcon: _isFetchingLocation
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                : const Icon(Icons.my_location_rounded,
-                    color: Colors.white70),
+            suffixIcon: gpsLocationSuffix(
+              isFetching: _isFetchingLocation,
+              onPressed: _detectCurrentCity,
+            ),
           ),
-          onTap: _detectCurrentCity,
+          validator: (value) {
+            if (value == null || value.trim().isEmpty) {
+              return 'Please enter your location';
+            }
+            return null;
+          },
         ),
         const SizedBox(height: 16),
 

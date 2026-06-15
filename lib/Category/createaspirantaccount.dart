@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
+import 'package:halo/widgets/gps_location_suffix.dart';
 
 // HALO THEME COLORS
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -632,25 +633,19 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           // Location
           TextFormField(
             controller: _locationController,
-            readOnly: true,
             style: const TextStyle(color: Colors.white),
+            textCapitalization: TextCapitalization.words,
+            keyboardType: TextInputType.streetAddress,
             decoration: _inputDecoration(
               label: 'City / Location',
+              hint: 'Type your city or tap GPS',
               prefixIcon:
               const Icon(Icons.location_on_outlined, color: Colors.white70),
-              suffixIcon: _isFetchingLocation
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox(
-                        height: 18,
-                        width: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : const Icon(Icons.my_location_rounded,
-                      color: Colors.white70),
+              suffixIcon: gpsLocationSuffix(
+                isFetching: _isFetchingLocation,
+                onPressed: _detectCurrentCity,
+              ),
             ),
-            onTap: _detectCurrentCity,
             validator: (v) {
               if (v == null || v.trim().isEmpty) {
                 return 'Please enter your location';
