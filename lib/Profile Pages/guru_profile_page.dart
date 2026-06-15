@@ -1,7 +1,6 @@
 // guru_profile_page.dart  (Guru Profile – advanced features)
 
 // -------------------- IMPORTS --------------------
-import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -37,6 +36,9 @@ import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
 import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
 import 'package:halo/screens/profile/core/profile_posts_queries.dart';
 import 'package:halo/screens/profile/core/profile_reviews_queries.dart';
+import 'package:halo/platform/profile_avatar_provider.dart';
+import 'package:halo/platform/profile_local_photo.dart';
+import 'package:halo/platform/storage_upload.dart';
 import 'package:halo/screens/profile/core/profile_media_upload.dart';
 import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
 import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
@@ -164,8 +166,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   bool _isLoading = true;
 
   final ImagePicker _picker = ImagePicker();
-  File? _profilePhotoFile;
-  File? _coverPhotoFile;
+  ProfileLocalPhoto? _profilePhotoLocal;
+  ProfileLocalPhoto? _coverPhotoLocal;
 
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
@@ -650,12 +652,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     if (picked == null) return;
     final edited = await editProfileImageWithInstagramStyle(
       context,
-      imagePath: picked.path,
+      picked: picked,
       outputNamePrefix: 'profile',
     );
     if (edited == null) return;
-    setState(() => _profilePhotoFile = edited);
-    await _uploadAndSavePhoto(_profilePhotoFile!, isCover: false);
+    setState(() => _profilePhotoLocal = edited);
+    await _uploadAndSavePhoto(edited, isCover: false);
   }
 
   Future<void> _pickCoverImage() async {
@@ -665,18 +667,19 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     if (picked == null) return;
     final edited = await editProfileImageWithInstagramStyle(
       context,
-      imagePath: picked.path,
+      picked: picked,
       outputNamePrefix: 'cover',
     );
     if (edited == null) return;
-    setState(() => _coverPhotoFile = edited);
-    await _uploadAndSavePhoto(_coverPhotoFile!, isCover: true);
+    setState(() => _coverPhotoLocal = edited);
+    await _uploadAndSavePhoto(edited, isCover: true);
   }
 
   void _previewCoverImage() {
     openProfileStoredImagePreview(
       context: context,
-      localFile: _coverPhotoFile,
+      localPath: _coverPhotoLocal?.path,
+      localBytes: _coverPhotoLocal?.previewBytes,
       remoteUrl: _coverPhotoUrl,
       heroTag: 'guru-cover-${widget.profileUserId}',
     );
@@ -685,19 +688,23 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   void _previewProfileImage() {
     openProfileStoredImagePreview(
       context: context,
-      localFile: _profilePhotoFile,
+      localPath: _profilePhotoLocal?.path,
+      localBytes: _profilePhotoLocal?.previewBytes,
       remoteUrl: _profilePhotoUrl,
       heroTag: 'guru-avatar-${widget.profileUserId}',
     );
   }
 
-  Future<void> _uploadAndSavePhoto(File file, {required bool isCover}) async {
+  Future<void> _uploadAndSavePhoto(
+    ProfileLocalPhoto local, {
+    required bool isCover,
+  }) async {
     if (_currentUser == null) return;
     try {
       final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
         firestore: _firestore,
         userId: _currentUser!.uid,
-        file: file,
+        media: await local.toXFile(),
         isCover: isCover,
       );
 
@@ -705,8 +712,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       setState(() {
         if (isCover) {
           _coverPhotoUrl = url;
+          _coverPhotoLocal = null;
         } else {
           _profilePhotoUrl = url;
+          _profilePhotoLocal = null;
         }
       });
       Fluttertoast.showToast(msg: 'Photo updated');
@@ -797,8 +806,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   .ref()
                   .child('posts')
                   .child(fileName);
-              final snap = await ref.putFile(File(image.path));
-              final url = await snap.ref.getDownloadURL();
+              final url = await uploadReferenceXFileAndGetUrl(
+                ref,
+                image,
+                metadata: SettableMetadata(contentType: 'image/jpeg'),
+              );
               await FirebaseFirestore.instance.collection('posts').add({
                 'imageUrl': url,
                 'caption': caption,
@@ -1011,11 +1023,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   //  UI HELPERS (HEADER)
   // ===================================================================
   Widget _coverWidget(BuildContext context) {
-    final ImageProvider cover = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : (_coverPhotoUrl != null
-        ? NetworkImage(_coverPhotoUrl!)
-        : const AssetImage('assets/images/bio.png')) as ImageProvider;
+    final cover = profileHeroImageProvider(
+      local: _coverPhotoLocal,
+      remoteUrl: _coverPhotoUrl,
+      defaultAsset: const AssetImage('assets/images/bio.png'),
+    );
 
     return ProfileCoverHero(
       cover: cover,
@@ -1026,11 +1038,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _avatarWidget() {
-    final ImageProvider avatar = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : (_profilePhotoUrl != null
-        ? NetworkImage(_profilePhotoUrl!)
-        : const AssetImage('assets/images/Profile.png')) as ImageProvider;
+    final avatar = profileHeroImageProvider(
+      local: _profilePhotoLocal,
+      remoteUrl: _profilePhotoUrl,
+      defaultAsset: const AssetImage('assets/images/Profile.png'),
+    );
 
     return ProfileAvatarHeroShell(
       avatar: avatar,
@@ -1791,8 +1803,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           .child(_currentUser!.uid)
           .child('gallery')
           .child(fileName);
-      final snap = await ref.putFile(File(picked.path));
-      final url = await snap.ref.getDownloadURL();
+      final url = await uploadReferenceXFileAndGetUrl(
+        ref,
+        picked,
+        metadata: SettableMetadata(contentType: 'image/jpeg'),
+      );
 
       final updated = List<String>.from(_galleryImages)..add(url);
       await _firestore

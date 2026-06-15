@@ -3,16 +3,16 @@ import 'dart:async';
 import 'package:halo/Bottom Pages/HomePage.dart';
 import 'package:halo/Category/categorypage.dart';
 import 'package:halo/forgotpasswordpage.dart';
-import 'package:firebase_app_check/firebase_app_check.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'firebase_options.dart';
 import 'package:halo/services/blocked_url_memory.dart';
+import 'package:halo/services/firebase_bootstrap.dart';
+import 'package:halo/services/login_lookup.dart';
 import 'package:halo/widgets/google_sign_in_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
@@ -58,39 +58,7 @@ class _AppRootState extends State<_AppRoot> {
   @override
   void initState() {
     super.initState();
-    _firebaseInit = _initFirebaseAndAppCheck();
-  }
-
-  Future<FirebaseApp> _initFirebaseAndAppCheck() async {
-    final app = await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-
-    // Enable persistent offline cache (100 MB). Posts, likes, comments all
-    // load from disk on next launch — no network round-trip needed.
-    FirebaseFirestore.instance.settings = const Settings(
-      persistenceEnabled: true,
-      cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
-    );
-    try {
-      // Always use debug provider in debug mode.
-      // On iOS, appAttest requires the app bundle to be registered in the
-      // Firebase Console under App Check → Apps. Until that is done, appAttest
-      // returns 400 "App not registered" and blocks all Firestore requests.
-      // Use debug on iOS for now; swap to appAttest once the bundle ID is
-      // registered at console.firebase.google.com → App Check.
-      await FirebaseAppCheck.instance.activate(
-        androidProvider:
-            kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
-        appleProvider: AppleProvider.debug, // TODO: switch to appAttest after registering in Firebase Console
-      );
-      AppLogger.info(LogCategory.general, 'AppCheck activated debug=$kDebugMode');
-    } catch (e) {
-      // AppCheck activation failing must not block the app — Firestore will
-      // still work if the project has enforcement disabled or set to monitoring mode.
-      AppLogger.warning(LogCategory.general, 'AppCheck activation failed (non-fatal): $e');
-    }
-    return app;
+    _firebaseInit = FirebaseBootstrap.initialize();
   }
 
   @override
@@ -610,35 +578,16 @@ Last updated: ${DateTime.now().year}''',
   String password = _passwordController.text.trim();
 
   try {
-    String email = '';
-
-    if (input.contains('@')) {
-      email = input;
-    } else {
-      QuerySnapshot querySnapshot = await _firestore
-          .collection('users')
-          .where('username', isEqualTo: input)
-          .get();
-
-      if (querySnapshot.docs.isEmpty) {
-        querySnapshot = await _firestore
-            .collection('users')
-            .where('mobile', isEqualTo: input)
-            .get();
-      }
-
-      if (querySnapshot.docs.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('User not found!')),
-        );
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      email = querySnapshot.docs.first['email'];
+    final email = await resolveLoginEmail(input);
+    if (email == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('User not found!')),
+      );
+      return;
     }
 
-    UserCredential userCredential = await _auth.signInWithEmailAndPassword(
+    final userCredential = await _auth.signInWithEmailAndPassword(
       email: email,
       password: password,
     );
@@ -669,6 +618,25 @@ Last updated: ${DateTime.now().year}''',
     // detect the login and rebuild with StartupRouter → HomePage
     // No manual Navigator calls needed!
 
+  } on FirebaseAuthException catch (e) {
+    if (!mounted) return;
+    String msg = 'Login failed';
+    if (e.code == 'user-not-found') msg = 'User not found';
+    if (e.code == 'wrong-password') msg = 'Incorrect password';
+    if (e.code == 'invalid-email') msg = 'Invalid email';
+    if (e.code == 'invalid-credential') msg = 'Incorrect email or password';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg)),
+    );
+  } on FirebaseException catch (e) {
+    if (!mounted) return;
+    final msg = e.code == 'permission-denied'
+        ? 'Could not look up account (database access denied). '
+            'On web, set RECAPTCHA_SITE_KEY if App Check is enforced.'
+        : 'Login failed: ${e.message ?? e.code}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg)),
+    );
   } catch (e) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Login Failed: ${e.toString()}')),
@@ -948,7 +916,7 @@ Last updated: ${DateTime.now().year}''',
 
                     Column(
                       children: [
-                        GoogleSignInButton(),
+                        GoogleSignInButton(onSignedIn: StartupRouter.resetCache),
                         const SizedBox(height: 8),
                         const SocialButton(text: "Login with Facebook"),
                         const SocialButton(text: "Login with Instagram"),

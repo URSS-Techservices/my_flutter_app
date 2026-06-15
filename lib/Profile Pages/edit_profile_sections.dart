@@ -7,8 +7,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fluttertoast/fluttertoast.dart';
-import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:halo/platform/storage_upload.dart';
 import 'package:halo/models/aspirant_profile_model.dart';
 import 'package:halo/screens/profile/configs/aspirant_profile_config.dart';
 import 'package:halo/screens/profile/profile_theme.dart';
@@ -692,8 +692,11 @@ class _EditProductsPageState extends State<EditProductsPage> {
             .child(userId)
             .child('products')
             .child(fileName);
-        await ref.putFile(File(picked.path));
-        final url = await ref.getDownloadURL();
+        final url = await uploadReferenceXFileAndGetUrl(
+          ref,
+          picked,
+          metadata: SettableMetadata(contentType: 'image/jpeg'),
+        );
         setState(() {
           _products[index]['imageUrl'] = url;
         });
@@ -1366,8 +1369,11 @@ class _EditFitnessEventsPageState extends State<EditFitnessEventsPage> {
             .child(userId)
             .child('events')
             .child(fileName);
-        await ref.putFile(File(picked.path));
-        final url = await ref.getDownloadURL();
+        final url = await uploadReferenceXFileAndGetUrl(
+          ref,
+          picked,
+          metadata: SettableMetadata(contentType: 'image/jpeg'),
+        );
         setState(() {
           _events[index]['imageUrl'] = url;
         });

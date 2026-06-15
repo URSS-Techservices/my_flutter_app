@@ -1,21 +1,24 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:camera/camera.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:video_player/video_player.dart';
-import 'package:halo/models/post_place.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:halo/Bottom Pages/location_picker_sheet.dart';
-import 'package:pro_image_editor/pro_image_editor.dart';
+import 'package:halo/models/post_place.dart';
+import 'package:halo/platform/add_post_camera.dart';
+import 'package:halo/platform/add_post_helpers.dart';
+import 'package:halo/platform/add_post_upload.dart';
+import 'package:halo/platform/draft_media_preview.dart';
+import 'package:halo/platform/image_editor_launcher.dart';
+import 'package:halo/platform/video_post_flow.dart';
 import 'package:halo/services/upload_service.dart';
 import 'package:halo/services/video_upload_policy.dart';
-import 'video_quick_edit_page.dart';
-import 'video_thumbnail_picker.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:video_player/video_player.dart';
 
 // ── Theme (aligned with app-wide lavender / purple palette) ───────────────
 const Color kPrimaryColor   = Color(0xFFA58CE3);
@@ -36,6 +39,8 @@ class MediaItem {
   final XFile file;
   final MediaType type;
   final Uint8List? videoCoverBytes;
+  final Uint8List? previewBytes;
+  final Uint8List? cachedBytes;
   final int? trimStartMs;
   final int? trimEndMs;
   VideoPlayerController? videoController;
@@ -44,6 +49,8 @@ class MediaItem {
     required this.file,
     required this.type,
     this.videoCoverBytes,
+    this.previewBytes,
+    this.cachedBytes,
     this.trimStartMs,
     this.trimEndMs,
     this.videoController,
@@ -104,7 +111,9 @@ class _AddPostPageState extends State<AddPostPage>
     super.initState();
     _tabAnim = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 300));
-    _initCamera();
+    if (!kIsWeb) {
+      _initCamera();
+    }
   }
 
   @override
@@ -120,14 +129,7 @@ class _AddPostPageState extends State<AddPostPage>
   }
 
   // ── Temp file cleanup ────────────────────────────────────────────────────
-  void _cleanupTempFiles(List<String> paths) {
-    for (final p in paths) {
-      try {
-        final f = File(p);
-        if (f.existsSync()) f.deleteSync();
-      } catch (_) {}
-    }
-  }
+  void _cleanupTempFiles(List<String> paths) => cleanupTempPaths(paths);
 
   // ── Camera init (list only — full-screen page initializes the controller) ─
   Future<void> _initCamera() async {
@@ -181,8 +183,13 @@ class _AddPostPageState extends State<AddPostPage>
       final edited = await _openImageEditor(file);
       if (edited == null || !mounted) return;
 
+      final previewBytes = kIsWeb ? await edited.readAsBytes() : null;
       setState(() {
-        _media.add(MediaItem(file: edited, type: MediaType.image));
+        _media.add(MediaItem(
+          file: edited,
+          type: MediaType.image,
+          previewBytes: previewBytes,
+        ));
       });
     } catch (e) {
       if (!mounted) return;
@@ -192,24 +199,16 @@ class _AddPostPageState extends State<AddPostPage>
 
   // ── Open image editor with output size constraint ─────────────────────────
   Future<XFile?> _openImageEditor(XFile file) async {
-    final editedBytes = await Navigator.push<Uint8List>(
-      context,
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => _AdvancedImageEditorPage(imagePath: file.path),
-      ),
-    );
+    final editedBytes = await openImageEditor(context, file);
     if (editedBytes == null) return null;
 
-    final newPath =
-        '${Directory.systemTemp.path}/halo_edit_${DateTime.now().microsecondsSinceEpoch}.jpg';
-    final editedFile = File(newPath);
-    await editedFile.writeAsBytes(editedBytes, flush: true);
+    final edited = await xFileFromEditedBytes(editedBytes);
+    if (edited == null) return null;
 
-    // Track for cleanup AFTER confirming write succeeded
-    _tempFilePaths.add(newPath);
-
-    return XFile(newPath);
+    if (!kIsWeb) {
+      _tempFilePaths.add(edited.path);
+    }
+    return edited;
   }
 
   Future<void> _pickVideo() async {
@@ -226,37 +225,25 @@ class _AddPostPageState extends State<AddPostPage>
 
     if (file == null) return;
 
-    // STEP 2: Open edit screen
-    final edited = await Navigator.push<VideoQuickEditResult>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => VideoQuickEditPage(file: File(file.path)),
-      ),
-    );
+    final processed = await runVideoPostFlow(context, file);
+    if (processed == null || !mounted) return;
 
-    // ✅ Important null check
-    if (edited == null || !mounted) return;
+    if (!await _ensureVideoAllowed(processed.file.path)) return;
 
-    if (!await _ensureVideoAllowed(edited.file)) return;
+    final previewBytes = kIsWeb
+        ? (processed.videoBytes ?? await processed.file.readAsBytes())
+        : null;
 
-    // STEP 3: Open thumbnail picker (AFTER edited)
-    final thumbBytes = await Navigator.push<Uint8List>(
-      context,
-      MaterialPageRoute(
-        builder: (_) =>
-            VideoThumbnailPicker(videoPath: edited.file.path),
-      ),
-    );
-
-    // STEP 4: Save media
     setState(() {
       _media.add(
         MediaItem(
-          file: XFile(edited.file.path),
+          file: processed.file,
           type: MediaType.video,
-          videoCoverBytes: thumbBytes ?? edited.coverBytes,
-          trimStartMs: edited.trimStartMs,
-          trimEndMs: edited.trimEndMs,
+          videoCoverBytes: processed.coverBytes,
+          previewBytes: previewBytes,
+          cachedBytes: processed.videoBytes,
+          trimStartMs: processed.trimStartMs,
+          trimEndMs: processed.trimEndMs,
         ),
       );
     });
@@ -264,6 +251,18 @@ class _AddPostPageState extends State<AddPostPage>
 
   // ── Open full-screen camera ───────────────────────────────────────────────
   Future<void> _openCamera() async {
+    if (kIsWeb) {
+      final result = await openAddPostCamera(context);
+      if (result == null || !mounted) return;
+      final previewBytes = await result.readAsBytes();
+      setState(() => _media.add(MediaItem(
+            file: result,
+            type: MediaType.image,
+            previewBytes: previewBytes,
+          )));
+      return;
+    }
+
     if (_cameraPermissionDenied) return;
     if (_cameras == null || _cameras!.isEmpty) {
       await _initCamera();
@@ -272,31 +271,23 @@ class _AddPostPageState extends State<AddPostPage>
       _showSnack('Camera not available on this device.');
       return;
     }
-    final result = await Navigator.push<XFile>(
+    final result = await openAddPostCamera(
       context,
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => _FullScreenCamera(cameras: _cameras!),
-      ),
+      cameras: _cameras!,
     );
     if (result == null) return;
     final isVideo = result.path.endsWith('.mp4');
     if (isVideo) {
-      final edited = await Navigator.push<VideoQuickEditResult>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => VideoQuickEditPage(file: File(result.path)),
-        ),
-      );
-      if (edited == null || !mounted) return;
-      if (!await _ensureVideoAllowed(edited.file)) return;
+      final processed = await runVideoPostFlow(context, result);
+      if (processed == null || !mounted) return;
+      if (!await _ensureVideoAllowed(processed.file.path)) return;
       setState(() => _media.add(
             MediaItem(
-              file: XFile(edited.file.path),
+              file: processed.file,
               type: MediaType.video,
-              videoCoverBytes: edited.coverBytes,
-              trimStartMs: edited.trimStartMs,
-              trimEndMs: edited.trimEndMs,
+              videoCoverBytes: processed.coverBytes,
+              trimStartMs: processed.trimStartMs,
+              trimEndMs: processed.trimEndMs,
             ),
           ));
     } else {
@@ -402,16 +393,13 @@ class _AddPostPageState extends State<AddPostPage>
   }
 
   // ── Remove media ──────────────────────────────────────────────────────────
-  void _removeMedia(int index) {
+  Future<void> _removeMedia(int index) async {
     final item = _media[index];
     item.videoController?.dispose();
 
     // Clean up temp file if it was editor-generated
     if (_tempFilePaths.contains(item.file.path)) {
-      try {
-        final f = File(item.file.path);
-        if (f.existsSync()) f.deleteSync();
-      } catch (_) {}
+      await deletePathIfExists(item.file.path);
       _tempFilePaths.remove(item.file.path);
     }
 
@@ -433,15 +421,17 @@ class _AddPostPageState extends State<AddPostPage>
 
     // Delete old temp file after successful re-edit
     if (wasTempFile) {
-      try {
-        final old = File(oldPath);
-        if (old.existsSync()) old.deleteSync();
-      } catch (_) {}
+      await deletePathIfExists(oldPath);
       _tempFilePaths.remove(oldPath);
     }
 
+    final previewBytes = kIsWeb ? await edited.readAsBytes() : null;
     setState(() {
-      _media[index] = MediaItem(file: edited, type: MediaType.image);
+      _media[index] = MediaItem(
+        file: edited,
+        type: MediaType.image,
+        previewBytes: previewBytes,
+      );
     });
   }
 
@@ -590,16 +580,18 @@ class _AddPostPageState extends State<AddPostPage>
           'Uploading ${item.isVideo ? "video" : "photo"} ${i + 1} of ${_media.length}…';
         });
 
-        Map<String, dynamic> uploaded;
+        final uploaded = await uploadDraftMedia(
+          uploadService: _uploadService,
+          file: item.file,
+          isVideo: item.isVideo,
+          postId: postId,
+          index: i,
+          videoCoverBytes: item.videoCoverBytes,
+          trimStartMs: item.trimStartMs,
+          trimEndMs: item.trimEndMs,
+          cachedBytes: item.cachedBytes,
+        );
         if (item.isVideo) {
-          uploaded = await _uploadService.uploadVideoWithThumbnail(
-            videoFile: File(item.file.path),
-            postId: postId,
-            index: i,
-            thumbnailBytes: item.videoCoverBytes,
-            trimStartMs: item.trimStartMs,
-            trimEndMs: item.trimEndMs,
-          );
           if (legacyFirstVideoUrl.isEmpty) {
             legacyFirstVideoUrl = (uploaded['videoUrl'] ?? '').toString();
           }
@@ -610,11 +602,6 @@ class _AddPostPageState extends State<AddPostPage>
                     .trim();
           }
         } else {
-          uploaded = await _uploadService.uploadAdaptivePostImage(
-            imageFile: File(item.file.path),
-            postId: postId,
-            index: i,
-          );
           if (legacyFirstImageUrl.isEmpty) {
             legacyFirstImageUrl = (uploaded['medium'] ?? uploaded['url'] ?? '')
                 .toString()
@@ -717,10 +704,10 @@ class _AddPostPageState extends State<AddPostPage>
   }
 
   /// Reject unsupported videos before thumbnail picker / upload.
-  Future<bool> _ensureVideoAllowed(File videoFile) async {
-    final rejection = await VideoUploadPolicy.validateFile(videoFile);
-    if (rejection == null) return true;
-    _showSnack(rejection.userMessage);
+  Future<bool> _ensureVideoAllowed(String videoPath) async {
+    final allowed = await isVideoAllowedForUpload(videoPath);
+    if (allowed) return true;
+    _showSnack('This video format is not supported for upload.');
     return false;
   }
 
@@ -1536,15 +1523,13 @@ class _MediaThumbnail extends StatelessWidget {
                     color: Colors.white70, size: 34),
               ),
             )
-                : Image.file(
-              File(item.file.path),
+                : buildDraftImagePreview(
+              item.file.path,
               fit: BoxFit.cover,
-              // FIX: reduced from 600 to 300 — thumbnails are small,
-              // 300px decode width is more than enough and cuts memory ~75%
               cacheWidth: 300,
               cacheHeight: 300,
               filterQuality: FilterQuality.none,
-              gaplessPlayback: true,
+              previewBytes: item.previewBytes,
             ),
 
             if (item.isVideo)
@@ -1683,10 +1668,11 @@ class _MediaViewerPageState extends State<_MediaViewerPage> {
           }
           return InteractiveViewer(
             child: Center(
-              child: Image.file(
-                File(item.file.path),
+              child: buildDraftImagePreview(
+                item.file.path,
                 fit: BoxFit.contain,
                 filterQuality: FilterQuality.low,
+                previewBytes: item.previewBytes,
               ),
             ),
           );
@@ -1734,7 +1720,7 @@ class _VideoViewerItemState extends State<_VideoViewerItem> {
   @override
   void initState() {
     super.initState();
-    _ctrl = VideoPlayerController.file(File(widget.filePath));
+    _ctrl = createDraftVideoController(widget.filePath);
     _ctrl.initialize().then((_) {
       if (mounted) {
         setState(() => _initialized = true);
@@ -1978,8 +1964,7 @@ class _PostPreviewPageState extends State<_PostPreviewPage> {
                             final item = widget.media[i];
                             if (item.isVideo) {
                               _videoControllers[i] ??=
-                                  VideoPlayerController.file(
-                                      File(item.file.path));
+                                  createDraftVideoController(item.file.path);
 
                               final ctrl = _videoControllers[i]!;
                               if (!ctrl.value.isInitialized) {
@@ -1997,13 +1982,14 @@ class _PostPreviewPageState extends State<_PostPreviewPage> {
                                 onTap: _togglePlayPause,
                               );
                             }
-                            return Image.file(
-                              File(item.file.path),
+                            return buildDraftImagePreview(
+                              item.file.path,
                               fit: BoxFit.cover,
                               width: size.width,
-                              height: size.width,
+                              height: size.height,
                               cacheWidth: 1080,
                               filterQuality: FilterQuality.low,
+                              previewBytes: item.previewBytes,
                             );
                           },
                         ),
@@ -2443,276 +2429,3 @@ class _VideoPreviewItemState extends State<_VideoPreviewItem> {
     return '$m:$s';
   }
 }
-
-// ══════════════════════════════════════════════════════════════════════════
-//  _AdvancedImageEditorPage — with output resolution constraint
-// ══════════════════════════════════════════════════════════════════════════
-class _AdvancedImageEditorPage extends StatelessWidget {
-  final String imagePath;
-  const _AdvancedImageEditorPage({required this.imagePath});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: ProImageEditor.file(
-        File(imagePath),
-        configs: ProImageEditorConfigs(
-          // FIX: correct parameter name is 'imageGeneration', not 'imageGenerationConfigs'
-          imageGeneration: const ImageGenerationConfigs(
-            outputFormat: OutputFormat.jpg,
-            maxOutputSize: Size(1280, 1280),
-          ),
-        ),
-        callbacks: ProImageEditorCallbacks(
-          onImageEditingComplete: (Uint8List bytes) async {
-            if (!context.mounted) return;
-            Navigator.pop(context, bytes);
-          },
-        ),
-      ),
-    );
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  _FullScreenCamera
-// ══════════════════════════════════════════════════════════════════════════
-class _FullScreenCamera extends StatefulWidget {
-  final List<CameraDescription> cameras;
-  const _FullScreenCamera({required this.cameras});
-  @override
-  State<_FullScreenCamera> createState() => _FullScreenCameraState();
-}
-
-class _FullScreenCameraState extends State<_FullScreenCamera> {
-  late CameraController _ctrl;
-  int  _camIdx      = 0;
-  bool _ready       = false;
-  bool _recording   = false;
-  bool _isVideo     = false;
-  bool _isSwitching = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initCtrl(0);
-  }
-
-  Future<void> _initCtrl(int idx) async {
-    setState(() { _ready = false; _isSwitching = true; });
-    final ctrl = CameraController(
-        widget.cameras[idx], ResolutionPreset.high, enableAudio: true);
-    await ctrl.initialize();
-    if (!mounted) { ctrl.dispose(); return; }
-    _ctrl = ctrl;
-    setState(() { _camIdx = idx; _ready = true; _isSwitching = false; });
-  }
-
-  // Await dispose before reinitialising to prevent use-after-dispose
-  Future<void> _flipCamera() async {
-    if (_isSwitching) return;
-    final next = (_camIdx + 1) % widget.cameras.length;
-    final old  = _ctrl;
-    await _initCtrl(next);
-    await old.dispose();
-  }
-
-  Future<void> _capture() async {
-    if (!_ready || _isSwitching) return;
-    if (_isVideo) {
-      if (_recording) {
-        final file = await _ctrl.stopVideoRecording();
-        if (!mounted) return;
-        Navigator.pop(context, file);
-      } else {
-        await _ctrl.startVideoRecording();
-        setState(() => _recording = true);
-      }
-    } else {
-      final photo = await _ctrl.takePicture();
-      if (!mounted) return;
-      Navigator.pop(context, photo);
-    }
-  }
-
-  @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(children: [
-          if (_ready) Positioned.fill(child: CameraPreview(_ctrl)),
-          if (!_ready)
-            const Center(
-                child: CircularProgressIndicator(color: kPrimaryColor)),
-
-          // Top bar
-          Positioned(
-            top: 0, left: 0, right: 0,
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.6),
-                    Colors.transparent
-                  ],
-                ),
-              ),
-              child: Row(children: [
-                GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: const Icon(Icons.close,
-                        color: Colors.white, size: 28)),
-                const Spacer(),
-                if (widget.cameras.length > 1)
-                  GestureDetector(
-                    onTap: _isSwitching ? null : _flipCamera,
-                    child: Icon(Icons.flip_camera_ios_rounded,
-                        color: _isSwitching
-                            ? Colors.white38
-                            : Colors.white,
-                        size: 28),
-                  ),
-              ]),
-            ),
-          ),
-
-          // Bottom bar
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: Container(
-              padding: const EdgeInsets.only(bottom: 32, top: 16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.7),
-                    Colors.transparent
-                  ],
-                ),
-              ),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _ModeButton(
-                          label: 'Photo',
-                          selected: !_isVideo,
-                          onTap: () =>
-                              setState(() => _isVideo = false)),
-                      const SizedBox(width: 24),
-                      _ModeButton(
-                          label: 'Video',
-                          selected: _isVideo,
-                          onTap: () =>
-                              setState(() => _isVideo = true)),
-                    ]),
-                const SizedBox(height: 20),
-                GestureDetector(
-                  onTap: _isSwitching ? null : _capture,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: Colors.white, width: 4),
-                      color: _isSwitching
-                          ? Colors.grey.withOpacity(0.5)
-                          : (_recording
-                          ? Colors.red
-                          : Colors.white.withOpacity(0.9)),
-                    ),
-                    child: _recording
-                        ? const Icon(Icons.stop_rounded,
-                        color: Colors.white, size: 32)
-                        : Icon(
-                        _isVideo
-                            ? Icons.videocam_rounded
-                            : Icons.camera_alt_rounded,
-                        color: Colors.black87,
-                        size: 32),
-                  ),
-                ),
-              ]),
-            ),
-          ),
-
-          // REC badge
-          if (_recording)
-            Positioned(
-              top: 60, left: 0, right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(20)),
-                  child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                            width: 8,
-                            height: 8,
-                            decoration: const BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle)),
-                        const SizedBox(width: 8),
-                        Text('REC',
-                            style: GoogleFonts.poppins(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13)),
-                      ]),
-                ),
-              ),
-            ),
-        ]),
-      ),
-    );
-  }
-}
-
-class _ModeButton extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _ModeButton(
-      {required this.label, required this.selected, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Column(children: [
-      Text(label,
-          style: GoogleFonts.poppins(
-            color: selected ? Colors.white : Colors.white60,
-            fontWeight:
-            selected ? FontWeight.w700 : FontWeight.w400,
-            fontSize: 14,
-          )),
-      const SizedBox(height: 4),
-      AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: selected ? 24 : 0,
-        height: 2,
-        decoration: BoxDecoration(
-            color: kPrimaryColor,
-            borderRadius: BorderRadius.circular(1)),
-      ),
-    ]),
-  );
-}
-
-

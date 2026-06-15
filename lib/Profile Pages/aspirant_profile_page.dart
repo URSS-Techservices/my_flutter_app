@@ -1,7 +1,6 @@
 // profile_page_improved.dart  (Aspirant Profile)
 
 // -------------------- IMPORTS --------------------
-import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -13,6 +12,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
+import 'package:halo/platform/profile_avatar_provider.dart';
+import 'package:halo/platform/profile_local_photo.dart';
+import 'package:halo/platform/storage_upload.dart';
 import 'package:halo/screens/profile/core/profile_media_upload.dart';
 import 'package:halo/screens/profile/profile_router_screen.dart';
 import 'package:halo/screens/profile/profile_theme.dart';
@@ -136,8 +138,8 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   // Image picker
   final ImagePicker _picker = ImagePicker();
-  File? _profilePhotoFile;
-  File? _coverPhotoFile;
+  ProfileLocalPhoto? _profilePhotoLocal;
+  ProfileLocalPhoto? _coverPhotoLocal;
 
   // Camera
   CameraController? _cameraController;
@@ -325,12 +327,12 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     if (picked == null) return;
     final edited = await editProfileImageWithInstagramStyle(
       context,
-      imagePath: picked.path,
+      picked: picked,
       outputNamePrefix: 'profile',
     );
     if (edited == null) return;
-    setState(() => _profilePhotoFile = edited);
-    await _uploadAndSaveProfilePhoto(_profilePhotoFile!, isCover: false);
+    setState(() => _profilePhotoLocal = edited);
+    await _uploadAndSaveProfilePhoto(edited, isCover: false);
   }
 
   Future<void> _pickCoverImage() async {
@@ -340,18 +342,19 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     if (picked == null) return;
     final edited = await editProfileImageWithInstagramStyle(
       context,
-      imagePath: picked.path,
+      picked: picked,
       outputNamePrefix: 'cover',
     );
     if (edited == null) return;
-    setState(() => _coverPhotoFile = edited);
-    await _uploadAndSaveProfilePhoto(_coverPhotoFile!, isCover: true);
+    setState(() => _coverPhotoLocal = edited);
+    await _uploadAndSaveProfilePhoto(edited, isCover: true);
   }
 
   void _previewCoverImage() {
     openProfileStoredImagePreview(
       context: context,
-      localFile: _coverPhotoFile,
+      localPath: _coverPhotoLocal?.path,
+      localBytes: _coverPhotoLocal?.previewBytes,
       remoteUrl: _coverPhotoUrl,
       heroTag: 'aspirant-cover-${widget.profileUserId}',
     );
@@ -360,20 +363,23 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   void _previewProfileImage() {
     openProfileStoredImagePreview(
       context: context,
-      localFile: _profilePhotoFile,
+      localPath: _profilePhotoLocal?.path,
+      localBytes: _profilePhotoLocal?.previewBytes,
       remoteUrl: _profilePhotoUrl,
       heroTag: 'profile-avatar-${widget.profileUserId}',
     );
   }
 
-  Future<void> _uploadAndSaveProfilePhoto(File file,
-      {required bool isCover}) async {
+  Future<void> _uploadAndSaveProfilePhoto(
+    ProfileLocalPhoto local, {
+    required bool isCover,
+  }) async {
     if (_currentUser == null) return;
     try {
       final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
         firestore: _firestore,
         userId: _currentUser!.uid,
-        file: file,
+        media: await local.toXFile(),
         isCover: isCover,
       );
 
@@ -381,8 +387,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       setState(() {
         if (isCover) {
           _coverPhotoUrl = url;
+          _coverPhotoLocal = null;
         } else {
           _profilePhotoUrl = url;
+          _profilePhotoLocal = null;
         }
       });
       Fluttertoast.showToast(msg: 'Photo updated');
@@ -473,8 +481,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   .ref()
                   .child('posts')
                   .child(fileName);
-              final snap = await ref.putFile(File(image.path));
-              final url = await snap.ref.getDownloadURL();
+              final url = await uploadReferenceXFileAndGetUrl(
+                ref,
+                image,
+                metadata: SettableMetadata(contentType: 'image/jpeg'),
+              );
               final uid = FirebaseAuth.instance.currentUser!.uid;
               print('uid: $uid');
 // 🔹 get accountType from users collection
@@ -566,11 +577,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   //  UI HELPERS (HEADER PARTS)
   // ===================================================================
   Widget _coverWidget(BuildContext context) {
-    final ImageProvider cover = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : (_coverPhotoUrl != null
-        ? NetworkImage(_coverPhotoUrl!)
-        : const AssetImage('assets/images/bio.png')) as ImageProvider;
+    final cover = profileHeroImageProvider(
+      local: _coverPhotoLocal,
+      remoteUrl: _coverPhotoUrl,
+      defaultAsset: const AssetImage('assets/images/bio.png'),
+    );
 
     return ProfileCoverHero(
       cover: cover,
@@ -581,11 +592,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _avatarWidget() {
-    final ImageProvider avatar = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : (_profilePhotoUrl != null
-        ? NetworkImage(_profilePhotoUrl!)
-        : const AssetImage('assets/images/Profile.png')) as ImageProvider;
+    final avatar = profileHeroImageProvider(
+      local: _profilePhotoLocal,
+      remoteUrl: _profilePhotoUrl,
+      defaultAsset: const AssetImage('assets/images/Profile.png'),
+    );
 
     return ProfileAvatarHeroShell(
       avatar: avatar,

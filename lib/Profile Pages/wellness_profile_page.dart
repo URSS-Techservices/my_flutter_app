@@ -1,7 +1,6 @@
 // wellness_profile_page.dart
 // WELLNESS PROFILE PAGE - Updated with tabs and all sections
 
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -45,6 +44,9 @@ import 'package:halo/screens/profile/core/profile_posts_queries.dart';
 import 'package:halo/screens/profile/core/profile_refresh_helpers.dart';
 import 'package:halo/screens/profile/core/profile_reviews_queries.dart';
 import 'package:halo/screens/profile/core/profile_state_helpers.dart';
+import 'package:halo/platform/profile_avatar_provider.dart';
+import 'package:halo/platform/profile_local_photo.dart';
+import 'package:halo/platform/storage_upload.dart';
 import 'package:halo/screens/profile/core/profile_media_upload.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
 import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
@@ -122,8 +124,8 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
   // -------------------- IMAGE PICKER --------------------
   final ImagePicker _picker = ImagePicker();
-  File? _profilePhotoFile;
-  File? _coverPhotoFile;
+  ProfileLocalPhoto? _profilePhotoLocal;
+  ProfileLocalPhoto? _coverPhotoLocal;
 
   // -------------------- STATE --------------------
   late final TabController _tabController;
@@ -351,30 +353,30 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
     final edited = await editProfileImageWithInstagramStyle(
       context,
-      imagePath: picked.path,
+      picked: picked,
       outputNamePrefix: 'profile',
     );
     if (edited == null) return;
-    setState(() => _profilePhotoFile = edited);
+    setState(() => _profilePhotoLocal = edited);
 
     try {
       final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
         firestore: _firestore,
         userId: _currentUser!.uid,
-        file: _profilePhotoFile!,
+        media: await edited.toXFile(),
         isCover: false,
       );
 
       if (!mounted) return;
       setState(() {
         _profilePhotoUrl = url;
-        _profilePhotoFile = null;
+        _profilePhotoLocal = null;
       });
 
       Fluttertoast.showToast(msg: 'Profile photo updated');
     } catch (e) {
       Fluttertoast.showToast(msg: 'Failed to upload photo');
-      setState(() => _profilePhotoFile = null);
+      setState(() => _profilePhotoLocal = null);
     }
   }
 
@@ -386,37 +388,38 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
     final edited = await editProfileImageWithInstagramStyle(
       context,
-      imagePath: picked.path,
+      picked: picked,
       outputNamePrefix: 'cover',
     );
     if (edited == null) return;
-    setState(() => _coverPhotoFile = edited);
+    setState(() => _coverPhotoLocal = edited);
 
     try {
       final url = await ProfileMediaUpload.uploadUserPhotoAndPersist(
         firestore: _firestore,
         userId: _currentUser!.uid,
-        file: _coverPhotoFile!,
+        media: await edited.toXFile(),
         isCover: true,
       );
 
       if (!mounted) return;
       setState(() {
         _coverPhotoUrl = url;
-        _coverPhotoFile = null;
+        _coverPhotoLocal = null;
       });
 
       Fluttertoast.showToast(msg: 'Cover photo updated');
     } catch (e) {
       Fluttertoast.showToast(msg: 'Failed to upload photo');
-      setState(() => _coverPhotoFile = null);
+      setState(() => _coverPhotoLocal = null);
     }
   }
 
   void _previewCoverImage() {
     openProfileStoredImagePreview(
       context: context,
-      localFile: _coverPhotoFile,
+      localPath: _coverPhotoLocal?.path,
+      localBytes: _coverPhotoLocal?.previewBytes,
       remoteUrl: _coverPhotoUrl,
       heroTag: 'wellness-cover-${widget.profileUserId}',
     );
@@ -425,7 +428,8 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   void _previewProfileImage() {
     openProfileStoredImagePreview(
       context: context,
-      localFile: _profilePhotoFile,
+      localPath: _profilePhotoLocal?.path,
+      localBytes: _profilePhotoLocal?.previewBytes,
       remoteUrl: _profilePhotoUrl,
       heroTag: 'wellness-avatar-${widget.profileUserId}',
     );
@@ -435,11 +439,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   //  UI HELPERS (HEADER)
   // ===================================================================
   Widget _coverWidget(BuildContext context) {
-    final ImageProvider cover = _coverPhotoFile != null
-        ? FileImage(_coverPhotoFile!)
-        : (_coverPhotoUrl != null
-        ? NetworkImage(_coverPhotoUrl!)
-        : const AssetImage('assets/images/bio.png')) as ImageProvider;
+    final cover = profileHeroImageProvider(
+      local: _coverPhotoLocal,
+      remoteUrl: _coverPhotoUrl,
+      defaultAsset: const AssetImage('assets/images/bio.png'),
+    );
 
     return ProfileCoverHero(
       cover: cover,
@@ -450,11 +454,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   }
 
   Widget _avatarWidget() {
-    final ImageProvider avatar = _profilePhotoFile != null
-        ? FileImage(_profilePhotoFile!)
-        : (_profilePhotoUrl != null
-        ? NetworkImage(_profilePhotoUrl!)
-        : const AssetImage('assets/images/Profile.png')) as ImageProvider;
+    final avatar = profileHeroImageProvider(
+      local: _profilePhotoLocal,
+      remoteUrl: _profilePhotoUrl,
+      defaultAsset: const AssetImage('assets/images/Profile.png'),
+    );
 
     return ProfileAvatarHeroShell(
       avatar: avatar,
@@ -3505,8 +3509,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   .ref()
                   .child('posts')
                   .child(fileName);
-              final snap = await ref.putFile(File(image.path));
-              final url = await snap.ref.getDownloadURL();
+              final url = await uploadReferenceXFileAndGetUrl(
+                ref,
+                image,
+                metadata: SettableMetadata(contentType: 'image/jpeg'),
+              );
               await FirebaseFirestore.instance.collection('posts').add({
                 'imageUrl': url,
                 'caption': caption,

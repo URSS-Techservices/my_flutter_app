@@ -1,22 +1,29 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:halo/platform/media_preview.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 
-/// Full-screen image preview for profile/cover (local file takes precedence).
-/// [heroTag] must stay aligned with the corresponding Hero in each profile page.
+/// Full-screen image preview for profile/cover (local bytes/path take precedence).
 void openProfileStoredImagePreview({
   required BuildContext context,
-  required File? localFile,
+  String? localPath,
+  Uint8List? localBytes,
   required String? remoteUrl,
   required String heroTag,
 }) {
-  if (localFile == null && (remoteUrl == null || remoteUrl.isEmpty)) {
+  if (!hasLocalProfilePreview(
+    localPath: localPath,
+    localBytes: localBytes,
+    remoteUrl: remoteUrl,
+  )) {
     return;
   }
-  final ImageProvider<Object> provider = localFile != null
-      ? FileImage(localFile)
-      : NetworkImage(remoteUrl!);
+  final provider = profileStoredImageProvider(
+    remoteUrl: remoteUrl,
+    localPath: localPath,
+    localBytes: localBytes,
+  );
   openProfileMediaPreview(
     context,
     image: provider,
