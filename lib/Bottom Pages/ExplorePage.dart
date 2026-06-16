@@ -25,6 +25,7 @@ import 'package:halo/services/video_decoder_budget.dart';
 import 'package:halo/services/video_dispose_serial.dart';
 import 'package:halo/services/video_playback_resolver.dart';
 import 'package:halo/screens/profile/profile_router_screen.dart';
+import 'package:halo/utils/shell_back.dart';
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
@@ -221,7 +222,11 @@ extension _FilterLabel on _Filter {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class ExplorePage extends StatefulWidget {
-  const ExplorePage({super.key});
+  const ExplorePage({super.key, this.onBackToHome});
+
+  /// Switches to the Home tab when embedded in [HomePage]'s bottom nav.
+  final VoidCallback? onBackToHome;
+
   @override
   State<ExplorePage> createState() => _ExplorePageState();
 }
@@ -375,114 +380,213 @@ class _ExplorePageState extends State<ExplorePage> {
     return Scaffold(
       backgroundColor: _kBg,
       body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _ExploreHeader(),
-            _SearchBar(ctrl: _searchCtrl),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                children: _Filter.values.map((f) {
-                  final selected = _filter == f;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: _FilterChip(
-                      label: f.label,
-                      icon: f.icon,
-                      selected: selected,
-                      onTap: () => setState(() {
-                        _filter = f;
-                        _applyFilter();
-                      }),
-                    ),
-                  );
-                }).toList(),
+        child: RefreshIndicator(
+          onRefresh: _refresh,
+          color: _kPrimary,
+          backgroundColor: Colors.white,
+          child: CustomScrollView(
+            controller: _scrollCtrl,
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            slivers: [
+              SliverToBoxAdapter(
+                child: _ExploreTopSection(
+                  onBackToHome: widget.onBackToHome,
+                  searchCtrl: _searchCtrl,
+                  filter: _filter,
+                  onFilterSelected: (f) => setState(() {
+                    _filter = f;
+                    _applyFilter();
+                  }),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: _error
-                  ? _ErrorView(onRetry: _refresh)
-                  : _loading
-                      ? const _ShimmerGrid()
-                      : _shown.isEmpty
-                          ? _EmptyView(hasQuery: _query.isNotEmpty || _filter != _Filter.forYou)
-                          : RefreshIndicator(
-                              onRefresh: _refresh,
-                              color: _kPrimary,
-                              backgroundColor: Colors.white,
-                              child: _Grid(
-                                posts: _shown,
-                                scrollCtrl: _scrollCtrl,
-                                onTap: _openDetail,
-                              ),
-                            ),
-            ),
-          ],
+              const SliverToBoxAdapter(child: SizedBox(height: 4)),
+              if (_error)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _ErrorView(onRetry: _refresh),
+                )
+              else if (_loading)
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: MediaQuery.sizeOf(context).height * 0.55,
+                    child: const _ShimmerGrid(),
+                  ),
+                )
+              else if (_shown.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _EmptyView(
+                    hasQuery: _query.isNotEmpty || _filter != _Filter.forYou,
+                  ),
+                )
+              else
+                ..._Grid.buildSlivers(
+                  posts: _shown,
+                  onTap: _openDetail,
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-// ─── Explore header ────────────────────────────────────────────────────────────
+// ─── Explore header (title, search, filters) ─────────────────────────────────
 
-class _ExploreHeader extends StatelessWidget {
-  const _ExploreHeader();
+class _ExploreTopSection extends StatelessWidget {
+  const _ExploreTopSection({
+    required this.searchCtrl,
+    required this.filter,
+    required this.onFilterSelected,
+    this.onBackToHome,
+  });
+
+  final TextEditingController searchCtrl;
+  final _Filter filter;
+  final ValueChanged<_Filter> onFilterSelected;
+  final VoidCallback? onBackToHome;
 
   @override
   Widget build(BuildContext context) {
+    final titleStyle = GoogleFonts.poppins(
+      fontSize: 22,
+      fontWeight: FontWeight.w600,
+      color: const Color(0xFF2A2540),
+      letterSpacing: -0.35,
+      height: 1.2,
+    );
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-      child: Row(
+      padding: const EdgeInsets.only(top: 4, bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          Padding(
+            padding: const EdgeInsets.only(left: 2, right: 16),
+            child: Row(
               children: [
-                Text(
-                  'Explore',
-                  style: GoogleFonts.poppins(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF1A1A2E),
-                    letterSpacing: -0.5,
+                IconButton(
+                  onPressed: () => popOrGoHome(
+                    context,
+                    onBackToHome: onBackToHome,
                   ),
+                  icon: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    size: 20,
+                    color: Color(0xFF5B3FA3),
+                  ),
+                  tooltip: 'Back to Home',
+                  splashRadius: 22,
                 ),
-                Text(
-                  'Discover videos & photos',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12.5,
-                    color: const Color(0xFF888899),
-                    fontWeight: FontWeight.w500,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Explore', style: titleStyle),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Videos & photos',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                          color: const Color(0xFF9B95AB),
+                          letterSpacing: 0.15,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [_kPrimary, _kAccent],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+            controller: searchCtrl,
+            textAlignVertical: TextAlignVertical.center,
+            keyboardAppearance: Brightness.light,
+            textInputAction: TextInputAction.search,
+            style: GoogleFonts.poppins(
+              color: const Color(0xFF2A2540),
+              fontSize: 14,
+              fontWeight: FontWeight.w400,
+            ),
+            cursorColor: _kPrimary,
+            decoration: InputDecoration(
+              hintText: 'Search posts, people, tags…',
+              hintStyle: GoogleFonts.poppins(
+                color: const Color(0xFFA8A3B5),
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
               ),
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: _kPrimary.withValues(alpha: 0.28),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
+              prefixIcon: Icon(
+                Icons.search_rounded,
+                color: _kPrimary.withValues(alpha: 0.75),
+                size: 21,
+              ),
+              suffixIcon: ListenableBuilder(
+                listenable: searchCtrl,
+                builder: (_, __) => searchCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: Icon(
+                          Icons.close_rounded,
+                          size: 18,
+                          color: Colors.grey.shade500,
+                        ),
+                        onPressed: searchCtrl.clear,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              filled: true,
+              fillColor: _kSurface,
+              contentPadding: const EdgeInsets.symmetric(vertical: 13),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(
+                  color: const Color(0xFFE4DFF0).withValues(alpha: 0.9),
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(
+                  color: _kPrimary.withValues(alpha: 0.55),
+                  width: 1,
+                ),
+              ),
+            ),
+          ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  height: 36,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: _Filter.values.map((f) {
+                      final selected = filter == f;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _FilterChip(
+                          label: f.label,
+                          icon: f.icon,
+                          selected: selected,
+                          onTap: () => onFilterSelected(f),
+                        ),
+                      );
+                    }).toList(),
+                  ),
                 ),
               ],
             ),
-            child: const Icon(Icons.explore_rounded, color: Colors.white, size: 22),
           ),
         ],
       ),
@@ -510,37 +614,33 @@ class _FilterChip extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           gradient: selected
               ? const LinearGradient(
-                  colors: [_kPrimary, Color(0xFF7B5FC7)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+                  colors: [_kPrimary, Color(0xFF6E52B8)],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
                 )
               : null,
-          color: selected ? null : Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          color: selected ? null : _kSurface,
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: selected ? Colors.transparent : const Color(0xFFE8E4F0),
+            color: selected
+                ? Colors.transparent
+                : const Color(0xFFE8E4F0),
             width: 1,
           ),
           boxShadow: selected
               ? [
                   BoxShadow(
-                    color: _kPrimary.withValues(alpha: 0.22),
-                    blurRadius: 10,
-                    offset: const Offset(0, 3),
-                  ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 6,
+                    color: _kPrimary.withValues(alpha: 0.15),
+                    blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
-                ],
+                ]
+              : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -556,75 +656,6 @@ class _FilterChip extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Search bar ──────────────────────────────────────────────────────────────
-
-class _SearchBar extends StatelessWidget {
-  final TextEditingController ctrl;
-  const _SearchBar({required this.ctrl});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Container(
-        height: 46,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFE8E4F0)),
-          boxShadow: [
-            BoxShadow(
-              color: _kPrimary.withValues(alpha: 0.06),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Theme(
-          data: Theme.of(context).copyWith(
-            textSelectionTheme: const TextSelectionThemeData(
-              cursorColor: Colors.black,
-              selectionColor: Color(0x33000000),
-            ),
-          ),
-          child: TextField(
-            controller: ctrl,
-            textAlignVertical: TextAlignVertical.center,
-            keyboardAppearance: Brightness.light,
-            style: const TextStyle(
-              color: Colors.black,
-              fontSize: 15,
-              fontWeight: FontWeight.w400,
-            ),
-            cursorColor: Colors.black,
-            decoration: InputDecoration(
-              hintText: 'Search posts, people, tags…',
-              hintStyle: TextStyle(
-                color: Colors.grey.shade500,
-                fontSize: 15,
-                fontWeight: FontWeight.w400,
-              ),
-              prefixIcon: Icon(Icons.search_rounded, color: Colors.grey.shade600, size: 22),
-              suffixIcon: ListenableBuilder(
-                listenable: ctrl,
-                builder: (_, __) => ctrl.text.isNotEmpty
-                    ? IconButton(
-                        icon: Icon(Icons.cancel_rounded, color: Colors.grey.shade400, size: 20),
-                        onPressed: ctrl.clear,
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-              isDense: true,
-            ),
-          ),
         ),
       ),
     );
@@ -702,20 +733,35 @@ class _ShimmerGrid extends StatelessWidget {
 
 // ─── Grid ────────────────────────────────────────────────────────────────────
 
-class _Grid extends StatelessWidget {
+class _Grid {
   final List<_Post> posts;
-  final ScrollController scrollCtrl;
   final void Function(_Post) onTap;
 
-  const _Grid({required this.posts, required this.scrollCtrl, required this.onTap});
+  const _Grid({required this.posts, required this.onTap});
 
-  @override
-  Widget build(BuildContext context) {
-    final w    = MediaQuery.of(context).size.width;
-    final cell = (w - _kGap * (_kCols - 1)) / _kCols;
+  static List<Widget> buildSlivers({
+    required List<_Post> posts,
+    required void Function(_Post) onTap,
+  }) {
+    return [
+      SliverLayoutBuilder(
+        builder: (context, constraints) {
+          final cell =
+              (constraints.crossAxisExtent - _kGap * (_kCols - 1)) / _kCols;
+          final sections =
+              _Grid(posts: posts, onTap: onTap)._buildSections(cell);
+          return SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) => sections[index],
+              childCount: sections.length,
+            ),
+          );
+        },
+      ),
+    ];
+  }
 
-    // Build sections: every _kFeatEvery items → featured row (1 big + 2 small)
-    // All others → plain row of 3 equal cells
+  List<Widget> _buildSections(double cell) {
     final sections = <Widget>[];
     int i = 0;
     while (i < posts.length) {
@@ -753,7 +799,6 @@ class _Grid extends StatelessWidget {
         i += 3;
       } else {
         final rowItems = posts.sublist(i, (i + _kCols).clamp(0, posts.length));
-        // Pad row to always be 3 cells wide so alignment stays consistent
         sections.add(
           Row(
             children: List.generate(_kCols, (col) {
@@ -762,7 +807,9 @@ class _Grid extends StatelessWidget {
               }
               return Row(mainAxisSize: MainAxisSize.min, children: [
                 if (col > 0) SizedBox(width: _kGap),
-                RepaintBoundary(child: _Cell(post: rowItems[col], size: cell, onTap: onTap)),
+                RepaintBoundary(
+                  child: _Cell(post: rowItems[col], size: cell, onTap: onTap),
+                ),
               ]);
             }),
           ),
@@ -771,13 +818,7 @@ class _Grid extends StatelessWidget {
       }
       sections.add(SizedBox(height: _kGap));
     }
-
-    return ListView(
-      controller: scrollCtrl,
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 16),
-      children: sections,
-    );
+    return sections;
   }
 }
 

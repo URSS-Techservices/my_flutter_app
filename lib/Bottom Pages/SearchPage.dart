@@ -36,6 +36,8 @@ const Color kPrimaryColor = Color(0xFFA58CE3);
 const Color kSecondaryColor = Color(0xFF5B3FA3);
 const Color kBackgroundColor = Color(0xFFF4F1FB);
 const Color kIgSecondaryText = Color(0xFF8E8E8E);
+const Color _kSearchSurface = Color(0xFFF4F1FB);
+const Color _kSearchBorder = Color(0xFFE4DFF0);
 
 // ------- RECENT SEARCHES PREFS KEY -------
 const String _kRecentSearchesKey = 'halo_recent_searches';
@@ -931,18 +933,9 @@ class _SearchPageState extends State<SearchPage>
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [kBackgroundColor, Color(0xFFE9E2F7)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SafeArea(
+      backgroundColor: kBackgroundColor,
+      body: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {
               int crossAxisCount = 2;
@@ -958,116 +951,26 @@ class _SearchPageState extends State<SearchPage>
                 },
                 behavior: HitTestBehavior.translucent,
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 20, vertical: 24),
+                  padding: const EdgeInsets.only(bottom: 24),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Back row
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.arrow_back,
-                                color: kSecondaryColor),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                            onPressed: () => popOrGoHome(
-                              context,
-                              onBackToHome: widget.onBackToHome,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Search',
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 18,
-                              color: kSecondaryColor,
-                            ),
-                          ),
-                        ],
+                      _SearchTopSection(
+                        onBackToHome: widget.onBackToHome,
+                        controller: _searchController,
+                        focusNode: _searchFocusNode,
+                        showClear: _query.isNotEmpty,
+                        onChanged: _onSearchChanged,
+                        onSubmitted: _onSearchSubmitted,
+                        onClear: _clearSearch,
                       ),
 
-                      const SizedBox(height: 20),
-
-                      // Hero heading
-                      Text(
-                        'Discover Your\nWellness Journey',
-                        style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 28,
-                          height: 1.2,
-                          letterSpacing: -0.3,
-                          color: const Color(0xFF1F1033),
-                        ),
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      Text(
-                        'Connect with expert trainers, nutritionists, and wellness professionals',
-                        style: GoogleFonts.poppins(
-                          color: Colors.grey.shade700,
-                          fontSize: 13,
-                          height: 1.5,
-                        ),
-                      ),
-
-                      const SizedBox(height: 22),
-
-                      // FIX #3 + #12: Search bar with clear button + onSubmitted
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(28),
-                          boxShadow: [
-                            BoxShadow(
-                              color: kSecondaryColor.withOpacity(0.10),
-                              blurRadius: 16,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: TextField(
-                          controller: _searchController,
-                          focusNode: _searchFocusNode,
-                          onChanged: _onSearchChanged,
-                          // FIX #12: keyboard search/done button triggers search
-                          onSubmitted: _onSearchSubmitted,
-                          textInputAction: TextInputAction.search,
-                          style: GoogleFonts.poppins(
-                              color: Colors.black87, fontSize: 14),
-                          decoration: InputDecoration(
-                            hintText:
-                            'Search by name, username, or expertise...',
-                            hintStyle: GoogleFonts.poppins(
-                                color: Colors.grey.shade500,
-                                fontSize: 14),
-                            prefixIcon: const Icon(Icons.search_rounded,
-                                color: kSecondaryColor),
-                            // FIX #3: Clear button
-                            suffixIcon: _query.isNotEmpty
-                                ? IconButton(
-                              icon: const Icon(Icons.close_rounded,
-                                  color: Colors.grey, size: 20),
-                              onPressed: _clearSearch,
-                            )
-                                : null,
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(
-                                vertical: 16, horizontal: 16),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(28),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 16),
-
-                      // FIX #9: Recent searches when focused + empty
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                      // Recent searches when focused + empty
                       if (_showRecents &&
                           _query.trim().isEmpty) ...[
                         _buildRecentSearches(),
@@ -1141,13 +1044,156 @@ class _SearchPageState extends State<SearchPage>
                       ),
 
                       const SizedBox(height: 24),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
               );
             },
           ),
-        ),
+      ),
+    );
+  }
+}
+
+// ─── Search header (matches Explore page theme) ─────────────────────────────
+
+class _SearchTopSection extends StatelessWidget {
+  const _SearchTopSection({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.onSubmitted,
+    required this.onClear,
+    required this.showClear,
+    this.onBackToHome,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<String> onSubmitted;
+  final VoidCallback onClear;
+  final bool showClear;
+  final VoidCallback? onBackToHome;
+
+  @override
+  Widget build(BuildContext context) {
+    final titleStyle = GoogleFonts.poppins(
+      fontSize: 22,
+      fontWeight: FontWeight.w600,
+      color: const Color(0xFF2A2540),
+      letterSpacing: -0.35,
+      height: 1.2,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 2, right: 16),
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: () => popOrGoHome(
+                    context,
+                    onBackToHome: onBackToHome,
+                  ),
+                  icon: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    size: 20,
+                    color: kSecondaryColor,
+                  ),
+                  tooltip: 'Back to Home',
+                  splashRadius: 22,
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Search', style: titleStyle),
+                      const SizedBox(height: 2),
+                      Text(
+                        'People, experts & topics',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                          color: const Color(0xFF9B95AB),
+                          letterSpacing: 0.15,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              onChanged: onChanged,
+              onSubmitted: onSubmitted,
+              textAlignVertical: TextAlignVertical.center,
+              keyboardAppearance: Brightness.light,
+              textInputAction: TextInputAction.search,
+              style: GoogleFonts.poppins(
+                color: const Color(0xFF2A2540),
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+              ),
+              cursorColor: kPrimaryColor,
+              decoration: InputDecoration(
+                hintText: 'Search by name, username, or expertise…',
+                hintStyle: GoogleFonts.poppins(
+                  color: const Color(0xFFA8A3B5),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                ),
+                prefixIcon: Icon(
+                  Icons.search_rounded,
+                  color: kPrimaryColor.withValues(alpha: 0.75),
+                  size: 21,
+                ),
+                suffixIcon: showClear
+                    ? IconButton(
+                        icon: Icon(
+                          Icons.close_rounded,
+                          size: 18,
+                          color: Colors.grey.shade500,
+                        ),
+                        onPressed: onClear,
+                      )
+                    : null,
+                filled: true,
+                fillColor: _kSearchSurface,
+                contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: _kSearchBorder.withValues(alpha: 0.9),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: kPrimaryColor.withValues(alpha: 0.55),
+                    width: 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

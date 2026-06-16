@@ -184,7 +184,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _searchPage  = SearchPage(onBackToHome: _goHomeTab);
-    _explorePage = const ExplorePage();
+    _explorePage = ExplorePage(onBackToHome: _goHomeTab);
     _notifPage   = NotificationPage(onBackToHome: _goHomeTab);
     _profilePage = _ProfileTab(onBackToHome: _goHomeTab);
     _scrollCtrl.addListener(_onScroll);
