@@ -37,12 +37,12 @@ class GuruActionRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(30),
                   ),
                   side: BorderSide(color: deepLavender),
-                  foregroundColor: deepLavender,
+                  foregroundColor: ProfileLayout.textPrimary,
                 ),
-                child: Text(
+                child: const Text(
                   'Edit Profile',
                   style: TextStyle(
-                    color: deepLavender,
+                    color: ProfileLayout.textPrimary,
                     fontWeight: FontWeight.w600,
                   ),
                 ),

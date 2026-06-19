@@ -38,10 +38,14 @@ class WellnessActionRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
               side: BorderSide(color: lavender),
+              foregroundColor: ProfileLayout.textPrimary,
             ),
             child: Text(
               'Edit Profile',
-              style: GoogleFonts.poppins(color: lavender, fontWeight: FontWeight.w600),
+              style: GoogleFonts.poppins(
+                color: ProfileLayout.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ),

@@ -16,6 +16,7 @@
 // 13. Consistent CachedNetworkImage avatar pattern throughout
 
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -36,8 +37,6 @@ const Color kPrimaryColor = Color(0xFFA58CE3);
 const Color kSecondaryColor = Color(0xFF5B3FA3);
 const Color kBackgroundColor = Color(0xFFF4F1FB);
 const Color kIgSecondaryText = Color(0xFF8E8E8E);
-const Color _kSearchSurface = Color(0xFFF4F1FB);
-const Color _kSearchBorder = Color(0xFFE4DFF0);
 
 // ------- RECENT SEARCHES PREFS KEY -------
 const String _kRecentSearchesKey = 'halo_recent_searches';
@@ -62,21 +61,27 @@ class SubcategorySpec {
 class WellnessCategory {
   final String name;
   final String emoji;
-  final String subtitle;
+  final String description;
+  final String badgeLabel;
   final Color backgroundColor;
   final Color accentColor;
   final List<SubcategorySpec> subcategorySpecs;
   final String? backgroundImage;
+  final int patternVariant;
 
   const WellnessCategory({
     required this.name,
     required this.emoji,
-    required this.subtitle,
+    required this.description,
+    required this.badgeLabel,
     required this.backgroundColor,
     required this.accentColor,
     required this.subcategorySpecs,
     this.backgroundImage,
+    this.patternVariant = 0,
   });
+
+  String get subtitle => badgeLabel;
 
   List<String> get subcategories =>
       subcategorySpecs.map((s) => s.displayName).toList();
@@ -86,10 +91,12 @@ const List<WellnessCategory> _allCategories = [
   WellnessCategory(
     name: 'Physical Fitness',
     emoji: '💪',
-    subtitle: '10 specializations',
+    description: 'Build strength, improve endurance and stay fit.',
+    badgeLabel: '10 specializations',
     backgroundColor: Color(0xFFE9E0FA),
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/physical_fitness.jpg',
+    patternVariant: 0,
     subcategorySpecs: [
       SubcategorySpec(displayName: 'Fitness', emoji: '🏋️', interestTerm: 'fitness', specializationTerm: 'General Fitness'),
       SubcategorySpec(displayName: 'Strength Training', emoji: '💪', specializationTerm: 'Strength Training'),
@@ -107,10 +114,12 @@ const List<WellnessCategory> _allCategories = [
   WellnessCategory(
     name: 'Nutrition & Diet',
     emoji: '🥗',
-    subtitle: '4 specializations',
+    description: 'Eat better, fuel your body and live healthier.',
+    badgeLabel: '4 specializations',
     backgroundColor: Color(0xFFF1E8FF),
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/nutrition_diet.jpg',
+    patternVariant: 1,
     subcategorySpecs: [
       SubcategorySpec(displayName: 'Nutrition', emoji: '🥗', interestTerm: 'nutrition', specializationTerm: 'Nutrition Planning'),
       SubcategorySpec(displayName: 'Weight Loss', emoji: '⚖️', specializationTerm: 'Weight Loss'),
@@ -122,10 +131,12 @@ const List<WellnessCategory> _allCategories = [
   WellnessCategory(
     name: 'Mind & Body Wellness',
     emoji: '🧘',
-    subtitle: '5 specializations',
+    description: 'Nourish your mind and achieve inner balance.',
+    badgeLabel: '5 specializations',
     backgroundColor: Color(0xFFF6F0FF),
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/mind_body.jpg',
+    patternVariant: 2,
     subcategorySpecs: [
       SubcategorySpec(displayName: 'Yoga', emoji: '🧘', interestTerm: 'yoga', specializationTerm: 'Yoga & Breathwork'),
       SubcategorySpec(displayName: 'Mental Health', emoji: '🧠', interestTerm: 'mental_health'),
@@ -138,10 +149,12 @@ const List<WellnessCategory> _allCategories = [
   WellnessCategory(
     name: 'Rehabilitation & Recovery',
     emoji: '🏥',
-    subtitle: '4 specializations',
+    description: 'Recover stronger and return to what you love.',
+    badgeLabel: '4 specializations',
     backgroundColor: Color(0xFFEDE4FF),
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/rehab_recovery.jpg',
+    patternVariant: 3,
     subcategorySpecs: [
       SubcategorySpec(displayName: 'Rehab & Recovery', emoji: '🏥', specializationTerm: 'Rehab & Recovery'),
       SubcategorySpec(displayName: 'Pain Management', emoji: '💆', specializationTerm: 'Pain Management'),
@@ -151,12 +164,14 @@ const List<WellnessCategory> _allCategories = [
   ),
 
   WellnessCategory(
-    name: 'Lifestyle & General',
+    name: 'Beauty & Self Care',
     emoji: '✨',
-    subtitle: '4 specializations',
+    description: 'Look good, feel confident and glow every day.',
+    badgeLabel: '6 specializations',
     backgroundColor: Color(0xFFF9F4FF),
     accentColor: kSecondaryColor,
     backgroundImage: 'assets/categories/lifestyle_wellness.jpg',
+    patternVariant: 4,
     subcategorySpecs: [
       SubcategorySpec(displayName: 'Productivity', emoji: '📈', interestTerm: 'productivity'),
       SubcategorySpec(displayName: 'Wellness Coach', emoji: '🌟', specializationTerm: 'Wellness Coach'),
@@ -166,12 +181,14 @@ const List<WellnessCategory> _allCategories = [
   ),
 
   WellnessCategory(
-    name: 'Other Interests',
+    name: 'Goals & Performance',
     emoji: '🎯',
-    subtitle: '4 specializations',
+    description: 'Set goals, stay focused and achieve more.',
+    badgeLabel: '8 specializations',
     backgroundColor: Color(0xFFE2D6FF),
     accentColor: kPrimaryColor,
     backgroundImage: 'assets/categories/goals.jpg',
+    patternVariant: 5,
     subcategorySpecs: [
       SubcategorySpec(displayName: 'Music', emoji: '🎵', interestTerm: 'music'),
       SubcategorySpec(displayName: 'Reading', emoji: '📚', interestTerm: 'reading'),
@@ -666,10 +683,11 @@ class _SearchPageState extends State<SearchPage>
     final qLower = q.toLowerCase();
     return _allCategories
         .where((c) =>
-    c.name.toLowerCase().contains(qLower) ||
-        c.subtitle.toLowerCase().contains(qLower) ||
-        c.subcategorySpecs
-            .any((s) => s.displayName.toLowerCase().contains(qLower)))
+            c.name.toLowerCase().contains(qLower) ||
+            c.description.toLowerCase().contains(qLower) ||
+            c.subtitle.toLowerCase().contains(qLower) ||
+            c.subcategorySpecs
+                .any((s) => s.displayName.toLowerCase().contains(qLower)))
         .toList();
   }
 
@@ -936,12 +954,9 @@ class _SearchPageState extends State<SearchPage>
     return Scaffold(
       backgroundColor: kBackgroundColor,
       body: SafeArea(
+        top: false,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              int crossAxisCount = 2;
-              if (constraints.maxWidth >= 900) crossAxisCount = 3;
-              if (constraints.maxWidth >= 1200) crossAxisCount = 4;
-
               final categories = _filteredCategories;
 
               return GestureDetector(
@@ -959,11 +974,11 @@ class _SearchPageState extends State<SearchPage>
                         onBackToHome: widget.onBackToHome,
                         controller: _searchController,
                         focusNode: _searchFocusNode,
-                        showClear: _query.isNotEmpty,
                         onChanged: _onSearchChanged,
                         onSubmitted: _onSearchSubmitted,
                         onClear: _clearSearch,
                       ),
+                      const SizedBox(height: 12),
 
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -988,32 +1003,18 @@ class _SearchPageState extends State<SearchPage>
                         const SizedBox(height: 14),
                       ],
 
-                      // Category header
-                      Row(
-                        mainAxisAlignment:
-                        MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            _query.trim().isEmpty
-                                ? 'Browse by category'
-                                : 'Categories',
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                              color: const Color(0xFF1F1033),
-                            ),
-                          ),
-                          Text(
-                            '${categories.length} categories',
-                            style: GoogleFonts.poppins(
-                              color: Colors.grey.shade600,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
+                      // Category browse section
+                      _BrowseCategoryHeader(
+                        title: _query.trim().isEmpty
+                            ? 'Browse by category'
+                            : 'Categories',
+                        subtitle: _query.trim().isEmpty
+                            ? 'Discover content tailored to your goals'
+                            : 'Filtered by your search',
+                        categoryCount: categories.length,
                       ),
 
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 16),
 
                       GridView.builder(
                         key: ValueKey(
@@ -1022,11 +1023,11 @@ class _SearchPageState extends State<SearchPage>
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: categories.length,
                         gridDelegate:
-                        SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: crossAxisCount,
-                          crossAxisSpacing: 14,
-                          mainAxisSpacing: 14,
-                          childAspectRatio: 0.92,
+                            SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                          mainAxisExtent: 204,
                         ),
                         itemBuilder: (context, index) {
                           final category = categories[index];
@@ -1058,7 +1059,7 @@ class _SearchPageState extends State<SearchPage>
   }
 }
 
-// ─── Search header (matches Explore page theme) ─────────────────────────────
+// ─── Search header (matches Explore page) ───────────────────────────────────
 
 class _SearchTopSection extends StatelessWidget {
   const _SearchTopSection({
@@ -1067,7 +1068,6 @@ class _SearchTopSection extends StatelessWidget {
     required this.onChanged,
     required this.onSubmitted,
     required this.onClear,
-    required this.showClear,
     this.onBackToHome,
   });
 
@@ -1076,124 +1076,295 @@ class _SearchTopSection extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final ValueChanged<String> onSubmitted;
   final VoidCallback onClear;
-  final bool showClear;
   final VoidCallback? onBackToHome;
 
   @override
   Widget build(BuildContext context) {
-    final titleStyle = GoogleFonts.poppins(
-      fontSize: 22,
-      fontWeight: FontWeight.w600,
-      color: const Color(0xFF2A2540),
-      letterSpacing: -0.35,
-      height: 1.2,
-    );
+    final topInset = MediaQuery.paddingOf(context).top;
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 4, bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 2, right: 16),
-            child: Row(
-              children: [
-                IconButton(
-                  onPressed: () => popOrGoHome(
-                    context,
-                    onBackToHome: onBackToHome,
-                  ),
-                  icon: const Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    size: 20,
-                    color: kSecondaryColor,
-                  ),
-                  tooltip: 'Back to Home',
-                  splashRadius: 22,
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Search', style: titleStyle),
-                      const SizedBox(height: 2),
-                      Text(
-                        'People, experts & topics',
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w400,
-                          color: const Color(0xFF9B95AB),
-                          letterSpacing: 0.15,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              onChanged: onChanged,
-              onSubmitted: onSubmitted,
-              textAlignVertical: TextAlignVertical.center,
-              keyboardAppearance: Brightness.light,
-              textInputAction: TextInputAction.search,
-              style: GoogleFonts.poppins(
-                color: const Color(0xFF2A2540),
-                fontSize: 14,
-                fontWeight: FontWeight.w400,
-              ),
-              cursorColor: kPrimaryColor,
-              decoration: InputDecoration(
-                hintText: 'Search by name, username, or expertise…',
-                hintStyle: GoogleFonts.poppins(
-                  color: const Color(0xFFA8A3B5),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                ),
-                prefixIcon: Icon(
-                  Icons.search_rounded,
-                  color: kPrimaryColor.withValues(alpha: 0.75),
-                  size: 21,
-                ),
-                suffixIcon: showClear
-                    ? IconButton(
-                        icon: Icon(
-                          Icons.close_rounded,
-                          size: 18,
-                          color: Colors.grey.shade500,
-                        ),
-                        onPressed: onClear,
-                      )
-                    : null,
-                filled: true,
-                fillColor: _kSearchSurface,
-                contentPadding: const EdgeInsets.symmetric(vertical: 13),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(
-                    color: _kSearchBorder.withValues(alpha: 0.9),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(
-                    color: kPrimaryColor.withValues(alpha: 0.55),
-                    width: 1,
-                  ),
-                ),
-              ),
-            ),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(28),
+          bottomRight: Radius.circular(28),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: kSecondaryColor.withValues(alpha: 0.22),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+            spreadRadius: -2,
           ),
         ],
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(28),
+          bottomRight: Radius.circular(28),
+        ),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                Color(0xFF4A3488),
+                Color(0xFF5B3FA3),
+                Color(0xFF7A5FC8),
+              ],
+              stops: [0.0, 0.5, 1.0],
+            ),
+          ),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _SearchHeaderWavePainter(),
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(16, topInset + 8, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _SearchGlassIconButton(
+                          icon: Icons.arrow_back_ios_new_rounded,
+                          onTap: () => popOrGoHome(
+                            context,
+                            onBackToHome: onBackToHome,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Search',
+                          style: GoogleFonts.poppins(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                            letterSpacing: -0.4,
+                            height: 1,
+                          ),
+                        ),
+                        const Spacer(),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    _SearchGlassSearchField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      onChanged: onChanged,
+                      onSubmitted: onSubmitted,
+                      onClear: onClear,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchHeaderWavePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final wavePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.06)
+      ..style = PaintingStyle.fill;
+
+    final wave = Path()
+      ..moveTo(size.width * 0.55, 0)
+      ..quadraticBezierTo(
+        size.width * 0.72,
+        size.height * 0.35,
+        size.width,
+        size.height * 0.2,
+      )
+      ..lineTo(size.width, 0)
+      ..close();
+    canvas.drawPath(wave, wavePaint);
+
+    final dotPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.14);
+    const cols = 3;
+    const rows = 4;
+    const spacing = 7.0;
+    final gridLeft = size.width - 28;
+    const gridTop = 14.0;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        canvas.drawCircle(
+          Offset(gridLeft + c * spacing, gridTop + r * spacing),
+          1.4,
+          dotPaint,
+        );
+      }
+    }
+
+    canvas.drawCircle(
+      Offset(size.width * 0.78, size.height * 0.55),
+      size.width * 0.22,
+      Paint()..color = Colors.white.withValues(alpha: 0.04),
+    );
+
+    _drawSparkle(canvas, Offset(18, size.height * 0.22), 0.35);
+    _drawSparkle(canvas, Offset(42, size.height * 0.38), 0.25);
+    _drawSparkle(canvas, Offset(size.width - 36, size.height * 0.18), 0.3);
+  }
+
+  void _drawSparkle(Canvas canvas, Offset center, double scale) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    final arm = 4.0 * scale;
+    canvas.drawLine(
+      Offset(center.dx - arm, center.dy),
+      Offset(center.dx + arm, center.dy),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(center.dx, center.dy - arm),
+      Offset(center.dx, center.dy + arm),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _SearchGlassIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _SearchGlassIconButton({
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.18),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.32),
+                ),
+              ),
+              child: Icon(icon, color: Colors.white, size: 17),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchGlassSearchField extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<String> onSubmitted;
+  final VoidCallback onClear;
+
+  const _SearchGlassSearchField({
+    required this.controller,
+    required this.focusNode,
+    required this.onChanged,
+    required this.onSubmitted,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: TextField(
+          controller: controller,
+          focusNode: focusNode,
+          onChanged: onChanged,
+          onSubmitted: onSubmitted,
+          textAlignVertical: TextAlignVertical.center,
+          keyboardAppearance: Brightness.dark,
+          textInputAction: TextInputAction.search,
+          style: GoogleFonts.poppins(
+            color: Colors.white,
+            fontSize: 14.5,
+            fontWeight: FontWeight.w400,
+          ),
+          cursorColor: Colors.white,
+          decoration: InputDecoration(
+            hintText: 'Search by name, username, or expertise…',
+            hintStyle: GoogleFonts.poppins(
+              color: Colors.white.withValues(alpha: 0.72),
+              fontSize: 14,
+              fontWeight: FontWeight.w400,
+            ),
+            prefixIcon: Icon(
+              Icons.search_rounded,
+              color: Colors.white.withValues(alpha: 0.9),
+              size: 22,
+            ),
+            suffixIcon: ListenableBuilder(
+              listenable: controller,
+              builder: (_, __) {
+                if (controller.text.isNotEmpty) {
+                  return IconButton(
+                    icon: Icon(
+                      Icons.close_rounded,
+                      color: Colors.white.withValues(alpha: 0.85),
+                      size: 20,
+                    ),
+                    onPressed: onClear,
+                  );
+                }
+                return Icon(
+                  Icons.tune_rounded,
+                  color: Colors.white.withValues(alpha: 0.85),
+                  size: 22,
+                );
+              },
+            ),
+            filled: true,
+            fillColor: Colors.white.withValues(alpha: 0.14),
+            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(28),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(28),
+              borderSide: BorderSide(
+                color: Colors.white.withValues(alpha: 0.32),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(28),
+              borderSide: BorderSide(
+                color: Colors.white.withValues(alpha: 0.55),
+                width: 1.2,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1531,6 +1702,98 @@ class _ErrorCard extends StatelessWidget {
 }
 
 // ======================================================================
+// BROWSE CATEGORY HEADER
+// ======================================================================
+
+class _BrowseCategoryHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final int categoryCount;
+
+  const _BrowseCategoryHeader({
+    required this.title,
+    required this.subtitle,
+    required this.categoryCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.auto_awesome_rounded,
+              size: 18,
+              color: kSecondaryColor.withValues(alpha: 0.9),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 20,
+                  color: const Color(0xFF1A1A40),
+                  letterSpacing: -0.35,
+                  height: 1.15,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                subtitle,
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400,
+                  color: const Color(0xFF8B84A0),
+                  height: 1.35,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F0FF),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.grid_view_rounded,
+                    size: 13,
+                    color: kSecondaryColor.withValues(alpha: 0.9),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    '$categoryCount categories',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF7B61FF),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ======================================================================
 // CATEGORY CARD
 // ======================================================================
 
@@ -1538,133 +1801,264 @@ class _CategoryCard extends StatefulWidget {
   final WellnessCategory category;
   final VoidCallback onTap;
 
-  const _CategoryCard(
-      {Key? key, required this.category, required this.onTap})
-      : super(key: key);
+  const _CategoryCard({
+    super.key,
+    required this.category,
+    required this.onTap,
+  });
 
   @override
   State<_CategoryCard> createState() => _CategoryCardState();
 }
 
 class _CategoryCardState extends State<_CategoryCard> {
-  bool _isHovered = false;
-  bool _isPressed = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
-    final isTouchDevice =
-        Theme.of(context).platform == TargetPlatform.android ||
-            Theme.of(context).platform == TargetPlatform.iOS;
-    final active =
-    isTouchDevice ? _isPressed : (_isHovered || _isPressed);
+    final category = widget.category;
 
-    final content = AnimatedScale(
-      scale: active ? 1.03 : 1.0,
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOut,
-        decoration: BoxDecoration(
-          color: widget.category.backgroundColor,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              blurRadius: active ? 24 : 10,
-              spreadRadius: active ? -4 : -6,
-              offset: Offset(0, active ? 16 : 8),
-              color:
-              Colors.black.withOpacity(active ? 0.16 : 0.08),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (widget.category.backgroundImage != null)
-                Image.asset(
-                  widget.category.backgroundImage!,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                  const SizedBox.shrink(),
+    return Semantics(
+      button: true,
+      label: '${category.name}, ${category.subtitle}',
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _pressed ? 0.98 : 1.0,
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOut,
+          child: Container(
+            height: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: const Color(0xFFEDE9F5)),
+              boxShadow: [
+                BoxShadow(
+                  color: kSecondaryColor.withValues(alpha: 0.08),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                  spreadRadius: -6,
                 ),
-              Container(
-                  color: Colors.black.withOpacity(0.10)),
-              Material(
-                type: MaterialType.transparency,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(24),
-                  onTap: widget.onTap,
-                  onTapDown: (_) =>
-                      setState(() => _isPressed = true),
-                  onTapCancel: () =>
-                      setState(() => _isPressed = false),
-                  onTapUp: (_) =>
-                      setState(() => _isPressed = false),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  CustomPaint(
+                    painter: _CategoryCardPatternPainter(
+                      variant: category.patternVariant,
+                      accent: category.accentColor,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(13, 13, 13, 11),
                     child: Column(
-                      crossAxisAlignment:
-                      CrossAxisAlignment.start,
-                      mainAxisAlignment:
-                      MainAxisAlignment.spaceBetween,
-                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(widget.category.emoji,
-                            style:
-                            const TextStyle(fontSize: 26)),
-                        const SizedBox(height: 6),
-                        Flexible(
-                          child: Text(
-                            widget.category.name,
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: const Color(0xFF1F1033),
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                category.accentColor.withValues(alpha: 0.15),
+                                category.accentColor.withValues(alpha: 0.32),
+                              ],
                             ),
-                            maxLines: 2,
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            category.emoji,
+                            style: const TextStyle(fontSize: 22),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          category.name,
+                          style: GoogleFonts.poppins(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF1A1A40),
+                            height: 1.2,
+                            letterSpacing: -0.15,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 5),
+                        Expanded(
+                          child: Text(
+                            category.description,
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w400,
+                              color: const Color(0xFF8B84A0),
+                              height: 1.35,
+                            ),
+                            maxLines: 3,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          widget.category.subtitle,
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            color: Colors.grey.shade700,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF0F0FF),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Text(
+                                  category.badgeLabel,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: const Color(0xFF7B61FF),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                                border: Border.all(
+                                  color: const Color(0xFFE8E4F0),
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.arrow_forward_rounded,
+                                size: 15,
+                                color: kSecondaryColor.withValues(alpha: 0.9),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
     );
-
-    final card = isTouchDevice
-        ? content
-        : MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      cursor: SystemMouseCursors.click,
-      child: content,
-    );
-
-    return Semantics(
-      button: true,
-      label:
-      '${widget.category.name}, ${widget.category.subtitle}',
-      child: card,
-    );
   }
+}
+
+class _CategoryCardPatternPainter extends CustomPainter {
+  final int variant;
+  final Color accent;
+
+  const _CategoryCardPatternPainter({
+    required this.variant,
+    required this.accent,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = accent.withValues(alpha: 0.07)
+      ..style = PaintingStyle.fill;
+
+    switch (variant % 6) {
+      case 0:
+        final path = Path()
+          ..moveTo(size.width * 0.55, 0)
+          ..quadraticBezierTo(
+            size.width * 0.95,
+            size.height * 0.18,
+            size.width,
+            size.height * 0.42,
+          )
+          ..lineTo(size.width, 0)
+          ..close();
+        canvas.drawPath(path, paint);
+      case 1:
+        final dot = Paint()..color = accent.withValues(alpha: 0.1);
+        for (var i = 0; i < 12; i++) {
+          canvas.drawCircle(
+            Offset(size.width - 18 - (i % 3) * 8.0, 16 + (i ~/ 3) * 8.0),
+            2,
+            dot,
+          );
+        }
+      case 2:
+        canvas.drawCircle(
+          Offset(size.width - 24, 28),
+          22,
+          Paint()..color = accent.withValues(alpha: 0.06),
+        );
+      case 3:
+        final wave = Path()
+          ..moveTo(size.width * 0.45, 0)
+          ..cubicTo(
+            size.width * 0.7,
+            size.height * 0.12,
+            size.width * 0.82,
+            size.height * 0.28,
+            size.width,
+            size.height * 0.18,
+          )
+          ..lineTo(size.width, 0)
+          ..close();
+        canvas.drawPath(wave, paint);
+      case 4:
+        canvas.drawCircle(
+          Offset(size.width - 20, 22),
+          14,
+          Paint()..color = accent.withValues(alpha: 0.08),
+        );
+        canvas.drawCircle(
+          Offset(size.width - 36, 34),
+          8,
+          Paint()..color = accent.withValues(alpha: 0.05),
+        );
+      case 5:
+        final star = Paint()
+          ..color = accent.withValues(alpha: 0.09)
+          ..strokeWidth = 1.2
+          ..strokeCap = StrokeCap.round;
+        for (final offset in [
+          Offset(size.width - 22, 18),
+          Offset(size.width - 38, 30),
+        ]) {
+          canvas.drawLine(
+            Offset(offset.dx - 4, offset.dy),
+            Offset(offset.dx + 4, offset.dy),
+            star,
+          );
+          canvas.drawLine(
+            Offset(offset.dx, offset.dy - 4),
+            Offset(offset.dx, offset.dy + 4),
+            star,
+          );
+        }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CategoryCardPatternPainter oldDelegate) =>
+      oldDelegate.variant != variant || oldDelegate.accent != accent;
 }
 
 // ======================================================================
