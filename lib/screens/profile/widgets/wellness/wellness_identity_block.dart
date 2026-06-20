@@ -9,6 +9,8 @@ class WellnessIdentityBlock extends StatelessWidget {
   final String username;
   final String category;
   final String location;
+  final double rating;
+  final int reviewCount;
   final bool isOwnProfile;
   final VoidCallback onEditCategory;
 
@@ -19,6 +21,8 @@ class WellnessIdentityBlock extends StatelessWidget {
     required this.username,
     required this.category,
     required this.location,
+    this.rating = 0,
+    this.reviewCount = 0,
     required this.isOwnProfile,
     required this.onEditCategory,
   });
@@ -49,6 +53,32 @@ class WellnessIdentityBlock extends StatelessWidget {
               ),
             ),
           const SizedBox(height: 6),
+          if (rating > 0)
+            Row(
+              children: [
+                Icon(Icons.star_rounded, size: 16, color: Colors.amber[700]),
+                const SizedBox(width: 4),
+                Text(
+                  rating.toStringAsFixed(1),
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: ProfileLayout.textPrimary,
+                  ),
+                ),
+                if (reviewCount > 0) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    '($reviewCount reviews)',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: ProfileLayout.textSecondary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          if (rating > 0) const SizedBox(height: 6),
           _CategoryChip(
             category: category,
             isOwnProfile: isOwnProfile,

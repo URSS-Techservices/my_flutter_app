@@ -6,18 +6,24 @@ import 'package:halo/screens/profile/widgets/common/profile_empty_state_rich.dar
 
 class AspirantFitnessGoalsSection extends StatelessWidget {
   final List<FitnessGoalItem> goals;
+  final bool isOwnProfile;
   final VoidCallback onAddGoal;
   final ValueChanged<FitnessGoalItem> onEditGoal;
   final ValueChanged<FitnessGoalItem> onDeleteGoal;
+  final void Function(FitnessGoalItem goal)? onFindCoaches;
+  final void Function(FitnessGoalItem goal)? onFindWellness;
   final Color accentColor;
   final Color accentDarkColor;
 
   const AspirantFitnessGoalsSection({
     super.key,
     required this.goals,
+    this.isOwnProfile = false,
     required this.onAddGoal,
     required this.onEditGoal,
     required this.onDeleteGoal,
+    this.onFindCoaches,
+    this.onFindWellness,
     required this.accentColor,
     required this.accentDarkColor,
   });
@@ -67,10 +73,11 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
                     ),
                   ],
                 ),
-                IconButton(
-                  icon: Icon(Icons.add_circle_outline, color: accentColor),
-                  onPressed: onAddGoal,
-                ),
+                if (isOwnProfile)
+                  IconButton(
+                    icon: Icon(Icons.add_circle_outline, color: accentColor),
+                    onPressed: onAddGoal,
+                  ),
               ],
             ),
             const SizedBox(height: 16),
@@ -78,8 +85,8 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
               ProfileEmptyStateRich(
                 text: 'No goals set yet',
                 icon: Icons.flag_outlined,
-                actionLabel: 'Set Your First Goal',
-                onAction: onAddGoal,
+                actionLabel: isOwnProfile ? 'Set Your First Goal' : null,
+                onAction: isOwnProfile ? onAddGoal : null,
                 actionBackgroundColor: accentColor,
                 actionForegroundColor: Colors.white,
               )
@@ -127,25 +134,43 @@ class AspirantFitnessGoalsSection extends StatelessWidget {
                                 valueColor:
                                     AlwaysStoppedAnimation<Color>(accentColor),
                               ),
+                              if (onFindCoaches != null || onFindWellness != null) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    if (onFindCoaches != null)
+                                      TextButton(
+                                        onPressed: () => onFindCoaches!(goal),
+                                        child: const Text('Find coaches'),
+                                      ),
+                                    if (onFindWellness != null)
+                                      TextButton(
+                                        onPressed: () => onFindWellness!(goal),
+                                        child: const Text('Nearby wellness'),
+                                      ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),
-                        PopupMenuButton<String>(
-                          icon: Icon(Icons.more_vert,
-                              size: 18, color: Colors.grey[600]),
-                          onSelected: (value) {
-                            if (value == 'edit') {
-                              onEditGoal(goal);
-                            } else if (value == 'delete') {
-                              onDeleteGoal(goal);
-                            }
-                          },
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(
-                                value: 'delete', child: Text('Delete')),
-                          ],
-                        ),
+                        if (isOwnProfile)
+                          PopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert,
+                                size: 18, color: Colors.grey[600]),
+                            onSelected: (value) {
+                              if (value == 'edit') {
+                                onEditGoal(goal);
+                              } else if (value == 'delete') {
+                                onDeleteGoal(goal);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(value: 'edit', child: Text('Edit')),
+                              PopupMenuItem(
+                                  value: 'delete', child: Text('Delete')),
+                            ],
+                          ),
                       ],
                     ),
                   ),

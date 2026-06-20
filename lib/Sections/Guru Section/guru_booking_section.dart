@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_availability_preview.dart';
+import 'package:halo/screens/profile/pages/booking_inbox_page.dart';
+import 'package:halo/services/booking_requests_service.dart';
 
 class GuruBookingSection extends StatelessWidget {
   final String guruid;
@@ -48,26 +51,27 @@ class GuruBookingSection extends StatelessWidget {
                   color: Colors.black87,
                 ),
               ),
-              if (isOwnProfile)
+              if (isOwnProfile && onManageSlots != null)
                 TextButton(
-                  onPressed: onManageSlots ?? () {
-                    // Default: show dialog
-                    showDialog(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Manage Booking Slots'),
-                        content: const Text('Booking management feature coming soon!'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx),
-                            child: const Text('OK'),
-                          ),
-                        ],
+                  onPressed: onManageSlots,
+                  child: const Text('Manage Slots'),
+                ),
+              if (isOwnProfile) ...[
+                const SizedBox(width: 4),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => BookingInboxPage(
+                          providerId: guruid,
+                          providerKind: BookingProviderKind.guru,
+                        ),
                       ),
                     );
                   },
-                  child: const Text('Manage Slots'),
+                  child: const Text('Inbox'),
                 ),
+              ],
             ],
           ),
           const SizedBox(height: 8),
@@ -106,6 +110,8 @@ class GuruBookingSection extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 10),
+                if (!isOwnProfile) GuruAvailabilityPreview(guruId: guruid),
+                if (!isOwnProfile) const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
@@ -151,44 +157,12 @@ class GuruBookingSection extends StatelessWidget {
           const SizedBox(height: 12),
           if (isOwnProfile) ...[
             Text(
-              'Upcoming Sessions',
+              'Quick tip: Open Inbox to accept or decline session requests.',
               style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-                color: Colors.black87,
+                fontSize: 12,
+                color: Colors.black54,
               ),
             ),
-            const SizedBox(height: 6),
-            if (upcomingSessions.isEmpty)
-              Text(
-                'No upcoming sessions yet.',
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: Colors.black54,
-                ),
-              )
-            else
-              ...upcomingSessions.take(3).map((s) => _sessionTile(s)),
-            const SizedBox(height: 10),
-            Text(
-              'Past Sessions',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 6),
-            if (pastSessions.isEmpty)
-              Text(
-                'No past sessions yet.',
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: Colors.black54,
-                ),
-              )
-            else
-              ...pastSessions.take(3).map((s) => _sessionTile(s)),
           ],
         ],
       ),
@@ -208,46 +182,6 @@ class GuruBookingSection extends StatelessWidget {
           fontSize: 11,
           color: Colors.black87,
         ),
-      ),
-    );
-  }
-
-  Widget _sessionTile(Map<String, dynamic> s) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5F5F5),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.event, size: 18, color: Colors.black87),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  s['title']?.toString() ?? 'Session',
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  s['time']?.toString() ?? '',
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    color: Colors.black54,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

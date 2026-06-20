@@ -20,6 +20,7 @@ import 'app_theme_mode.dart';
 import 'package:flutter/services.dart';
 import 'package:halo/services/app_logger.dart';
 import 'package:halo/services/video_memory_bridge.dart';
+import 'package:halo/screens/profile/core/profile_deep_link.dart';
 
 // ----------------- HALO THEME CONSTANTS -----------------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -186,6 +187,7 @@ class MyApp extends StatelessWidget {
         ),
       ),
       home: const AuthGate(), // LogoScreen should later navigate to LoginPage()
+      onGenerateRoute: ProfileDeepLinkRoute.onGenerateRoute,
     ),
     );
   }

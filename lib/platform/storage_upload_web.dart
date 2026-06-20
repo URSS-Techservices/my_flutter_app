@@ -4,7 +4,7 @@ import 'package:halo/platform/xfile_media.dart';
 import 'package:image_picker/image_picker.dart';
 
 /// Web Firebase Storage upload — [putData] with bytes from [XFile]/[PickedMedia].
-Future<UploadTask> uploadReferenceXFile(
+Future<void> uploadReferenceXFile(
   Reference ref,
   XFile file, {
   SettableMetadata? metadata,
@@ -14,10 +14,11 @@ Future<UploadTask> uploadReferenceXFile(
       SettableMetadata(
         contentType: file.mimeType,
       );
-  return ref.putData(bytes, meta);
+  final task = ref.putData(bytes, meta);
+  await task;
 }
 
-Future<UploadTask> uploadReferencePicked(
+Future<void> uploadReferencePicked(
   Reference ref,
   PickedMedia media, {
   SettableMetadata? metadata,
@@ -26,7 +27,8 @@ Future<UploadTask> uploadReferencePicked(
       SettableMetadata(
         contentType: media.mimeType,
       );
-  return ref.putData(media.bytes, meta);
+  final task = ref.putData(media.bytes, meta);
+  await task;
 }
 
 Future<String> uploadReferenceXFileAndGetUrl(
@@ -34,8 +36,7 @@ Future<String> uploadReferenceXFileAndGetUrl(
   XFile file, {
   SettableMetadata? metadata,
 }) async {
-  final task = await uploadReferenceXFile(ref, file, metadata: metadata);
-  await task;
+  await uploadReferenceXFile(ref, file, metadata: metadata);
   return ref.getDownloadURL();
 }
 
@@ -44,7 +45,6 @@ Future<String> uploadReferencePickedAndGetUrl(
   PickedMedia media, {
   SettableMetadata? metadata,
 }) async {
-  final task = await uploadReferencePicked(ref, media, metadata: metadata);
-  await task;
+  await uploadReferencePicked(ref, media, metadata: metadata);
   return ref.getDownloadURL();
 }

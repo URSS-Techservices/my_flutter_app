@@ -7,6 +7,7 @@ class GuruActionRow extends StatelessWidget {
   final bool isFollowing;
   final VoidCallback onToggleFollow;
   final VoidCallback onMessage;
+  final VoidCallback onBook;
   final VoidCallback onEditProfile;
   final Color lavender;
   final Color deepLavender;
@@ -17,6 +18,7 @@ class GuruActionRow extends StatelessWidget {
     required this.isFollowing,
     required this.onToggleFollow,
     required this.onMessage,
+    required this.onBook,
     required this.onEditProfile,
     required this.lavender,
     required this.deepLavender,
@@ -57,21 +59,39 @@ class GuruActionRow extends StatelessWidget {
                     onPressed: onToggleFollow,
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: OutlinedButton.icon(
+                  child: OutlinedButton(
                     onPressed: onMessage,
-                    icon: Icon(Icons.message_outlined, color: deepLavender),
-                    label: Text(
-                      'Message',
-                      style: TextStyle(color: ProfileLayout.textPrimary),
-                    ),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
                       ),
                       side: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    child: Text(
+                      'Message',
+                      style: TextStyle(color: ProfileLayout.textPrimary),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: onBook,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: deepLavender,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                      elevation: 2,
+                    ),
+                    child: const Text(
+                      'Book',
+                      style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),

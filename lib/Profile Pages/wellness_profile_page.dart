@@ -55,7 +55,23 @@ import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/screens/profile/widgets/common/profile_avatar_hero_shell.dart';
 import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
 import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
+import 'package:halo/screens/profile/configs/wellness_profile_config.dart';
+import 'package:halo/screens/profile/core/profile_field_utils.dart';
+import 'package:halo/screens/profile/core/profile_modules.dart';
+import 'package:halo/screens/profile/core/profile_type.dart';
+import 'package:halo/screens/profile/pages/profile_modules_editor_page.dart';
+import 'package:halo/screens/profile/core/profile_type.dart';
+import 'package:halo/screens/profile/widgets/common/profile_completeness_meter.dart';
+import 'package:halo/screens/profile/widgets/common/profile_highlights_row.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:halo/utils/shell_back.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_profile_tab_content.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_staff_section.dart';
+import 'package:halo/screens/profile/widgets/wellness/wellness_events_section.dart';
+import 'package:halo/screens/profile/pages/wellness_staff_editor_page.dart';
+import 'package:halo/screens/profile/pages/wellness_events_editor_page.dart';
+import 'package:halo/services/wellness_facility_service.dart';
+import 'package:halo/screens/profile/widgets/common/profile_save_button.dart';
 
 // ===================================================================
 //  WELLNESS PROFILE PAGE
@@ -110,13 +126,23 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
   // -------------------- WELLNESS SPECIFIC DATA --------------------
   List<String> _services = []; // Strength Training, Cardio, etc.
-  Map<String, String> _availability = {}; // Mon-Sat: 6am-10pm, etc.
+  Map<String, String> _availability = {}; // Mon-Sat / Sun hours
+  Map<String, dynamic>? _facilityHours;
   Map<String, String> _socialLinks = {}; // Instagram, YouTube, etc.
   List<Map<String, dynamic>> _products = [];
   List<Map<String, dynamic>> _staff = []; // Featured staff/trainers
   List<Map<String, dynamic>> _events = []; // Fitness events
+  final WellnessFacilityService _facilityService = WellnessFacilityService();
   List<Map<String, dynamic>> _recentPosts = [];
   List<Map<String, dynamic>> _reviews = [];
+  List<Map<String, dynamic>> _galleryImages = [];
+  List<Map<String, dynamic>> _membershipPlans = [];
+  List<Map<String, dynamic>> _specialOffers = [];
+  List<Map<String, dynamic>> _awards = [];
+  List<String> _amenities = [];
+  List<String> _featuredGuruIds = [];
+  ProfileModules _profileModules = ProfileModules.defaultEnabled();
+  Map<String, dynamic> _userDocSnapshot = {};
 
   // -------------------- UI CONSTANTS (wellness-only) --------------------
   static const Color _cardColor = Color(0xFFFFFFFF);
@@ -168,7 +194,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           _tabController.animateTo(1);
         }
 
-        _businessName = data['name'] ?? data['business_name'] ?? '';
+        _businessName = ProfileFieldUtils.displayName(data);
+        _userDocSnapshot = Map<String, dynamic>.from(data);
+        _profileModules = ProfileModules.fromMap(
+          data['profileModules'] as Map<String, dynamic>?,
+        );
         _username = data['username'] ?? '';
         _bio = data['bio'] ?? '';
         _category = data['category'] ?? data['wellness_category'] ?? '';
@@ -185,12 +215,21 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         _isOnline = data['isOnline'] ?? false;
         _isPrivate = (data['isPrivate'] ?? false) as bool;
 
-        // Services
-        _services = List<String>.from(data['services'] ?? []);
+        // Services — prefer business subcollection titles, fallback to doc array
+        await _loadBusinessServices();
+        if (_services.isEmpty) {
+          _services = List<String>.from(data['services'] ?? []);
+        }
+
+        _amenities = List<String>.from(data['amenities'] ?? []);
+        _featuredGuruIds = List<String>.from(data['featuredGuruIds'] ?? []);
 
         // Availability
         if (data['availability'] is Map) {
           _availability = Map<String, String>.from(data['availability']);
+        }
+        if (data['facilityHours'] is Map) {
+          _facilityHours = Map<String, dynamic>.from(data['facilityHours'] as Map);
         }
 
         // Social Links
@@ -206,6 +245,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
         // Load events
         await _loadEvents();
+        await _loadGallery();
+        await _loadMembershipPlans();
+        await _loadSpecialOffers();
+        await _loadAwards();
 
         await ProfileRefreshHelpers.runInOrder([
           _loadPosts,
@@ -253,20 +296,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
   Future<void> _loadStaff() async {
     try {
-      final snap = await _firestore
-          .collection('users')
-          .doc(widget.profileUserId)
-          .collection('staff')
-          .limit(10)
-          .get();
-
-      _staff = snap.docs.map((doc) {
-        final data = doc.data();
-        return {
-          'id': doc.id,
-          ...data,
-        };
-      }).toList();
+      _staff = await _facilityService.loadStaff(
+        wellnessId: widget.profileUserId,
+        userData: _userDocSnapshot,
+      );
     } catch (e) {
       debugPrint('Error loading staff: $e');
     }
@@ -274,22 +307,87 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
   Future<void> _loadEvents() async {
     try {
+      _events = await _facilityService.loadEvents(
+        wellnessId: widget.profileUserId,
+        userData: _userDocSnapshot,
+      );
+    } catch (e) {
+      debugPrint('Error loading events: $e');
+    }
+  }
+
+  Future<void> _loadBusinessServices() async {
+    try {
       final snap = await _firestore
           .collection('users')
           .doc(widget.profileUserId)
-          .collection('events')
-          .limit(5)
+          .collection('services')
+          .limit(20)
           .get();
-
-      _events = snap.docs.map((doc) {
-        final data = doc.data();
-        return {
-          'id': doc.id,
-          ...data,
-        };
-      }).toList();
+      if (snap.docs.isNotEmpty) {
+        _services = snap.docs
+            .map((d) => (d.data()['title'] ?? d.data()['name'] ?? '').toString())
+            .where((s) => s.isNotEmpty)
+            .toList();
+      }
     } catch (e) {
-      debugPrint('Error loading events: $e');
+      debugPrint('Error loading business services: $e');
+    }
+  }
+
+  Future<void> _loadGallery() async {
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(widget.profileUserId)
+          .collection('gallery')
+          .limit(12)
+          .get();
+      _galleryImages = snap.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
+    } catch (e) {
+      debugPrint('Error loading gallery: $e');
+    }
+  }
+
+  Future<void> _loadMembershipPlans() async {
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(widget.profileUserId)
+          .collection('membershipPlans')
+          .limit(10)
+          .get();
+      _membershipPlans = snap.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
+    } catch (e) {
+      debugPrint('Error loading membership plans: $e');
+    }
+  }
+
+  Future<void> _loadSpecialOffers() async {
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(widget.profileUserId)
+          .collection('specialOffers')
+          .limit(10)
+          .get();
+      _specialOffers = snap.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
+    } catch (e) {
+      debugPrint('Error loading special offers: $e');
+    }
+  }
+
+  Future<void> _loadAwards() async {
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .doc(widget.profileUserId)
+          .collection('awards')
+          .limit(10)
+          .get();
+      _awards = snap.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
+    } catch (e) {
+      debugPrint('Error loading awards: $e');
     }
   }
 
@@ -485,6 +583,21 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     );
   }
 
+  bool _isWellnessSectionEnabled(String sectionId) =>
+      WellnessProfileConfig.isSectionEnabled(_profileModules, sectionId);
+
+  Future<void> _openProfileModulesEditor() async {
+    if (!_isOwnProfile) return;
+    final updated = await openProfileModulesEditor(
+      context,
+      kind: ProfileKind.wellness,
+      initialModulesRaw: _profileModules.toMap(),
+    );
+    if (updated != null && mounted) {
+      setState(() => _profileModules = ProfileModules(updated));
+    }
+  }
+
   Widget _buildProfileHeaderSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -496,14 +609,44 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           username: _username,
           category: _category,
           location: _location,
+          rating: _rating,
+          reviewCount: _reviewCount,
           isOwnProfile: _isOwnProfile,
           onEditCategory: _editCategory,
         ),
         const SizedBox(height: 10),
         _buildStatsBar(),
         const SizedBox(height: 12),
-        _buildActionButtons(),
+        Row(
+          children: [
+            Expanded(child: _buildActionButtons()),
+            if (!_isOwnProfile)
+              ProfileSaveButton(
+                currentUserId: _currentUser?.uid,
+                profileUserId: widget.profileUserId,
+                accountType: 'wellness',
+                displayName: _businessName.isNotEmpty ? _businessName : 'Wellness',
+                profilePhoto: _profilePhotoUrl,
+                category: _category,
+              ),
+          ],
+        ),
         _buildBioCard(),
+        if (_isOwnProfile)
+          ProfileCompletenessMeter(
+            kind: ProfileKind.wellness,
+            userData: _userDocSnapshot,
+            onTapImprove: _openEditProfile,
+          ),
+        ProfileHighlightsRow(
+          posts: _recentPosts,
+          onTapPost: (postId) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => PostDetailsPage(postId: postId)),
+            );
+          },
+        ),
         const SizedBox(height: 4),
       ],
     );
@@ -546,6 +689,23 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     );
   }
 
+  Future<void> _openEditProfile() async {
+    if (!_isOwnProfile) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditProfilePage(
+          initialName: _businessName,
+          initialUsername: _username,
+          initialBio: _bio,
+          initialGender: '',
+          initialprofessiontype: '',
+        ),
+      ),
+    );
+    await _loadProfileData();
+  }
+
   Widget _buildActionButtons() {
     return WellnessActionRow(
       isOwnProfile: _isOwnProfile,
@@ -553,21 +713,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       onToggleFollow: _toggleFollow,
       onMessage: _openMessage,
       onBook: _openBooking,
-      onEditProfile: () async {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => EditProfilePage(
-              initialName: _businessName,
-              initialUsername: _username,
-              initialBio: _bio,
-              initialGender: '',
-              initialprofessiontype: '',
-            ),
-          ),
-        );
-        _loadProfileData();
-      },
+      onEditProfile: _openEditProfile,
       lavender: ProfileLayout.lavender,
       deepLavender: ProfileLayout.deepLavender,
     );
@@ -592,21 +738,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         icon: const Icon(Icons.more_vert, color: Colors.white),
         onSelected: (value) {
           if (value == 'Edit Profile') {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => EditProfilePage(
-                  initialName: _businessName,
-                  initialUsername: _username,
-                  initialBio: _bio,
-                  initialGender: '',
-                  initialprofessiontype: '',
-                ),
-              ),
-            ).then((_) {
-              if (!mounted) return;
-              _loadProfileData();
-            });
+            _openEditProfile();
+          } else if (value == 'Profile Sections') {
+            _openProfileModulesEditor();
           } else if (value == 'Settings') {
             Navigator.push(
               context,
@@ -626,6 +760,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
           }
         },
         itemBuilder: (context) => const [
+          PopupMenuItem(
+            value: 'Profile Sections',
+            child: Text('Profile Sections'),
+          ),
           PopupMenuItem(
             value: 'Edit Profile',
             child: Text('Edit Profile'),
@@ -748,45 +886,50 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   Future<void> _editAvailability() async {
     if (!_isOwnProfile || _currentUser == null) return;
 
-    final monSatCtrl = TextEditingController(text: _availability['Mon-Sat'] ?? '');
-    final sunCtrl = TextEditingController(text: _availability['Sun'] ?? '');
+    final monSatCtrl = TextEditingController(
+      text: _availability['Mon-Sat'] ?? _availability['Mon–Sat'] ?? '6:00 AM - 10:00 PM',
+    );
+    final sunCtrl = TextEditingController(
+      text: _availability['Sun'] ?? _availability['Sunday'] ?? '8:00 AM - 8:00 PM',
+    );
 
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(
-          'Edit Availability',
+          'Operating Hours',
           style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(
+              'Visitors see Open/Closed based on these hours.',
+              style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: monSatCtrl,
               decoration: InputDecoration(
-                labelText: 'Mon-Sat (e.g., 6am - 10pm)',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                labelText: 'Mon–Sat',
+                hintText: '6:00 AM - 10:00 PM',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: sunCtrl,
               decoration: InputDecoration(
-                labelText: 'Sunday (e.g., 8am - 8pm)',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                labelText: 'Sunday',
+                hintText: '8:00 AM - 8:00 PM',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               ),
             ),
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(backgroundColor: ProfileLayout.lavender),
@@ -798,18 +941,33 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
 
     if (result == true) {
       final newAvailability = <String, String>{};
-      if (monSatCtrl.text.isNotEmpty) newAvailability['Mon-Sat'] = monSatCtrl.text;
-      if (sunCtrl.text.isNotEmpty) newAvailability['Sun'] = sunCtrl.text;
+      if (monSatCtrl.text.trim().isNotEmpty) {
+        newAvailability['Mon-Sat'] = monSatCtrl.text.trim();
+      }
+      if (sunCtrl.text.trim().isNotEmpty) {
+        newAvailability['Sun'] = sunCtrl.text.trim();
+      }
 
       try {
-        await _firestore
-            .collection('users')
-            .doc(_currentUser!.uid)
-            .update({'availability': newAvailability});
-        setState(() => _availability = newAvailability);
-        Fluttertoast.showToast(msg: 'Availability updated');
+        await _firestore.collection('users').doc(_currentUser!.uid).update({
+          'availability': newAvailability,
+          'facilityHours': {
+            'days': 'Mon-Sat / Sun',
+            'openTime': monSatCtrl.text.trim(),
+            'closeTime': sunCtrl.text.trim(),
+          },
+        });
+        setState(() {
+          _availability = newAvailability;
+          _facilityHours = {
+            'days': 'Mon-Sat / Sun',
+            'openTime': monSatCtrl.text.trim(),
+            'closeTime': sunCtrl.text.trim(),
+          };
+        });
+        Fluttertoast.showToast(msg: 'Operating hours updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update availability');
+        Fluttertoast.showToast(msg: 'Failed to update hours');
       }
     }
   }
@@ -948,43 +1106,154 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   //  TAB CONTENT BUILDERS
   // ===================================================================
   Widget _buildProfileTabContent() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 20),
-        _buildPopularProductsSection(),
-        const SizedBox(height: 24),
-        _buildFeaturedStaffSection(),
-        const SizedBox(height: 24),
-        if (_isOwnProfile) ...[
-          _buildRecentPostsSection(),
-          const SizedBox(height: 24),
-        ],
-        _buildFitnessEventsSection(),
-        const SizedBox(height: 24),
-        _buildLocationSection(),
-        const SizedBox(height: 24),
-        _buildServicesAndAvailabilitySection(),
-        const SizedBox(height: 24),
-        _buildReviewsSection(),
-        const SizedBox(height: 24),
-        _buildSocialLinksSection(),
-        const SizedBox(height: 24),
-        if (!_isOwnProfile) ...[
-          WellnessBookingSection(
-            wellnessUserId: widget.profileUserId,
-            isOwner: false,
+    return WellnessProfileTabContent(
+      isOwnProfile: _isOwnProfile,
+      profileUserId: widget.profileUserId,
+      wellnessName: _businessName.isNotEmpty ? _businessName : 'Wellness',
+      currentUserId: _currentUser?.uid,
+      featuredGuruIds: _featuredGuruIds,
+      isSectionEnabled: _isWellnessSectionEnabled,
+      galleryImages: _galleryImages,
+      amenities: _amenities,
+      membershipPlans: _membershipPlans,
+      specialOffers: _specialOffers,
+      awards: _awards,
+      availability: _availability,
+      facilityHours: _facilityHours,
+      popularProducts: _buildPopularProductsSection(),
+      featuredStaff: _isWellnessSectionEnabled('staff')
+          ? WellnessStaffSection(
+              staff: _staff,
+              isOwnProfile: _isOwnProfile,
+              onManage: _isOwnProfile ? _openStaffEditor : null,
+            )
+          : const SizedBox.shrink(),
+      recentPosts: _isOwnProfile ? _buildRecentPostsSection() : null,
+      fitnessEvents: _isWellnessSectionEnabled('events')
+          ? WellnessEventsSection(
+              events: _events,
+              isOwnProfile: _isOwnProfile,
+              onManage: _isOwnProfile ? _openEventsEditor : null,
+            )
+          : const SizedBox.shrink(),
+      location: _buildLocationSection(),
+      servicesAndAvailability: _buildServicesAndAvailabilitySection(),
+      reviews: _buildReviewsSection(),
+      socialLinks: _buildSocialLinksSection(),
+      visitorBooking: !_isOwnProfile
+          ? WellnessBookingSection(wellnessUserId: widget.profileUserId, isOwner: false)
+          : null,
+      onAddGalleryImage: _addGalleryImage,
+      onViewFullGallery: _showFullGallery,
+      onAddMembershipPlan: _addMembershipPlan,
+      onEditMembershipPlan: _editMembershipPlan,
+      onDeleteMembershipPlan: _deleteMembershipPlan,
+      onSubscribeToPlan: _subscribeToPlan,
+      onAddSpecialOffer: _addSpecialOffer,
+      onEditSpecialOffer: _editSpecialOffer,
+      onDeleteSpecialOffer: _deleteSpecialOffer,
+      onShowOfferDetails: _showOfferDetails,
+      onAddAward: _addAward,
+      onEditFacilityStatus: _editAvailability,
+      onManageFeaturedCoaches: _isOwnProfile ? _manageFeaturedCoaches : null,
+    );
+  }
+
+  Future<void> _openStaffEditor() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WellnessStaffEditorPage(wellnessUserId: _currentUser!.uid),
+      ),
+    );
+    await _loadStaff();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openEventsEditor() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WellnessEventsEditorPage(wellnessUserId: _currentUser!.uid),
+      ),
+    );
+    await _loadEvents();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _manageFeaturedCoaches() async {
+    if (!_isOwnProfile || _currentUser == null) return;
+
+    final usernameCtrl = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Featured Coaches'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: usernameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Guru username',
+                hintText: '@coach_username',
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_featuredGuruIds.isNotEmpty)
+              ..._featuredGuruIds.map(
+                (id) => ListTile(
+                  dense: true,
+                  title: Text(id, style: const TextStyle(fontSize: 12)),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                    onPressed: () async {
+                      final updated = List<String>.from(_featuredGuruIds)..remove(id);
+                      await _firestore.collection('users').doc(widget.profileUserId).update({
+                        'featuredGuruIds': updated,
+                      });
+                      if (mounted) setState(() => _featuredGuruIds = updated);
+                    },
+                  ),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          TextButton(
+            onPressed: () async {
+              final username = usernameCtrl.text.trim().replaceAll('@', '');
+              if (username.isEmpty) return;
+              final snap = await _firestore
+                  .collection('users')
+                  .where('username', isEqualTo: username)
+                  .where('accountType', isEqualTo: 'guru')
+                  .limit(1)
+                  .get();
+              if (snap.docs.isEmpty) {
+                Fluttertoast.showToast(msg: 'Guru not found');
+                return;
+              }
+              final guruId = snap.docs.first.id;
+              if (_featuredGuruIds.contains(guruId)) {
+                Fluttertoast.showToast(msg: 'Already featured');
+                return;
+              }
+              final updated = [..._featuredGuruIds, guruId];
+              await _firestore.collection('users').doc(widget.profileUserId).update({
+                'featuredGuruIds': updated,
+              });
+              if (mounted) setState(() => _featuredGuruIds = updated);
+              Navigator.pop(ctx);
+            },
+            child: const Text('Add'),
           ),
-          const SizedBox(height: 24),
         ],
-        _buildFacilityGallerySection(),
-        _buildAmenitiesShowcaseSection(),
-        _buildMembershipPlansSection(),
-        _buildSpecialOffersSection(),
-        _buildFacilityStatusSection(),
-        _buildAwardsCertificationsSection(),
-        const SizedBox(height: 40),
-      ],
+      ),
     );
   }
 
@@ -1169,180 +1438,12 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     );
   }
 
-  Widget _buildFeaturedStaffSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child:             Text(
-              'Our Team',
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Colors.black87,
-                letterSpacing: -0.5,
-              ),
-            ),
-        ),
-        const SizedBox(height: 12),
-        if (_staff.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Text(
-              'No staff members added',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: _mutedText,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-          )
-        else
-          SizedBox(
-            height: 100,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              itemCount: _staff.length,
-              itemBuilder: (context, index) {
-                final staff = _staff[index];
-                return Container(
-                  margin: const EdgeInsets.only(right: 16),
-                  child: Column(
-                    children: [
-                      CircleAvatar(
-                        radius: 25,
-                        backgroundImage: staff['photoUrl'] != null
-                            ? NetworkImage(staff['photoUrl'].toString())
-                            : null,
-                        backgroundColor: ProfileLayout.lavender.withOpacity(0.2),
-                        child: staff['photoUrl'] == null
-                            ? Text(
-                          staff['name']?.toString()[0].toUpperCase() ?? 'S',
-                          style: GoogleFonts.poppins(
-                            color: ProfileLayout.lavender,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        )
-                            : null,
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: 60,
-                        child: Text(
-                          staff['name']?.toString() ?? 'Staff',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.black87,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 0.1,
-                          ),
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-      ],
-    );
-  }
-
   Widget _buildRecentPostsSection() {
     return WellnessRecentPostsSection(
       recentPosts: _recentPosts,
       onViewAll: _showAllPosts,
       mutedTextColor: _mutedText,
       accentColor: ProfileLayout.deepLavender,
-    );
-  }
-
-  Widget _buildFitnessEventsSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: ProfileLayout.lavender.withOpacity(0.08),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
-              spreadRadius: 0,
-            ),
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Fitness Events',
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Colors.black87,
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(height: 12),
-            if (_events.isEmpty)
-              Text(
-                'No events scheduled',
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  color: _mutedText,
-                  fontWeight: FontWeight.w400,
-                ),
-              )
-            else
-              Column(
-                children: _events.map((event) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: ProfileLayout.lavender,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            event['name']?.toString() ?? 'Event',
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              color: Colors.black87,
-                              fontWeight: FontWeight.w500,
-                              letterSpacing: 0.1,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -1892,803 +1993,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     }
   }
 
-  // ===================================================================
-  //  NEW PROFESSIONAL FEATURES FOR WELLNESS
-  // ===================================================================
 
-  Widget _buildFacilityGallerySection() {
-    // Mock gallery images - in real app, load from Firestore
-    final galleryImages = List.generate(6, (i) => 'gallery_$i');
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: ProfileLayout.lavender.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(Icons.photo_library, color: ProfileLayout.lavender, size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Facility Gallery',
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black87,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                ],
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
-                  onPressed: _addGalleryImage,
-                )
-              else if (galleryImages.isNotEmpty)
-                TextButton(
-                  onPressed: () => _showFullGallery(),
-                  child: Text(
-                    'View All',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: ProfileLayout.deepLavender,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
-            itemCount: galleryImages.length > 6 ? 6 : galleryImages.length,
-            itemBuilder: (context, index) {
-              return Container(
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // Placeholder for image
-                    Center(
-                      child: Icon(Icons.image, size: 32, color: Colors.grey[600]),
-                    ),
-                    if (index == 5 && galleryImages.length > 6)
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Center(
-                          child: Text(
-                            '+${galleryImages.length - 6}',
-                            style: GoogleFonts.poppins(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAmenitiesShowcaseSection() {
-    final amenities = [
-      {'name': 'Parking', 'icon': Icons.local_parking, 'available': true},
-      {'name': 'Locker Room', 'icon': Icons.lock, 'available': true},
-      {'name': 'Shower', 'icon': Icons.shower, 'available': true},
-      {'name': 'WiFi', 'icon': Icons.wifi, 'available': true},
-      {'name': 'AC', 'icon': Icons.ac_unit, 'available': true},
-      {'name': 'Café', 'icon': Icons.local_cafe, 'available': false},
-    ];
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: ProfileLayout.lavender.withOpacity(0.08),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: ProfileLayout.lavender.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(Icons.spa, color: ProfileLayout.lavender, size: 24),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  'Amenities',
-                  style: GoogleFonts.poppins(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black87,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: amenities.map((amenity) {
-                final isAvailable = amenity['available'] as bool;
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: isAvailable 
-                        ? ProfileLayout.lavender.withOpacity(0.1)
-                        : Colors.grey[100],
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isAvailable 
-                          ? ProfileLayout.lavender.withOpacity(0.3)
-                          : Colors.grey[300]!,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        amenity['icon'] as IconData,
-                        size: 20,
-                        color: isAvailable ? ProfileLayout.lavender : Colors.grey[400],
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        amenity['name'] as String,
-                        style: GoogleFonts.poppins(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: isAvailable ? Colors.black87 : Colors.grey[600],
-                        ),
-                      ),
-                      if (isAvailable) ...[
-                        const SizedBox(width: 6),
-                        Icon(Icons.check_circle, size: 16, color: Colors.green),
-                      ],
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMembershipPlansSection() {
-    // Mock membership plans - in real app, load from Firestore
-    final plans = [
-      {'name': 'Basic', 'price': 999, 'duration': 'Monthly', 'features': ['Gym Access', 'Locker']},
-      {'name': 'Premium', 'price': 2499, 'duration': 'Monthly', 'features': ['All Access', 'Personal Trainer', 'Nutrition Plan']},
-      {'name': 'Annual', 'price': 19999, 'duration': 'Yearly', 'features': ['All Premium Features', '20% Discount']},
-    ];
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: ProfileLayout.lavender.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(Icons.card_membership, color: ProfileLayout.lavender, size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Membership Plans',
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
-                  onPressed: _addMembershipPlan,
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: SizedBox(
-            height: 220,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: plans.length,
-              itemBuilder: (context, index) {
-                final plan = plans[index];
-                final isPopular = index == 1; // Premium is popular
-                
-                return Container(
-                  width: 200,
-                  margin: const EdgeInsets.only(right: 12),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: isPopular ? ProfileLayout.lavender.withOpacity(0.1) : _cardColor,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: isPopular ? ProfileLayout.lavender : Colors.grey[300]!,
-                      width: isPopular ? 2 : 1,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (isPopular)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: ProfileLayout.lavender,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            'POPULAR',
-                            style: GoogleFonts.poppins(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        )
-                      else
-                        const SizedBox(height: 4),
-                      const SizedBox(height: 8),
-                      Text(
-                        plan['name'] as String,
-                        style: GoogleFonts.poppins(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            '₹${plan['price']}',
-                            style: GoogleFonts.poppins(
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                              color: ProfileLayout.lavender,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '/${plan['duration']}',
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      ...(plan['features'] as List<String>).map((feature) => Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Row(
-                          children: [
-                            Icon(Icons.check_circle, size: 16, color: ProfileLayout.lavender),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                feature,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      )),
-                      const Spacer(),
-                      if (_isOwnProfile)
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            IconButton(
-                              icon: Icon(Icons.edit, size: 18, color: Colors.grey[600]),
-                              onPressed: () => _editMembershipPlan(index, plan),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                            ),
-                            IconButton(
-                              icon: Icon(Icons.delete, size: 18, color: Colors.red[600]),
-                              onPressed: () => _deleteMembershipPlan(index),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                            ),
-                          ],
-                        )
-                      else
-                        ElevatedButton(
-                          onPressed: () => _subscribeToPlan(plan),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isPopular ? ProfileLayout.lavender : Colors.grey[300],
-                          foregroundColor: isPopular ? Colors.white : Colors.black87,
-                          minimumSize: const Size(double.infinity, 40),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: Text(
-                          'Subscribe',
-                          style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSpecialOffersSection() {
-    // Mock offers - in real app, load from Firestore
-    final offers = [
-      {'title': 'New Member Special', 'discount': '20% OFF', 'validUntil': 'Dec 31, 2024'},
-      {'title': 'Weekend Warrior', 'discount': '15% OFF', 'validUntil': 'Ongoing'},
-    ];
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Colors.orange[100]!, Colors.orange[50]!],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.orange.withOpacity(0.2),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.orange[700]!.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(Icons.local_offer, color: Colors.orange[900], size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Special Offers',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.orange[900],
-                      ),
-                    ),
-                  ],
-                ),
-                if (_isOwnProfile)
-                  IconButton(
-                    icon: Icon(Icons.add_circle_outline, color: Colors.orange[900]),
-                    onPressed: _addSpecialOffer,
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ...offers.asMap().entries.map((entry) {
-              final index = entry.key;
-              final offer = entry.value;
-              return Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange[100],
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      offer['discount'] as String,
-                      style: GoogleFonts.poppins(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.orange[900],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          offer['title'] as String,
-                          style: GoogleFonts.poppins(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Valid until: ${offer['validUntil']}',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_isOwnProfile)
-                    PopupMenuButton<String>(
-                      icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
-                      onSelected: (value) {
-                        if (value == 'edit') {
-                          _editSpecialOffer(index, offer);
-                        } else if (value == 'delete') {
-                          _deleteSpecialOffer(index);
-                        }
-                      },
-                      itemBuilder: (context) => [
-                        PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        PopupMenuItem(value: 'delete', child: Text('Delete')),
-                      ],
-                    )
-                  else
-                    IconButton(
-                      icon: Icon(Icons.arrow_forward_ios, size: 16, color: Colors.orange[700]),
-                      onPressed: () => _showOfferDetails(offer),
-                    ),
-                ],
-              ),
-            );
-            }).toList(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFacilityStatusSection() {
-    final now = DateTime.now();
-    final hour = now.hour;
-    final isOpen = hour >= 6 && hour < 22; // Mock: 6 AM to 10 PM
-    final currentStatus = isOpen ? 'Open Now' : 'Closed';
-    final statusColor = isOpen ? Colors.green : Colors.red;
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: ProfileLayout.lavender.withOpacity(0.08),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: statusColor.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(
-                        isOpen ? Icons.check_circle : Icons.cancel,
-                        color: statusColor,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Facility Status',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-                if (_isOwnProfile)
-                  IconButton(
-                    icon: Icon(Icons.edit, color: ProfileLayout.lavender),
-                    onPressed: _editFacilityStatus,
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      currentStatus,
-                      style: GoogleFonts.poppins(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: statusColor,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (_availability.isNotEmpty)
-              Column(
-                children: _availability.entries.map((entry) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          entry.key,
-                          style: GoogleFonts.poppins(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        Text(
-                          entry.value,
-                          style: GoogleFonts.poppins(
-                            fontSize: 14,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              )
-            else
-              Text(
-                'Mon-Sat: 6:00 AM - 10:00 PM\nSunday: 8:00 AM - 8:00 PM',
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  color: Colors.grey[700],
-                  height: 1.6,
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAwardsCertificationsSection() {
-    // Mock awards - in real app, load from Firestore
-    final awards = [
-      {'name': 'Best Gym 2024', 'issuer': 'Fitness Awards', 'year': '2024'},
-      {'name': 'ISO Certified', 'issuer': 'ISO Organization', 'year': '2023'},
-    ];
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Colors.amber[50]!, Colors.amber[100]!],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.amber.withOpacity(0.3)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.amber[700]!.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(Icons.workspace_premium, color: Colors.amber[900], size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Awards & Certifications',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-                if (_isOwnProfile)
-                  IconButton(
-                    icon: Icon(Icons.add_circle_outline, color: Colors.amber[900]),
-                    onPressed: _addAward,
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (awards.isEmpty)
-              Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.emoji_events_outlined, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 8),
-                    Text(
-                      _isOwnProfile 
-                          ? 'Add your awards and certifications'
-                          : 'No awards listed',
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              )
-            else
-              ...awards.map((award) => Container(
-                margin: const EdgeInsets.only(bottom: 12),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: Colors.amber[100],
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(Icons.workspace_premium, color: Colors.amber[700], size: 28),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            award['name'] as String,
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${award['issuer']} • ${award['year']}',
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              )),
-          ],
-        ),
-      ),
-    );
-  }
 
   // ===================================================================
   //  EDIT FUNCTIONS FOR NEW FEATURES
@@ -3323,123 +2628,6 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     }
   }
 
-  Future<void> _editFacilityStatus() async {
-    if (!_isOwnProfile || _currentUser == null) return;
-
-    final openTimeCtrl = TextEditingController(text: '06:00');
-    final closeTimeCtrl = TextEditingController(text: '22:00');
-    final daysCtrl = TextEditingController(text: 'Monday - Sunday');
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          'Edit Facility Hours',
-          style: GoogleFonts.poppins(
-            fontWeight: FontWeight.w600,
-            color: ProfileLayout.lavender,
-          ),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: openTimeCtrl,
-                decoration: InputDecoration(
-                  labelText: 'Opening Time',
-                  labelStyle: GoogleFonts.poppins(),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: closeTimeCtrl,
-                decoration: InputDecoration(
-                  labelText: 'Closing Time',
-                  labelStyle: GoogleFonts.poppins(),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  prefixIcon: Icon(Icons.access_time, color: ProfileLayout.lavender),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: daysCtrl,
-                decoration: InputDecoration(
-                  labelText: 'Operating Days',
-                  labelStyle: GoogleFonts.poppins(),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  prefixIcon: Icon(Icons.calendar_today, color: ProfileLayout.lavender),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: ProfileLayout.lavender, width: 2),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              'Cancel',
-              style: GoogleFonts.poppins(color: Colors.grey[700]),
-            ),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: ProfileLayout.lavender,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            onPressed: () async {
-              try {
-                await _firestore
-                    .collection('users')
-                    .doc(_currentUser!.uid)
-                    .update({
-                      'facilityHours': {
-                        'openTime': openTimeCtrl.text.trim(),
-                        'closeTime': closeTimeCtrl.text.trim(),
-                        'days': daysCtrl.text.trim(),
-                      },
-                    });
-                
-                Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Facility hours updated successfully!');
-                await _loadProfileData();
-              } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating hours: $e');
-              }
-            },
-            child: Text(
-              'Save',
-              style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   // ===================================================================
   //  HELPER FUNCTIONS FOR STATIC FEATURES

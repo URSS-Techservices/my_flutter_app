@@ -69,17 +69,17 @@ class UploadService {
 
     if (generated.hasThumb) {
       final thumbRef = base.child('thumb$suffix.webp');
-      tasks.add(thumbRef.putData(generated.thumbBytes!, contentType));
+      tasks.add(thumbRef.putData(generated.thumbBytes!, contentType).then((_) {}));
       refs['thumb'] = thumbRef;
     }
     if (generated.hasMedium) {
       final mediumRef = base.child('medium$suffix.webp');
-      tasks.add(mediumRef.putData(generated.mediumBytes!, contentType));
+      tasks.add(mediumRef.putData(generated.mediumBytes!, contentType).then((_) {}));
       refs['medium'] = mediumRef;
     }
     if (generated.hasFull) {
       final fullRef = base.child('full$suffix.webp');
-      tasks.add(fullRef.putData(generated.fullBytes!, contentType));
+      tasks.add(fullRef.putData(generated.fullBytes!, contentType).then((_) {}));
       refs['full'] = fullRef;
     }
 

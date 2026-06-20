@@ -4,6 +4,7 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:halo/utils/search_utils.dart';
+import 'package:halo/screens/profile/core/profile_field_utils.dart';
 
 class EditProfilePage extends StatefulWidget {
   final String initialUsername;
@@ -69,7 +70,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
       final updatedData = {
         'username': _usernameController.text.trim(),
-        'name': _nameController.text.trim(),
+        ...ProfileFieldUtils.nameUpdateFields(_nameController.text),
         'bio': _bioController.text.trim(),
         'gender': _genderController.text.trim(),
         'professiontype': _professionTypeController.text.trim(),

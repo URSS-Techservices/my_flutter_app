@@ -22,12 +22,11 @@ class UploadService {
     required String postId,
   }) async {
     final ref = _storage.ref('users/$uid/posts/$postId.jpg');
-    final task = await uploadReferenceFile(
+    await uploadReferenceFile(
       ref,
       imageFile,
       metadata: SettableMetadata(contentType: 'image/jpeg'),
     );
-    await task;
     return ref.getDownloadURL();
   }
 
@@ -190,12 +189,11 @@ class UploadService {
   }) async {
     final ref = _storage
         .ref('users/$uid/profile_${DateTime.now().millisecondsSinceEpoch}.jpg');
-    final task = await uploadReferenceFile(
+    await uploadReferenceFile(
       ref,
       imageFile,
       metadata: SettableMetadata(contentType: 'image/jpeg'),
     );
-    await task;
     return ref.getDownloadURL();
   }
 
