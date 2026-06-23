@@ -1,7 +1,13 @@
 const { onObjectFinalized } = require('firebase-functions/v2/storage');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { randomUUID } = require('crypto');
+
+const {
+  computeGlobalExploreScores,
+  rankFieldsChanged,
+} = require('./explore_ranking');
 
 const admin = require('firebase-admin');
 const ffmpeg = require('fluent-ffmpeg');
@@ -2527,3 +2533,102 @@ exports.nearbyPlaces = onCall(async (request) => {
 
   return { places: places || [] };
 });
+
+// ─── Explore global ranking (server-side virality scores) ───────────────────
+
+const exploreDb = admin.firestore();
+
+async function writeExploreRankForPost(postRef, postData) {
+  const scores = computeGlobalExploreScores(postData || {});
+  await postRef.set(
+    {
+      exploreRankScore: scores.exploreRankScore,
+      trendingVelocity: scores.trendingVelocity,
+      exploreRankUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+exports.refreshPostExploreRank = onDocumentWritten(
+  {
+    document: 'posts/{postId}',
+    memory: '256MiB',
+    timeoutSeconds: 60,
+  },
+  async (event) => {
+    const afterSnap = event.data && event.data.after;
+    if (!afterSnap || !afterSnap.exists) return;
+
+    const before = event.data.before && event.data.before.exists
+      ? event.data.before.data()
+      : null;
+    const after = afterSnap.data();
+    if (!after) return;
+
+    if (before && !rankFieldsChanged(before, after)) {
+      const rankOnly = ['exploreRankScore', 'trendingVelocity', 'exploreRankUpdatedAt'];
+      const changedKeys = Object.keys(after).filter(
+        (k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]),
+      );
+      if (changedKeys.length > 0 && changedKeys.every((k) => rankOnly.includes(k))) {
+        return;
+      }
+    }
+
+    const scores = computeGlobalExploreScores(after);
+    const current = Number(after.exploreRankScore || 0);
+    if (
+      Math.abs(current - scores.exploreRankScore) < 0.0005 &&
+      Math.abs(Number(after.trendingVelocity || 0) - scores.trendingVelocity) < 0.0005
+    ) {
+      return;
+    }
+
+    await writeExploreRankForPost(afterSnap.ref, after);
+  },
+);
+
+exports.scheduledExploreRankRefresh = onSchedule(
+  {
+    schedule: 'every 6 hours',
+    timeZone: 'UTC',
+    memory: '512MiB',
+    timeoutSeconds: 540,
+  },
+  async () => {
+    const snap = await exploreDb
+      .collection('posts')
+      .orderBy('createdAt', 'desc')
+      .limit(400)
+      .get();
+
+    let batch = exploreDb.batch();
+    let ops = 0;
+
+    for (const doc of snap.docs) {
+      const scores = computeGlobalExploreScores(doc.data());
+      batch.set(
+        doc.ref,
+        {
+          exploreRankScore: scores.exploreRankScore,
+          trendingVelocity: scores.trendingVelocity,
+          exploreRankUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      ops += 1;
+      if (ops >= 400) {
+        await batch.commit();
+        batch = exploreDb.batch();
+        ops = 0;
+      }
+    }
+
+    if (ops > 0) {
+      await batch.commit();
+    }
+
+    console.log(`[scheduledExploreRankRefresh] updated ${snap.size} posts`);
+  },
+);
