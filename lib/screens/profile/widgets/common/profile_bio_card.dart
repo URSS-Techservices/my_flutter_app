@@ -22,9 +22,7 @@ class ProfileBioCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasBio = bio.trim().isNotEmpty;
-    final displayBio = hasBio
-        ? bio.trim()
-        : (isOwnProfile ? emptyHint : '');
+    final displayBio = hasBio ? bio.trim() : (isOwnProfile ? emptyHint : '');
 
     if (displayBio.isEmpty) return const SizedBox.shrink();
 
@@ -33,7 +31,7 @@ class ProfileBioCard extends StatelessWidget {
       child: Container(
         width: double.infinity,
         decoration: BoxDecoration(
-          // color: ProfileLayout.c,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.grey.shade200),
           boxShadow: [
@@ -53,14 +51,12 @@ class ProfileBioCard extends StatelessWidget {
                 displayBio,
                 maxLines: maxLines,
                 overflow: maxLines == null ? null : TextOverflow.ellipsis,
-                // style: GoogleFonts.poppins(
-                //   fontSize: 14,
-                //   height: 1.45,
-                //   color: hasBio
-                //       ? ProfileLayout.textPrimary
-                //       : ProfileLayout.textSecondary,
-                //   fontWeight: hasBio ? FontWeight.w400 : FontWeight.w500,
-                // ),
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  height: 1.45,
+                  color: hasBio ? Colors.black87 : ProfileLayout.deepLavender,
+                  fontWeight: hasBio ? FontWeight.w400 : FontWeight.w500,
+                ),
               ),
             ),
             if (isOwnProfile && onEdit != null)

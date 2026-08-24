@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:halo/screens/profile/widgets/common/profile_bio_card.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state_rich.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
@@ -58,5 +59,21 @@ void main() {
     await tester.pump();
 
     expect(tapped, isTrue);
+  });
+
+  testWidgets('ProfileBioCard shows bio text', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: ProfileBioCard(
+            bio: 'Yoga every morning',
+            isOwnProfile: true,
+            emptyHint: 'Add a bio',
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Yoga every morning'), findsOneWidget);
   });
 }

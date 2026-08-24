@@ -3,8 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import '../home_page.dart';
-
 class GoogleSignInButton extends StatefulWidget {
   @override
   State<GoogleSignInButton> createState() => _GoogleSignInButtonState();
@@ -67,13 +65,7 @@ class _GoogleSignInButtonState extends State<GoogleSignInButton> {
           'createdAt': FieldValue.serverTimestamp(),
         });
       }
-
-      // 6️⃣ Navigate
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => HomePage()),
-      );
+      // Let OnboardingGate rebuild (pick type or home). Do not push HomePage.
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Google Sign-In failed')),

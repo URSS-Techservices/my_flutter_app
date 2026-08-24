@@ -23,12 +23,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
 import 'package:halo/services/follow_service.dart';
-import 'package:halo/widgets/follow_button.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_identity_block.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_recent_posts_section.dart';
-import 'package:halo/screens/profile/widgets/guru/guru_action_row.dart';
-import 'package:halo/screens/profile/widgets/guru/guru_bio_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_action_row.dart';
+import 'package:halo/screens/profile/widgets/common/profile_bio_card.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_cta_row.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
@@ -1032,14 +1031,13 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildActionButtons() {
-    return GuruActionRow(
+    return ProfileActionRow(
       isOwnProfile: _isOwnProfile,
       isFollowing: _isFollowing,
       onToggleFollow: _toggleFollow,
       onMessage: _openMessage,
       onEditProfile: _handleEditProfile,
-      lavender: ProfileLayout.lavender,
-      deepLavender: ProfileLayout.deepLavender,
+      accentColor: ProfileLayout.lavender,
     );
   }
 
@@ -1065,9 +1063,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildBioCard() {
-    return GuruBioCard(
+    return ProfileBioCard(
       bio: _bio,
       isOwnProfile: _isOwnProfile,
+      emptyHint:
+          'Tell aspirants how you train, your style and experience.',
     );
   }
 

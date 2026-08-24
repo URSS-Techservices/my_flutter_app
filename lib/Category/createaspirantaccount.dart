@@ -356,6 +356,8 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
       // 3) Save profile in Firestore (no password)
       final payload = {
         'uid': uid,
+        'accountType': 'aspirant',
+        'profileType': 'aspirant',
         'category': 'Aspirant',
         'username': username,
         'username_lower': usernameLower,

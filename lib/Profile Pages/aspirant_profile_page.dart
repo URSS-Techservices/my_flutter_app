@@ -33,8 +33,8 @@ import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_identity_block.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_recent_posts_grid.dart';
-import 'package:halo/screens/profile/widgets/aspirant/aspirant_action_row.dart';
-import 'package:halo/screens/profile/widgets/aspirant/aspirant_bio_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_action_row.dart';
+import 'package:halo/screens/profile/widgets/common/profile_bio_card.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_fitness_goals_section.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
@@ -572,7 +572,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildActionButtons() {
-    return AspirantActionRow(
+    return ProfileActionRow(
       isOwnProfile: _isOwnProfile,
       isFollowing: _isFollowing,
       onToggleFollow: _toggleFollow,
@@ -583,9 +583,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Widget _buildBioCard() {
-    return AspirantBioCard(
+    return ProfileBioCard(
       bio: _bio,
       isOwnProfile: _isOwnProfile,
+      emptyHint:
+          'Add a short bio — tell people what you love (cricket, dance, yoga, etc.).',
     );
   }
 

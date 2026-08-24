@@ -303,6 +303,8 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
       // Store profile in Firestore (CLEAN SCHEMA)
       await _firestore.collection('users').doc(userCredential.user!.uid).set({
         'category': 'Guru',
+        'accountType': 'guru',
+        'profileType': 'guru',
         'username': username,
         'full_name': fullName,
         'searchTerms': buildSearchTerms(username: username, fullName: fullName),

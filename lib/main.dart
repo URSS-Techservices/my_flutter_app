@@ -1,6 +1,7 @@
 import 'dart:async';
-import 'package:halo/Bottom Pages/HomePage.dart';
-import 'package:halo/Category/categorypage.dart';
+import 'package:halo/Bottom Pages/HomePage.dart' hide kPrimaryColor, kSecondaryColor;
+import 'package:halo/Category/categorypage.dart'
+    hide kPrimaryColor, kSecondaryColor, kDarkTop, kDarkBottom;
 import 'package:halo/forgotpasswordpage.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -14,17 +15,17 @@ import 'firebase_options.dart';
 import 'package:halo/services/blocked_url_memory.dart';
 import 'package:halo/widgets/google_sign_in_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'interest_selection_page.dart';
+import 'interest_selection_page.dart'
+    hide kPrimaryColor, kSecondaryColor, kBackgroundColor;
 import 'app_theme_mode.dart';
 import 'package:flutter/services.dart';
 import 'package:halo/services/app_logger.dart';
+import 'package:halo/core/halo_splash.dart';
+import 'package:halo/core/halo_theme.dart';
+import 'package:halo/features/auth/presentation/onboarding_gate.dart';
 import 'package:halo/services/video_memory_bridge.dart';
 
-const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
-const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep purple
-const Color kLightBackground = Color(0xFFF4F1FB); // Soft lavender background
-const Color kDarkBackgroundTop = Color(0xFF111111);
-const Color kDarkBackgroundBottom = Color(0xFF050505);
+export 'package:halo/core/halo_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -99,7 +100,7 @@ class _AppRootState extends State<_AppRoot> {
         if (snapshot.connectionState != ConnectionState.done) {
           return MaterialApp(
             debugShowCheckedModeBanner: false,
-            home: const _SplashScreen(),
+            home: const HaloSplash(),
           );
         }
         return MyApp();
@@ -215,154 +216,11 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const AuthGate(), // LogoScreen should later navigate to LoginPage()
+      home: const AuthGate(),
     ),
     );
   }
 }
-// ===================== SPLASH SCREEN =====================
-// Shown while Firebase / SharedPreferences are initialising.
-// No timer — it stays until the async work is actually done.
-
-class _SplashScreen extends StatefulWidget {
-  const _SplashScreen();
-  @override
-  State<_SplashScreen> createState() => _SplashScreenState();
-}
-
-class _SplashScreenState extends State<_SplashScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _fade;
-  late final Animation<double> _scale;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 900));
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
-    _scale = Tween<double>(begin: 0.88, end: 1.0).animate(
-        CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
-    _ctrl.forward();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: Center(
-        child: FadeTransition(
-          opacity: _fade,
-          child: ScaleTransition(
-            scale: _scale,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Logo image
-                Image.asset(
-                  'assets/images/Halo.png',
-                  height: 120,
-                  width: 120,
-                  fit: BoxFit.contain,
-                ),
-                const SizedBox(height: 20),
-                // App name
-                Text(
-                  'Halo',
-                  style: GoogleFonts.pacifico(
-                    fontSize: 40,
-                    color: kSecondaryColor,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Your wellness community',
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    color: Colors.black38,
-                    fontWeight: FontWeight.w400,
-                  ),
-                ),
-                const SizedBox(height: 48),
-                // Subtle loading dots
-                _LoadingDots(),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// Three bouncing dots like WhatsApp / Telegram loading
-class _LoadingDots extends StatefulWidget {
-  @override
-  State<_LoadingDots> createState() => _LoadingDotsState();
-}
-
-class _LoadingDotsState extends State<_LoadingDots>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 900))
-      ..repeat();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder: (_, __) {
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(3, (i) {
-            // Each dot is offset by 0.2 of the cycle
-            final offset = i * 0.25;
-            final t = ((_ctrl.value - offset) % 1.0 + 1.0) % 1.0;
-            // bounce: up at t=0.3, back at t=0.6
-            final dy = t < 0.3
-                ? -8.0 * (t / 0.3)
-                : t < 0.6
-                    ? -8.0 * (1 - (t - 0.3) / 0.3)
-                    : 0.0;
-            return Transform.translate(
-              offset: Offset(0, dy),
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: kPrimaryColor.withOpacity(0.7),
-                  shape: BoxShape.circle,
-                ),
-              ),
-            );
-          }),
-        );
-      },
-    );
-  }
-}
-
 // ===================== AUTH GATE =====================
 
 class AuthGate extends StatelessWidget {
@@ -370,20 +228,9 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        // Show logo splash while Firebase determines auth state
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _SplashScreen();
-        }
-
-        if (snapshot.hasData) {
-          return const StartupRouter();
-        }
-
-        return LoginPage();
-      },
+    return OnboardingGate(
+      login: LoginPage(),
+      home: const StartupRouter(),
     );
   }
 }
@@ -415,9 +262,8 @@ class StartupRouter extends StatelessWidget {
     return FutureBuilder<bool>(
       future: _cachedInterestsFuture ??= _interestsCompleted(),
       builder: (context, snapshot) {
-        // Keep showing splash while reading SharedPreferences
         if (!snapshot.hasData) {
-          return const _SplashScreen();
+          return const HaloSplash();
         }
 
         return snapshot.data! ? HomePage() : const InterestSelectionPage();
@@ -944,14 +790,7 @@ Last updated: ${DateTime.now().year}''',
                     ),
                     const SizedBox(height: 12),
 
-                    Column(
-                      children: [
-                        GoogleSignInButton(),
-                        const SizedBox(height: 8),
-                        const SocialButton(text: "Login with Facebook"),
-                        const SocialButton(text: "Login with Instagram"),
-                      ],
-                    ),
+                    GoogleSignInButton(),
 
                     const SizedBox(height: 36),
 
@@ -984,44 +823,6 @@ Last updated: ${DateTime.now().year}''',
                   ],
                 ),
               ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class SocialButton extends StatelessWidget {
-  final String text;
-
-  const SocialButton({super.key, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = GoogleFonts.poppinsTextTheme(
-      Theme.of(context).textTheme,
-    );
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: SizedBox(
-        width: MediaQuery.of(context).size.width * 0.6,
-        child: OutlinedButton(
-          onPressed: () {},
-          style: OutlinedButton.styleFrom(
-            backgroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            side: BorderSide(color: kPrimaryColor.withValues(alpha: 0.3)),
-          ),
-          child: Text(
-            text,
-            style: textTheme.labelLarge?.copyWith(
-              color: kSecondaryColor,
-              fontWeight: FontWeight.w600,
             ),
           ),
         ),

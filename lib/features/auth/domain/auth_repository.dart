@@ -1,15 +1,12 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:halo/core/session.dart';
 import 'package:halo/screens/profile/core/profile_type.dart';
 
-/// Auth + user-doc writes. Firebase lives in the data layer only.
+/// Auth + user-doc writes. Firebase stays in the data layer.
 abstract class AuthRepository {
-  Stream<User?> authState();
+  Stream<Session> watchSession();
 
   Future<void> signOut();
 
   /// Writes `accountType` on the existing uid. Never creates a second account.
-  Future<void> setAccountType({
-    required String uid,
-    required ProfileKind kind,
-  });
+  Future<void> setAccountType(ProfileKind kind);
 }

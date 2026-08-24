@@ -27,12 +27,11 @@ import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
 import 'package:halo/newpostpage.dart';
 import 'package:halo/services/follow_service.dart';
-import 'package:halo/widgets/follow_button.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/wellness/wellness_identity_block.dart';
 import 'package:halo/screens/profile/widgets/wellness/wellness_recent_posts_section.dart';
-import 'package:halo/screens/profile/widgets/wellness/wellness_action_row.dart';
-import 'package:halo/screens/profile/widgets/wellness/wellness_bio_card.dart';
+import 'package:halo/screens/profile/widgets/common/profile_action_row.dart';
+import 'package:halo/screens/profile/widgets/common/profile_bio_card.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
@@ -505,7 +504,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   }
 
   Widget _buildActionButtons() {
-    return WellnessActionRow(
+    return ProfileActionRow(
       isOwnProfile: _isOwnProfile,
       isFollowing: _isFollowing,
       onToggleFollow: _toggleFollow,
@@ -526,18 +525,17 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         );
         _loadProfileData();
       },
-      lavender: ProfileLayout.lavender,
-      deepLavender: ProfileLayout.deepLavender,
+      accentColor: ProfileLayout.lavender,
     );
   }
 
   Widget _buildBioCard() {
-    return WellnessBioCard(
+    return ProfileBioCard(
       bio: _bio,
       isOwnProfile: _isOwnProfile,
-      cardColor: _cardColor,
-      accentColor: ProfileLayout.lavender,
-      onEditBio: _editBio,
+      emptyHint:
+          'Describe your business, services, and what makes you unique.',
+      onEdit: _editBio,
     );
   }
 

@@ -299,6 +299,8 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
       // Store additional business details in Firestore
       await _firestore.collection('users').doc(userCredential.user!.uid).set({
         'category': 'Wellness',
+        'accountType': 'wellness',
+        'profileType': 'wellness',
         'username': username,
         'business_name': businessName,
         'searchTerms': buildSearchTerms(username: username, businessName: businessName),
