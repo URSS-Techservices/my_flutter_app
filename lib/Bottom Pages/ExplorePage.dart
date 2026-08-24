@@ -16,6 +16,7 @@ import 'package:video_player/video_player.dart';
 import 'package:halo/services/app_video_focus.dart';
 import 'package:halo/services/explore_reel_prefetch.dart';
 import 'package:halo/services/explore_service.dart';
+import 'package:halo/utils/explore_ranking.dart';
 import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/reel_preload_policy.dart';
 import 'package:halo/services/video_decoder_budget.dart';
@@ -132,10 +133,13 @@ class _Post {
   final bool isVideo;
   final int likeCount;
   final int commentCount;
+  final int savesCount;
   final String caption;
   final String userId;
   final String username;
   final bool isMulti;      // more than one media item
+  final List<String> tags; // used for scoring/mixing
+  final DateTime createdAt;
 
   const _Post({
     required this.id,
@@ -146,10 +150,13 @@ class _Post {
     required this.isVideo,
     required this.likeCount,
     required this.commentCount,
+    required this.savesCount,
     required this.caption,
     required this.userId,
     required this.username,
     required this.isMulti,
+    required this.tags,
+    required this.createdAt,
   });
 
   bool get hasContent => thumbUrl.isNotEmpty || videoUrl.isNotEmpty || imageUrl.isNotEmpty;
@@ -160,6 +167,12 @@ class _Post {
     final tv = _thumb(d);
     final iv = isVid ? tv : ((d['imageUrl'] ?? d['photoUrl'] ?? tv).toString().trim());
     final urls = isVid ? _resolveExploreUrls(d) : (primary: '', fallback: '');
+    final tags = (d['tags'] as List?)
+            ?.map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList() ??
+        const <String>[];
+    final createdAt = (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
     return _Post(
       id: doc.id,
       thumbUrl: tv,
@@ -169,11 +182,14 @@ class _Post {
       isVideo: isVid,
       likeCount: _asInt(d['likeCount'] ?? d['likesCount']),
       commentCount: _asInt(d['commentCount'] ?? d['commentsCount']),
+      savesCount: _asInt(d['savesCount'] ?? d['saves']),
       caption: (d['caption'] ?? '').toString().trim(),
       userId: (d['userId'] ?? '').toString().trim(),
       username: (d['username'] ?? d['userName'] ?? d['displayName'] ?? '').toString().trim(),
       isMulti: (d['media'] is List && (d['media'] as List).length > 1) ||
           (d['images'] is List && (d['images'] as List).length > 1),
+      tags: tags,
+      createdAt: createdAt,
     );
   }
 
@@ -182,6 +198,12 @@ class _Post {
     if (v is num) return v.toInt();
     return int.tryParse(v?.toString() ?? '') ?? 0;
   }
+}
+
+class _RankItem {
+  final _Post post;
+  final double score;
+  const _RankItem({required this.post, required this.score});
 }
 
 // ─── Filter enum ─────────────────────────────────────────────────────────────
@@ -222,24 +244,103 @@ class _ExplorePageState extends State<ExplorePage> {
   String _query  = '';
   _Filter _filter = _Filter.forYou;
 
+  // Mixing state (swap/mix feed after ~1h/2h).
+  List<String> _userAffinityTags = const [];
+  bool _affinityReady = false;
+  int _mixPhase = 0; // 0=no mix, 1=after ~1h, 2=after ~2h
+  int _pendingMixPhase = 0;
+  Timer? _mixTimer1;
+  Timer? _mixTimer2;
+  bool _inReelViewer = false;
+
   @override
   void initState() {
     super.initState();
-    _load();
     _searchCtrl.addListener(_onSearch);
     _scrollCtrl.addListener(_onScroll);
+    _initAffinityAndLoad();
   }
 
   @override
   void dispose() {
     _sub?.cancel();
+    _mixTimer1?.cancel();
+    _mixTimer2?.cancel();
     _searchCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
 
-  void _load() {
+  Future<void> _initAffinityAndLoad() async {
     final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    try {
+      final interests = await _svc.getUserInterests(uid);
+      final specialties = await _svc.getUserSpecialties(uid);
+      final merged = <String>{...interests, ...specialties};
+      if (!mounted) return;
+      setState(() {
+        _userAffinityTags = merged.toList();
+        _affinityReady = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _affinityReady = true);
+    }
+
+    _load(uid);
+    _startMixTimers();
+  }
+
+  void _startMixTimers() {
+    _mixTimer1?.cancel();
+    _mixTimer2?.cancel();
+
+    // Phase 1: after ~1 hour, make feed less rigid.
+    _mixTimer1 = Timer(const Duration(hours: 1), () {
+      if (!mounted) return;
+      _requestMixPhase(1);
+    });
+
+    // Phase 2: after ~2 hours, push more exploration/variety.
+    _mixTimer2 = Timer(const Duration(hours: 2), () {
+      if (!mounted) return;
+      _requestMixPhase(2);
+    });
+  }
+
+  void _requestMixPhase(int phase) {
+    if (phase <= _mixPhase) return;
+
+    // If user is actively watching a reel, defer the swap to avoid sudden jumps.
+    if (_inReelViewer) {
+      _pendingMixPhase = phase;
+      return;
+    }
+    _pendingMixPhase = 0;
+    _applyMixPhase(phase);
+  }
+
+  void _applyMixPhase(int phase) {
+    if (!mounted || !_affinityReady) {
+      _pendingMixPhase = phase;
+      return;
+    }
+    setState(() {
+      _mixPhase = phase;
+      if (_all.isNotEmpty) _all = _rerankPosts(_all, phase);
+      _applyFilter();
+    });
+  }
+
+  void _maybeApplyPendingMix() {
+    if (_pendingMixPhase > _mixPhase && !_inReelViewer) {
+      final p = _pendingMixPhase;
+      _pendingMixPhase = 0;
+      _applyMixPhase(p);
+    }
+  }
+
+  void _load(String uid) {
     _sub?.cancel();
     _sub = _svc.getExplorePostsStream(uid).listen(
       (docs) {
@@ -249,7 +350,7 @@ class _ExplorePageState extends State<ExplorePage> {
             .where((p) => p.hasContent)
             .toList();
         setState(() {
-          _all     = posts;
+          _all     = _mixPhase == 0 ? posts : _rerankPosts(posts, _mixPhase);
           _loading = false;
           _error   = false;
           _applyFilter();
@@ -294,6 +395,128 @@ class _ExplorePageState extends State<ExplorePage> {
     _shown = list;
   }
 
+  List<_Post> _rerankPosts(List<_Post> posts, int phase) {
+    if (posts.isEmpty) return posts;
+
+    // Featured “big tile” positions inside the list are determined by `_Grid`:
+    // featured check uses the section-start index, which advances by 3 each loop.
+    // That produces a featured 3-item block every (3 * _kFeatEvery) posts.
+    const featuredCycle = 3 * _kFeatEvery; // 21
+
+    // Two scoring perspectives.
+    // - Primary: specialization + interest first
+    // - Exploration: more variety (interest down, engagement/recency up)
+    double pInterest;
+    double pEngagement;
+    double pRecency;
+    double eInterest;
+    double eEngagement;
+    double eRecency;
+
+    if (phase == 1) {
+      pInterest = 0.58;
+      pEngagement = 0.27;
+      pRecency = 0.15;
+      eInterest = 0.25;
+      eEngagement = 0.45;
+      eRecency = 0.30;
+    } else if (phase == 2) {
+      pInterest = 0.50;
+      pEngagement = 0.30;
+      pRecency = 0.20;
+      eInterest = 0.15;
+      eEngagement = 0.50;
+      eRecency = 0.35;
+    } else {
+      pInterest = 0.50;
+      pEngagement = 0.30;
+      pRecency = 0.20;
+      eInterest = 0.25;
+      eEngagement = 0.45;
+      eRecency = 0.30;
+    }
+
+    final primary = posts
+        .map((p) => _RankItem(
+              post: p,
+              score: exploreScoreWithWeights(
+                postTags: p.tags,
+                userInterests: _userAffinityTags,
+                likes: p.likeCount,
+                comments: p.commentCount,
+                saves: p.savesCount,
+                createdAt: p.createdAt,
+                interestWeight: pInterest,
+                engagementWeight: pEngagement,
+                recencyWeight: pRecency,
+              ),
+            ))
+        .toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
+
+    final exploration = posts
+        .map((p) => _RankItem(
+              post: p,
+              score: exploreScoreWithWeights(
+                postTags: p.tags,
+                userInterests: _userAffinityTags,
+                likes: p.likeCount,
+                comments: p.commentCount,
+                saves: p.savesCount,
+                createdAt: p.createdAt,
+                interestWeight: eInterest,
+                engagementWeight: eEngagement,
+                recencyWeight: eRecency,
+              ),
+            ))
+        .toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
+
+    final primaryQ = primary.map((e) => e.post).toList();
+    final exploreQ = exploration.map((e) => e.post).toList();
+
+    final used = <String>{};
+    final result = <_Post>[];
+    result.length = posts.length;
+
+    int pIdx = 0;
+    int eIdx = 0;
+
+    _Post takeNextFrom(List<_Post> q, bool fromPrimary) {
+      if (q.isEmpty) throw StateError('Queue empty');
+      int idx = fromPrimary ? pIdx : eIdx;
+      while (idx < q.length && used.contains(q[idx].id)) idx++;
+      if (idx >= q.length) {
+        // Fallback: find any remaining unused post.
+        final remaining = posts.where((p) => !used.contains(p.id)).toList();
+        if (remaining.isEmpty) return posts.first;
+        final chosen = remaining.first;
+        used.add(chosen.id);
+        return chosen;
+      }
+      final chosen = q[idx];
+      used.add(chosen.id);
+      if (fromPrimary) {
+        pIdx = idx + 1;
+      } else {
+        eIdx = idx + 1;
+      }
+      return chosen;
+    }
+
+    for (int i = 0; i < posts.length; i++) {
+      final r = i % featuredCycle;
+
+      // Keep the entire featured 3-item block “primary” so the UI feature looks relevant.
+      final withinFeaturedBlock = r < 3;
+      final wantExplore = !withinFeaturedBlock && (i % 3 == 2);
+
+      result[i] = takeNextFrom(wantExplore ? exploreQ : primaryQ, !wantExplore);
+    }
+
+    return result;
+  }
+
   void _onScroll() {
     // could trigger pagination here; ExploreService is a stream so omitted
   }
@@ -309,9 +532,15 @@ class _ExplorePageState extends State<ExplorePage> {
       fallbackUrl: post.fallbackVideoUrl,
     );
     AppVideoFocus.instance.enterFullscreenReel();
+    _inReelViewer = true;
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => _ReelViewer(posts: videos, initialIndex: idx < 0 ? 0 : idx),
-    )).whenComplete(AppVideoFocus.instance.exitFullscreenReel);
+    )).whenComplete(() {
+      AppVideoFocus.instance.exitFullscreenReel();
+      if (!mounted) return;
+      _inReelViewer = false;
+      _maybeApplyPendingMix();
+    });
   }
 
   void _openDetail(_Post post) {
@@ -327,7 +556,8 @@ class _ExplorePageState extends State<ExplorePage> {
   Future<void> _refresh() async {
     setState(() { _loading = true; _error = false; _all = []; _shown = []; });
     _sub?.cancel();
-    _load();
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    _load(uid);
   }
 
   // Trending tags from current posts

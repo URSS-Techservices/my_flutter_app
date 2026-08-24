@@ -1,19 +1,4 @@
-// SearchPage.dart — Fully fixed + improved Instagram-style search for Halo
-//
-// All bugs fixed:
-// 1. _PostSearchGrid: shrinkWrap + physics fixed (no more layout crash)
-// 2. CachedNetworkImage used everywhere (no more Image.network flicker)
-// 3. Clear (×) button on search TextField
-// 4. onSubmitted triggers immediate search
-// 5. Dead _cachedUserDocs removed
-// 6. Redundant null-checks fixed in _fetchUsersByCategory
-// 7. TabBarView height dynamic via LayoutBuilder (no hardcoded 420)
-// 8. Follow/Unfollow button inline on user result cards
-// 9. Recent searches persisted via SharedPreferences
-// 10. ExpertsListPage: real profile photos + pull-to-refresh
-// 11. Account type badge (Guru / Wellness / Aspirant) on result cards
-// 12. Keyboard submit triggers search
-// 13. Consistent CachedNetworkImage avatar pattern throughout
+
 
 import 'dart:async';
 
@@ -30,7 +15,6 @@ import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsP
 import 'package:halo/services/search_service.dart';
 import 'package:halo/utils/search_ranking.dart';
 
-// ------- THEME CONSTANTS -------
 const Color kPrimaryColor = Color(0xFFA58CE3);
 const Color kSecondaryColor = Color(0xFF5B3FA3);
 const Color kBackgroundColor = Color(0xFFF4F1FB);
@@ -242,7 +226,7 @@ String? _postImageUrl(Map<String, dynamic> data) {
   final media = data['media'];
   if (media is List && media.isNotEmpty) {
     final first = media.first;
-    if (first is Map && first['url'] != null)
+    if (first is Map && first['url'] != null);
       return first['url']?.toString();
   }
   return null;
@@ -299,7 +283,7 @@ Widget _userAvatar(String? photoUrl, String fallbackName,
       : 'U';
   return CircleAvatar(
     radius: radius,
-    backgroundColor: kPrimaryColor.withOpacity(0.12),
+    backgroundColor: kPrimaryColor.withValues(alpha: 0.012),
     child: ClipOval(
       child: photoUrl != null && photoUrl.isNotEmpty
           ? CachedNetworkImage(
@@ -308,7 +292,7 @@ Widget _userAvatar(String? photoUrl, String fallbackName,
         height: radius * 2,
         fit: BoxFit.cover,
         placeholder: (_, __) => Container(
-          color: kPrimaryColor.withOpacity(0.08),
+          color: kPrimaryColor.withValues(alpha: 0.08),
           child: Center(
             child: Text(initials,
                 style: TextStyle(
@@ -318,7 +302,7 @@ Widget _userAvatar(String? photoUrl, String fallbackName,
           ),
         ),
         errorWidget: (_, __, ___) => Container(
-          color: kPrimaryColor.withOpacity(0.08),
+          color: kPrimaryColor.withValues(alpha: 0.08),
           child: Center(
             child: Text(initials,
                 style: TextStyle(
@@ -331,7 +315,8 @@ Widget _userAvatar(String? photoUrl, String fallbackName,
           : Container(
         width: radius * 2,
         height: radius * 2,
-        color: kPrimaryColor.withOpacity(0.08),
+        color: kPrimaryColor.withValues(alpha:0.08),
+
         child: Center(
           child: Text(initials,
               style: TextStyle(

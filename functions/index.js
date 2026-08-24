@@ -605,7 +605,7 @@ function scalePadFilter(tier, rotationDeg = 0) {
 
 /** Pixels are display-oriented; clear stale rotate tags on output. */
 const ORIENTATION_OUTPUT_OPTS = [
-  '-metadata:s:v:0',
+  '-metadata:s:v:0',    
   'rotate=0',
 ];
 

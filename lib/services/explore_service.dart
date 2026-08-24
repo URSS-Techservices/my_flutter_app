@@ -6,6 +6,7 @@ class ExploreService {
   static const Duration _kSideQueryTtl = Duration(minutes: 3);
   static final Map<String, _TimedListCache> _followingCache = {};
   static final Map<String, _TimedListCache> _interestsCache = {};
+  static final Map<String, _TimedListCache> _specialtiesCache = {};
 
   /// All posts ordered by createdAt descending, limit 200.
   /// No date filter — we want to show all existing content on Explore.
@@ -66,6 +67,27 @@ class ExploreService {
     }
   }
 
+  /// Current user's specialties from `users/{uid}.specialties`.
+  Future<List<String>> getUserSpecialties(String currentUserId) async {
+    if (currentUserId.isEmpty) return [];
+    final cached = _specialtiesCache[currentUserId];
+    if (cached != null && !cached.isExpired) return cached.values;
+    try {
+      final doc = await _firestore.collection('users').doc(currentUserId).get();
+      final data = doc.data();
+      final list = data?['specialties'];
+      if (list is! List) {
+        _specialtiesCache[currentUserId] = _TimedListCache(const []);
+        return [];
+      }
+      final values = list.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      _specialtiesCache[currentUserId] = _TimedListCache(values);
+      return values;
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Explore feed: ranked by exploreScore, diversity (max 3 per user).
   /// Shows ALL posts — not filtering by following so the grid is always full.
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> getExplorePostsStream(String currentUserId) {
@@ -73,6 +95,8 @@ class ExploreService {
       var docs = snapshot.docs;
 
       final userInterests = await getUserInterests(currentUserId);
+      final specialties = await getUserSpecialties(currentUserId);
+      final userInterestsWithSpecialties = <String>{...userInterests, ...specialties}.toList();
 
       final scored = <_ScoredPost>[];
       for (final doc in docs) {
@@ -84,7 +108,7 @@ class ExploreService {
         final saves = (d['savesCount'] as int?) ?? 0;
         final score = exploreScore(
           postTags: tags,
-          userInterests: userInterests,
+          userInterests: userInterestsWithSpecialties,
           likes: likes,
           comments: comments,
           saves: saves,

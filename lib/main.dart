@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:halo/Bottom Pages/HomePage.dart';
 import 'package:halo/Category/categorypage.dart';
 import 'package:halo/forgotpasswordpage.dart';
@@ -21,7 +20,6 @@ import 'package:flutter/services.dart';
 import 'package:halo/services/app_logger.dart';
 import 'package:halo/services/video_memory_bridge.dart';
 
-// ----------------- HALO THEME CONSTANTS -----------------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep purple
 const Color kLightBackground = Color(0xFFF4F1FB); // Soft lavender background
@@ -1017,7 +1015,7 @@ class SocialButton extends StatelessWidget {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
             ),
-            side: BorderSide(color: kPrimaryColor.withOpacity(0.3)),
+            side: BorderSide(color: kPrimaryColor.withValues(alpha: 0.3)),
           ),
           child: Text(
             text,

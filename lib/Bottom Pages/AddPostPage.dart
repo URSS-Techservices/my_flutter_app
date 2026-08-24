@@ -460,16 +460,16 @@ class _AddPostPageState extends State<AddPostPage> {
             gradient: color != null
                 ? LinearGradient(
               colors: [
-                color.withOpacity(0.9),
-                color.withOpacity(0.7),
+                color.withValues(alpha: 0.9),
+                color.withValues(alpha: 0.7),
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             )
                 : LinearGradient(
               colors: [
-                kPrimaryColor.withOpacity(0.15),
-                kPrimaryColor.withOpacity(0.08),
+                kPrimaryColor.withValues(alpha: 0.15),
+                kPrimaryColor.withValues(alpha: 0.08),
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -478,14 +478,14 @@ class _AddPostPageState extends State<AddPostPage> {
             border: Border.all(
               color: isDisabled
                   ? Colors.grey.shade300
-                  : (color ?? kPrimaryColor).withOpacity(0.3),
+                  : (color ?? kPrimaryColor).withValues(alpha: 0.3),
               width: 1.5,
             ),
             boxShadow: isDisabled
                 ? []
                 : [
               BoxShadow(
-                color: (color ?? kPrimaryColor).withOpacity(0.2),
+                color: (color ?? kPrimaryColor).withValues(alpha: 0.2),
                 blurRadius: 12,
                 spreadRadius: -2,
                 offset: const Offset(0, 4),

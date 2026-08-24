@@ -35,3 +35,29 @@ double exploreScore({
   final r = recencyScore(createdAt);
   return i * 0.5 + e * 0.3 + r * 0.2;
 }
+
+/// Same scoring components as [exploreScore], but lets the caller shift
+/// weights between “interest-first” vs “discovery/more variety”.
+double exploreScoreWithWeights({
+  required List<String> postTags,
+  required List<String> userInterests,
+  required int likes,
+  required int comments,
+  required int saves,
+  required DateTime createdAt,
+  required double interestWeight,
+  required double engagementWeight,
+  required double recencyWeight,
+}) {
+  final i = interestScore(postTags, userInterests);
+  final e = engagementScore(likes, comments, saves);
+  final r = recencyScore(createdAt);
+
+  final sum = interestWeight + engagementWeight + recencyWeight;
+  if (sum <= 0) return 0.0;
+
+  final iw = interestWeight / sum;
+  final ew = engagementWeight / sum;
+  final rw = recencyWeight / sum;
+  return i * iw + e * ew + r * rw;
+}
