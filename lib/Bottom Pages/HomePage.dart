@@ -37,6 +37,7 @@ import 'package:halo/services/video_playback_resolver.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:halo/story/story_upload_sheet.dart';
 import 'package:halo/story/story_viewer_page.dart';
+import 'package:halo/utils/shell_back.dart';
 import 'package:halo/utils/story_utils.dart';
 import 'package:halo/widgets/save_button.dart';
 
@@ -184,7 +185,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _searchPage  = SearchPage(onBackToHome: _goHomeTab);
-    _explorePage = const ExplorePage();
+    _explorePage = ExplorePage(onBackToHome: _goHomeTab);
     _notifPage   = NotificationPage(onBackToHome: _goHomeTab);
     _profilePage = _ProfileTab(onBackToHome: _goHomeTab);
     _scrollCtrl.addListener(_onScroll);
@@ -530,8 +531,10 @@ class _HomePageState extends State<HomePage> {
         currentIndex: _navIndex,
         onTap: (i) async {
           if (i == 3) {
-            await Navigator.push(context, MaterialPageRoute(
-              fullscreenDialog: true, builder: (_) => AddPostPage()));
+            await Navigator.push(
+              context,
+              buildShellPageRoute(AddPostPage(onBackToHome: _goHomeTab)),
+            );
             if (mounted) await _refreshFeed();
             return;
           }

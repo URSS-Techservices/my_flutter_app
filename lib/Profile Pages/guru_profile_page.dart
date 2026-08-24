@@ -1,7 +1,6 @@
 // guru_profile_page.dart  (Guru Profile – advanced features)
 
 // -------------------- IMPORTS --------------------
-import 'package:camera/camera.dart';
 import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 // local pages
 import '../../editprofilepage.dart';
@@ -29,7 +27,14 @@ import 'package:halo/screens/profile/widgets/guru/guru_identity_block.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_recent_posts_section.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_action_row.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_bio_card.dart';
-import 'package:halo/screens/profile/widgets/guru/guru_cta_row.dart';
+import 'package:halo/screens/profile/configs/guru_profile_config.dart';
+import 'package:halo/screens/profile/core/profile_field_utils.dart';
+import 'package:halo/screens/profile/core/profile_modules.dart';
+import 'package:halo/screens/profile/core/profile_type.dart';
+import 'package:halo/screens/profile/widgets/common/profile_completeness_meter.dart';
+import 'package:halo/screens/profile/widgets/common/profile_highlights_row.dart';
+import 'package:halo/screens/profile/pages/profile_modules_editor_page.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_gate.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_title.dart';
 import 'package:halo/screens/profile/widgets/common/profile_section_card.dart';
 import 'package:halo/screens/profile/widgets/common/profile_empty_state.dart';
@@ -48,6 +53,14 @@ import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
 import 'package:halo/screens/profile/profile_theme.dart';
 import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_profile_shell.dart';
+import 'package:halo/screens/profile/pages/guru_availability_editor_page.dart';
+import 'package:halo/screens/profile/widgets/common/booking_inbox_section.dart';
+import 'package:halo/services/booking_requests_service.dart';
+import 'package:halo/services/guru_programs_service.dart';
+import 'package:halo/screens/profile/pages/guru_programs_editor_page.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_booking_slot_picker.dart';
+import 'package:halo/screens/profile/widgets/guru/guru_profile_tab_content.dart';
+import 'package:halo/screens/profile/widgets/common/profile_save_button.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
 import 'package:halo/screens/profile/pages/follow_list_page.dart';
 import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsPage;
@@ -144,6 +157,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
   // classes
   List<Map<String, dynamic>> _classes = [];
+  List<Map<String, dynamic>> _products = [];
+  final GuruProgramsService _programsService = GuruProgramsService();
 
   // students
   List<Map<String, dynamic>> _students = [];
@@ -160,6 +175,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   List<Map<String, dynamic>> _reviews = [];
   List<Map<String, dynamic>> _programs = [];
   List<Map<String, dynamic>> _lastWorkouts = [];
+  List<Map<String, dynamic>> _successStories = [];
+  List<Map<String, dynamic>> _videoTutorials = [];
+  ProfileModules _profileModules = ProfileModules.defaultEnabled();
+  Map<String, dynamic> _userDocSnapshot = {};
 
   // -------------------- STATE --------------------
   bool _isFollowing = false;
@@ -168,10 +187,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   final ImagePicker _picker = ImagePicker();
   ProfileLocalPhoto? _profilePhotoLocal;
   ProfileLocalPhoto? _coverPhotoLocal;
-
-  CameraController? _cameraController;
-  List<CameraDescription>? _cameras;
-  bool _isCameraInitialized = false;
 
   late final AnimationController _followAnimController;
   late final TabController _tabController;
@@ -189,7 +204,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
   @override
   void dispose() {
-    _cameraController?.dispose();
     _followAnimController.dispose();
     _tabController.dispose();
     super.dispose();
@@ -222,8 +236,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         }
 
         // Guru signup uses full_name; also support name / business_name
-        final nameRaw = data['full_name'] ?? data['name'] ?? data['business_name'] ?? '';
-        _fullName = (nameRaw is String ? nameRaw : nameRaw.toString()).trim();
+        _fullName = ProfileFieldUtils.displayName(data);
+        _userDocSnapshot = Map<String, dynamic>.from(data);
+        _profileModules = ProfileModules.fromMap(
+          data['profileModules'] as Map<String, dynamic>?,
+        );
         _username = (data['username'] ?? '') as String;
         _primaryCategory = (data['primaryCategory'] ?? '') as String;
         _city = (data['city'] ?? '') as String;
@@ -231,8 +248,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         data['experienceYears'] is int ? data['experienceYears'] as int : null;
 
         _bio = (data['bio'] ?? '') as String;
-        _profilePhotoUrl = data['profilePhoto'] as String?;
-        _coverPhotoUrl = data['coverPhoto'] as String?;
+        _profilePhotoUrl = ProfileFieldUtils.profilePhotoUrl(data).isEmpty
+            ? null
+            : ProfileFieldUtils.profilePhotoUrl(data);
+        _coverPhotoUrl = ProfileFieldUtils.coverPhotoUrl(data).isEmpty
+            ? null
+            : ProfileFieldUtils.coverPhotoUrl(data);
 
         _followersCount = (data['followersCount'] ?? 0) as int;
         _followingCount = (data['followingCount'] ?? 0) as int;
@@ -423,40 +444,22 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               : [];
         }
 
-        // classes - load from subcollection
+        // Unified programs / products / classes
         try {
-          final classesSnapshot = await _firestore
-              .collection('users')
-              .doc(widget.profileUserId)
-              .collection('classes')
-              .where('isActive', isEqualTo: true)
-              .limit(10)
-              .get();
-
-          if (classesSnapshot.docs.isNotEmpty) {
-            _classes = classesSnapshot.docs.map((doc) {
-              final d = doc.data();
-              return <String, dynamic>{
-                'id': doc.id,
-                'name': d['name'] ?? 'Batch',
-                'schedule': d['schedule'] ?? '',
-                'enrolled': d['enrolled'] ?? 0,
-                'capacity': d['capacity'] ?? 0,
-                'price': d['price'] ?? 0,
-              };
-            }).toList();
-          } else {
-            final cls = data['classes'];
-            _classes = cls is List
-                ? cls.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-                : [];
-          }
+          final loaded = await _programsService.load(
+            guruId: widget.profileUserId,
+            userData: data,
+          );
+          _programs = loaded.programs;
+          _products = loaded.products;
+          _classes = loaded.classes
+              .map(GuruProgramsService.asClassView)
+              .toList();
         } catch (e) {
-          debugPrint('Error loading classes: $e');
-          final cls = data['classes'];
-          _classes = cls is List
-              ? cls.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-              : [];
+          debugPrint('Error loading guru programs: $e');
+          _programs = [];
+          _products = [];
+          _classes = [];
         }
 
         // students - load from subcollection
@@ -544,33 +547,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           profileUserId: widget.profileUserId,
         );
 
-        // Load programs/services (from classes or popularProducts)
-        try {
-          if (_classes.isNotEmpty) {
-            _programs = _classes.take(5).map((cls) {
-              return <String, dynamic>{
-                'id': cls['id'] ?? '',
-                'name': cls['name'] ?? 'Program',
-                'duration': cls['schedule'] ?? 'Ongoing',
-                'imageUrl': cls['imageUrl'],
-                'price': cls['price'] ?? 0,
-              };
-            }).toList();
-          } else {
-            final productsRaw = data['popularProducts'];
-            if (productsRaw is List && productsRaw.isNotEmpty) {
-              _programs = productsRaw.take(5).map((p) {
-                return Map<String, dynamic>.from(p as Map);
-              }).toList();
-            } else {
-              _programs = [];
-            }
-          }
-        } catch (e) {
-          debugPrint('Error loading programs: $e');
-          _programs = [];
-        }
-
         // Load last workouts
         try {
           final workoutsRaw = data['lastWorkouts'];
@@ -584,6 +560,36 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         } catch (e) {
           debugPrint('Error loading workouts: $e');
           _lastWorkouts = [];
+        }
+
+        try {
+          final storiesSnap = await _firestore
+              .collection('users')
+              .doc(widget.profileUserId)
+              .collection('successStories')
+              .limit(10)
+              .get();
+          _successStories = storiesSnap.docs
+              .map((doc) => {'id': doc.id, ...doc.data()})
+              .toList();
+        } catch (e) {
+          debugPrint('Error loading success stories: $e');
+          _successStories = [];
+        }
+
+        try {
+          final videosSnap = await _firestore
+              .collection('users')
+              .doc(widget.profileUserId)
+              .collection('videoTutorials')
+              .limit(10)
+              .get();
+          _videoTutorials = videosSnap.docs
+              .map((doc) => {'id': doc.id, ...doc.data()})
+              .toList();
+        } catch (e) {
+          debugPrint('Error loading video tutorials: $e');
+          _videoTutorials = [];
         }
       }
 
@@ -622,29 +628,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   // ===================================================================
-  //  CAMERA / IMAGES
+  //  IMAGES
   // ===================================================================
-  Future<void> _initializeCamera() async {
-    try {
-      final currentStatus = await Permission.camera.status;
-      if (currentStatus != PermissionStatus.granted) {
-        final status = await Permission.camera.request();
-        if (status != PermissionStatus.granted) return;
-      }
-
-      _cameras = await availableCameras();
-      if (_cameras != null && _cameras!.isNotEmpty) {
-        _cameraController =
-            CameraController(_cameras![0], ResolutionPreset.high);
-        await _cameraController!.initialize();
-        if (!mounted) return;
-        setState(() => _isCameraInitialized = true);
-      }
-    } catch (e) {
-      debugPrint('camera init error: $e');
-    }
-  }
-
   Future<void> _pickProfileImage() async {
     if (!_isOwnProfile || _currentUser == null) return;
     final XFile? picked =
@@ -840,26 +825,38 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // ===================================================================
   Future<void> _handleManageSlots() async {
     if (!_isOwnProfile || _currentUser == null) return;
-    await Navigator.push(
+    final saved = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (ctx) => Scaffold(
-          backgroundColor: ProfileLayout.bg,
-          appBar: AppBar(
-            title: const Text('Booking Management'),
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black87,
-            elevation: 0,
-          ),
-          body: SingleChildScrollView(
-            child: GuruBookingSection(
-              guruid: _currentUser!.uid,
-              isOwnProfile: true,
-              bookingSettings: _bookingSettings,
-              upcomingSessions: _upcomingSessions,
-              pastSessions: _pastSessions,
-            ),
-          ),
+        builder: (ctx) => GuruAvailabilityEditorPage(
+          guruUserId: _currentUser!.uid,
+          bookingSettings: _bookingSettings,
+        ),
+      ),
+    );
+    if (saved == true && mounted) await _loadProfileData();
+  }
+
+  Future<void> _submitGuruBookingRequest() async {
+    if (_currentUser == null) {
+      Fluttertoast.showToast(msg: 'Please login to book a session');
+      return;
+    }
+
+    await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: GuruBookingSlotPicker(
+          guruId: widget.profileUserId,
+          guruName: _fullName.isNotEmpty ? _fullName : 'Coach',
+          currentUserId: _currentUser!.uid,
+          bookingSettings: _bookingSettings,
         ),
       ),
     );
@@ -867,61 +864,25 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
   Future<void> _handleBookNow() async {
     if (_isOwnProfile) return;
-
-    if (_currentUser == null) {
-      Fluttertoast.showToast(msg: 'Please login to book a session');
-      return;
-    }
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => Scaffold(
-          backgroundColor: ProfileLayout.bg,
-          appBar: AppBar(
-            title: Text('Book with $_fullName'),
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black87,
-            elevation: 0,
-          ),
-          body: SingleChildScrollView(
-            child: GuruBookingSection(
-              guruid: widget.profileUserId,
-              isOwnProfile: false,
-              bookingSettings: _bookingSettings,
-              upcomingSessions: _upcomingSessions,
-              pastSessions: _pastSessions,
-            ),
-          ),
-        ),
-      ),
-    );
+    await _submitGuruBookingRequest();
   }
 
   Future<void> _handleManageClasses() async {
+    await _openProgramsEditor(tab: GuruProgramType.classBatch);
+  }
+
+  Future<void> _openProgramsEditor({GuruProgramType tab = GuruProgramType.program}) async {
     if (!_isOwnProfile || _currentUser == null) return;
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (ctx) => Scaffold(
-          backgroundColor: ProfileLayout.bg,
-          appBar: AppBar(
-            title: const Text('Classes & Batches'),
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black87,
-            elevation: 0,
-          ),
-          body: SingleChildScrollView(
-            child: GuruClassesSection(
-              guruid: _currentUser!.uid,
-              isOwnProfile: true,
-              classes: _classes,
-              specialties: _specialties,
-            ),
-          ),
+        builder: (ctx) => GuruProgramsEditorPage(
+          guruUserId: _currentUser!.uid,
+          initialTab: tab,
         ),
       ),
     );
+    if (mounted) await _loadProfileData();
   }
 
   Future<void> _handleViewPayoutDetails() async {
@@ -995,7 +956,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         final name = updatedData['name']?.toString().trim() ?? '';
         await _firestore.collection('users').doc(_currentUser!.uid).update({
           'username': username,
-          'name': name,
+          ...ProfileFieldUtils.nameUpdateFields(name),
           'bio': updatedData['bio'],
           'searchTerms': buildSearchTerms(name: name, username: username),
         });
@@ -1086,12 +1047,28 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     );
   }
 
+  Future<void> _openProfileModulesEditor() async {
+    if (!_isOwnProfile) return;
+    final updated = await openProfileModulesEditor(
+      context,
+      kind: ProfileKind.guru,
+      initialModulesRaw: _profileModules.toMap(),
+    );
+    if (updated != null && mounted) {
+      setState(() => _profileModules = ProfileModules(updated));
+    }
+  }
+
+  bool _isGuruSectionEnabled(String sectionId) =>
+      GuruProfileConfig.isSectionEnabled(_profileModules, sectionId);
+
   Widget _buildActionButtons() {
     return GuruActionRow(
       isOwnProfile: _isOwnProfile,
       isFollowing: _isFollowing,
       onToggleFollow: _toggleFollow,
       onMessage: _openMessage,
+      onBook: _handleBookNow,
       onEditProfile: _handleEditProfile,
       lavender: ProfileLayout.lavender,
       deepLavender: ProfileLayout.deepLavender,
@@ -1156,8 +1133,36 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         const SizedBox(height: 10),
         _buildStatsCard(),
         const SizedBox(height: 12),
-        _buildActionButtons(),
+        Row(
+          children: [
+            Expanded(child: _buildActionButtons()),
+            if (!_isOwnProfile)
+              ProfileSaveButton(
+                currentUserId: _currentUser?.uid,
+                profileUserId: widget.profileUserId,
+                accountType: 'guru',
+                displayName: _fullName.isNotEmpty ? _fullName : 'Coach',
+                profilePhoto: _profilePhotoUrl,
+                category: _primaryCategory,
+              ),
+          ],
+        ),
         _buildBioCard(),
+        if (_isOwnProfile)
+          ProfileCompletenessMeter(
+            kind: ProfileKind.guru,
+            userData: _userDocSnapshot,
+            onTapImprove: _handleEditProfile,
+          ),
+        ProfileHighlightsRow(
+          posts: _recentPosts,
+          onTapPost: (postId) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => PostDetailsPage(postId: postId)),
+            );
+          },
+        ),
         const SizedBox(height: 4),
       ],
     );
@@ -1202,6 +1207,8 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               MaterialPageRoute(builder: (ctx) => SettingsPage()),
             );
             if (result == 'logout') await _signOut();
+          } else if (value == 'Profile Sections') {
+            await _openProfileModulesEditor();
           } else if (value == 'Logout') {
             await _signOut();
           }
@@ -1209,6 +1216,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         itemBuilder: (context) => const [
           PopupMenuItem(value: 'Settings', child: Text('Settings')),
           PopupMenuItem(value: 'Privacy', child: Text('Privacy')),
+          PopupMenuItem(value: 'Profile Sections', child: Text('Profile Sections')),
           PopupMenuItem(value: 'Edit Profile', child: Text('Edit Profile')),
           PopupMenuItem(value: 'Logout', child: Text('Logout')),
         ],
@@ -1217,40 +1225,28 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Widget _buildProfileTabContent() {
-    return ColoredBox(
-      color: ProfileLayout.bg,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 16),
-          if (_isOwnProfile) ...[
-            _buildCTAButtons(),
-            const SizedBox(height: 12),
-            _buildBusinessFeaturesShortcut(),
-            const SizedBox(height: 24),
-          ],
-          _buildPopularProductsSection(),
-          const SizedBox(height: 24),
-          _buildLastWorkoutsSection(),
-          const SizedBox(height: 24),
-          if (_isOwnProfile) _buildRecentPostsSection(),
-          if (_isOwnProfile) const SizedBox(height: 24),
-          _buildSpecializationsSection(),
-          const SizedBox(height: 24),
-          _buildReviewsSection(),
-          const SizedBox(height: 24),
-          _buildSocialLinksSection(),
-          const SizedBox(height: 24),
-          _buildTestimonialsSection(),
-          _buildCertificationsDisplaySection(),
-          _buildTrainingProgramsShowcase(),
-          _buildSuccessStoriesSection(),
-          _buildVideoTutorialsPreview(),
-          const SizedBox(height: 24),
-          _buildFooter(),
-          const SizedBox(height: 40),
-        ],
-      ),
+    return GuruProfileTabContent(
+      isOwnProfile: _isOwnProfile,
+      isSectionEnabled: _isGuruSectionEnabled,
+      businessShortcut: _isOwnProfile ? _buildBusinessFeaturesShortcut() : null,
+      popularProducts: _buildPopularProductsSection(),
+      lastWorkouts: _buildLastWorkoutsSection(),
+      recentPosts: _isOwnProfile && _isGuruSectionEnabled('recent_posts') ? _buildRecentPostsSection() : null,
+      specializations: _buildSpecializationsSection(),
+      reviews: _buildReviewsSection(),
+      socialLinks: _buildSocialLinksSection(),
+      certifications: _buildCertificationsDisplaySection(),
+      trainingPrograms: _buildTrainingProgramsShowcase(),
+      successStories: _successStories,
+      videoTutorials: _videoTutorials,
+      footer: _buildFooter(),
+      onAddSuccessStory: _addSuccessStory,
+      onEditSuccessStory: _editSuccessStory,
+      onDeleteSuccessStory: _deleteSuccessStory,
+      onAddVideoTutorial: _addVideoTutorial,
+      onViewAllVideos: () => _showAllVideos(_videoTutorials),
+      onEditVideoTutorial: _editVideoTutorial,
+      onDeleteVideoTutorial: _deleteVideoTutorial,
     );
   }
 
@@ -1270,6 +1266,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             onManageSlots: _isOwnProfile ? _handleManageSlots : null,
             onBookNow: !_isOwnProfile ? _handleBookNow : null,
           ),
+          if (_isOwnProfile)
+            BookingInboxSection(
+              providerId: widget.profileUserId,
+              providerKind: BookingProviderKind.guru,
+              isOwner: true,
+            ),
           GuruClassesSection(
             guruid: widget.profileUserId,
             isOwnProfile: _isOwnProfile,
@@ -1386,18 +1388,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   // ===================================================================
   //  FIRST TAB SECTION BUILDERS
   // ===================================================================
-  Widget _buildCTAButtons() {
-    return GuruCtaRow(
-      isOwnProfile: _isOwnProfile,
-      isFollowing: _isFollowing,
-      onToggleFollow: _toggleFollow,
-      onMessage: _openMessage,
-      onBook: _handleBookNow,
-      lavender: ProfileLayout.lavender,
-      deepLavender: ProfileLayout.deepLavender,
-    );
-  }
-
   Widget _buildBioSection() {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20.0),
@@ -1823,11 +1813,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
   Widget _buildPopularProductsSection() {
     // Load products from user data
-    final products = _programs.isNotEmpty 
-        ? _programs 
-        : (widget.profileUserId == _currentUser?.uid 
-            ? [] 
-            : []);
+    final products = _products.isNotEmpty
+        ? _products
+        : (_programs.isNotEmpty ? _programs : const []);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1900,7 +1888,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             padding: const EdgeInsets.symmetric(horizontal: 20.0),
             child: _isOwnProfile
                 ? TextButton.icon(
-                    onPressed: _addProgram,
+                    onPressed: () => _openProgramsEditor(tab: GuruProgramType.product),
                     icon: const Icon(Icons.add_circle_outline, size: 18),
                     label: const Text('Add products'),
                     style: TextButton.styleFrom(foregroundColor: ProfileLayout.lavender),
@@ -2231,24 +2219,16 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
     if (result == true && nameController.text.isNotEmpty) {
       try {
-        final newProgram = {
-          'id': DateTime.now().millisecondsSinceEpoch.toString(),
-          'name': nameController.text,
-          'duration': durationController.text.isNotEmpty
-              ? durationController.text
-              : 'Ongoing',
-          'createdAt': FieldValue.serverTimestamp(),
-        };
-
-        final updated = List<Map<String, dynamic>>.from(_programs)..add(newProgram);
-        await _firestore
-            .collection('users')
-            .doc(_currentUser!.uid)
-            .update({'popularProducts': updated});
-        setState(() => _programs = updated);
-        Fluttertoast.showToast(msg: 'Program added');
+        await _programsService.upsert(
+          guruId: _currentUser!.uid,
+          type: GuruProgramType.product,
+          name: nameController.text,
+          duration: durationController.text.isNotEmpty ? durationController.text : 'Ongoing',
+        );
+        await _loadProfileData();
+        Fluttertoast.showToast(msg: 'Product added');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to add program');
+        Fluttertoast.showToast(msg: 'Failed to add product');
       }
     }
   }
@@ -3204,7 +3184,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     if (_isOwnProfile) ...[
                       const SizedBox(height: 12),
                       ElevatedButton.icon(
-                        onPressed: _addTrainingProgram,
+                        onPressed: () => _openProgramsEditor(tab: GuruProgramType.program),
                         icon: Icon(Icons.add, size: 18),
                         label: Text('Add Program'),
                         style: ElevatedButton.styleFrom(
@@ -3335,365 +3315,6 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     );
   }
 
-  Widget _buildSuccessStoriesSection() {
-    // Mock success stories - in real app, load from Firestore
-    final successStories = [
-      {
-        'clientName': 'Rajesh K.',
-        'achievement': 'Lost 15kg in 3 months',
-        'beforeAfter': 'Before/After photos',
-        'testimonial': 'Amazing transformation with personalized training!',
-      },
-      {
-        'clientName': 'Priya M.',
-        'achievement': 'Completed first marathon',
-        'beforeAfter': 'Race day photos',
-        'testimonial': 'Best coach ever! Achieved my dream goal.',
-      },
-    ];
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(Icons.celebration, color: Colors.green[700], size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Success Stories',
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
-                  onPressed: _addSuccessStory,
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: SizedBox(
-            height: 200,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: successStories.length,
-              itemBuilder: (context, index) {
-                final story = successStories[index];
-                return Container(
-                  width: 280,
-                  margin: const EdgeInsets.only(right: 12),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 50,
-                            height: 50,
-                            decoration: BoxDecoration(
-                              color: Colors.green.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(Icons.emoji_events, color: Colors.green[700], size: 28),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  story['clientName'] as String,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                Text(
-                                  story['achievement'] as String,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 12,
-                                    color: Colors.green[700],
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (_isOwnProfile)
-                            PopupMenuButton<String>(
-                              icon: Icon(Icons.more_vert, size: 18, color: Colors.grey[600]),
-                              onSelected: (value) {
-                                if (value == 'edit') {
-                                  _editSuccessStory(index, story);
-                                } else if (value == 'delete') {
-                                  _deleteSuccessStory(index);
-                                }
-                              },
-                              itemBuilder: (context) => [
-                                PopupMenuItem(value: 'edit', child: Text('Edit')),
-                                PopupMenuItem(value: 'delete', child: Text('Delete')),
-                              ],
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        height: 80,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Center(
-                          child: Text(
-                            story['beforeAfter'] as String,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        story['testimonial'] as String,
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.grey[700],
-                          fontStyle: FontStyle.italic,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildVideoTutorialsPreview() {
-    // Mock video tutorials - in real app, load from Firestore
-    final tutorials = [
-      {'title': 'Proper Form: Deadlift', 'duration': '5:30', 'views': '1.2K'},
-      {'title': 'Cardio HIIT Workout', 'duration': '12:15', 'views': '3.5K'},
-      {'title': 'Yoga for Flexibility', 'duration': '20:00', 'views': '890'},
-    ];
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(Icons.play_circle_filled, color: Colors.red[700], size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Video Tutorials',
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
-              if (_isOwnProfile)
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: ProfileLayout.lavender),
-                  onPressed: _addVideoTutorial,
-                )
-              else if (tutorials.isNotEmpty)
-                TextButton(
-                  onPressed: () => _showAllVideos(tutorials),
-                  child: Text(
-                    'View All',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: ProfileLayout.lavender,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: SizedBox(
-            height: 140,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: tutorials.length,
-              itemBuilder: (context, index) {
-                final tutorial = tutorials[index];
-                return Container(
-                  width: 220,
-                  margin: const EdgeInsets.only(right: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[900],
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Stack(
-                    children: [
-                      // Video thumbnail placeholder
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey[800],
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Center(
-                          child: Icon(
-                            Icons.play_circle_outline,
-                            size: 48,
-                            color: Colors.white.withOpacity(0.8),
-                          ),
-                        ),
-                      ),
-                      if (_isOwnProfile)
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: PopupMenuButton<String>(
-                            icon: Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.6),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(Icons.more_vert, size: 16, color: Colors.white),
-                            ),
-                            onSelected: (value) {
-                              if (value == 'edit') {
-                                _editVideoTutorial(index, tutorial);
-                              } else if (value == 'delete') {
-                                _deleteVideoTutorial(index);
-                              }
-                            },
-                            itemBuilder: (context) => [
-                              PopupMenuItem(value: 'edit', child: Text('Edit')),
-                              PopupMenuItem(value: 'delete', child: Text('Delete')),
-                            ],
-                          ),
-                        ),
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.transparent,
-                                Colors.black.withOpacity(0.8),
-                              ],
-                            ),
-                            borderRadius: const BorderRadius.vertical(
-                              bottom: Radius.circular(12),
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                tutorial['title'] as String,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Icon(Icons.access_time, size: 12, color: Colors.white70),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    tutorial['duration'] as String,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 11,
-                                      color: Colors.white70,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Icon(Icons.visibility, size: 12, color: Colors.white70),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    tutorial['views'] as String,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 11,
-                                      color: Colors.white70,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 
   String _formatReviewDate(dynamic date) {
     if (date == null) return '';
@@ -4167,21 +3788,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               if (nameCtrl.text.trim().isEmpty) return;
               
               try {
-                final newProgram = {
-                  'name': nameCtrl.text.trim(),
-                  'duration': durationCtrl.text.trim().isEmpty ? 'Ongoing' : durationCtrl.text.trim(),
-                  'price': int.tryParse(priceCtrl.text.trim()) ?? 0,
-                  'description': descriptionCtrl.text.trim(),
-                };
-                
-                final updatedPrograms = List<Map<String, dynamic>>.from(_programs)..add(newProgram);
-                await _firestore
-                    .collection('users')
-                    .doc(_currentUser!.uid)
-                    .update({'trainingPrograms': updatedPrograms});
-                
-                setState(() => _programs = updatedPrograms);
-                Navigator.pop(ctx);
+                await _programsService.upsert(
+                  guruId: _currentUser!.uid,
+                  type: GuruProgramType.program,
+                  name: nameCtrl.text.trim(),
+                  duration: durationCtrl.text.trim().isEmpty ? 'Ongoing' : durationCtrl.text.trim(),
+                  price: int.tryParse(priceCtrl.text.trim()) ?? 0,
+                  description: descriptionCtrl.text.trim(),
+                );
+
+                await _loadProfileData();
+                if (ctx.mounted) Navigator.pop(ctx);
                 Fluttertoast.showToast(msg: 'Training program added successfully!');
               } catch (e) {
                 Fluttertoast.showToast(msg: 'Error adding program: $e');
@@ -4308,22 +3925,18 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               if (nameCtrl.text.trim().isEmpty) return;
               
               try {
-                final updatedProgram = {
-                  'name': nameCtrl.text.trim(),
-                  'duration': durationCtrl.text.trim(),
-                  'price': int.tryParse(priceCtrl.text.trim()) ?? 0,
-                  'description': descriptionCtrl.text.trim(),
-                };
-                
-                final updatedPrograms = List<Map<String, dynamic>>.from(_programs);
-                updatedPrograms[index] = updatedProgram;
-                await _firestore
-                    .collection('users')
-                    .doc(_currentUser!.uid)
-                    .update({'trainingPrograms': updatedPrograms});
-                
-                setState(() => _programs = updatedPrograms);
-                Navigator.pop(ctx);
+                await _programsService.upsert(
+                  guruId: _currentUser!.uid,
+                  programId: program['id']?.toString(),
+                  type: GuruProgramType.program,
+                  name: nameCtrl.text.trim(),
+                  duration: durationCtrl.text.trim(),
+                  price: int.tryParse(priceCtrl.text.trim()) ?? 0,
+                  description: descriptionCtrl.text.trim(),
+                );
+
+                await _loadProfileData();
+                if (ctx.mounted) Navigator.pop(ctx);
                 Fluttertoast.showToast(msg: 'Program updated successfully!');
               } catch (e) {
                 Fluttertoast.showToast(msg: 'Error updating program: $e');
@@ -4385,13 +3998,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
 
     if (confirmed == true) {
       try {
-        final updatedPrograms = List<Map<String, dynamic>>.from(_programs)..removeAt(index);
-        await _firestore
-            .collection('users')
-            .doc(_currentUser!.uid)
-            .update({'trainingPrograms': updatedPrograms});
-        
-        setState(() => _programs = updatedPrograms);
+        final programId = _programs[index]['id']?.toString();
+        if (programId != null && programId.isNotEmpty) {
+          await _programsService.delete(guruId: _currentUser!.uid, programId: programId);
+          await _loadProfileData();
+        }
         Fluttertoast.showToast(msg: 'Program deleted successfully!');
       } catch (e) {
         Fluttertoast.showToast(msg: 'Error deleting program: $e');

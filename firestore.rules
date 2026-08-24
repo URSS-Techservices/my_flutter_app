@@ -1,0 +1,278 @@
+rules_version = '2';
+
+// Halo Firestore security rules
+// Deploy: firebase deploy --only firestore:rules --project halo-fb212
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function onlyChangesKeys(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // Follow/unfollow updates another user's follower count.
+    function isFollowerCountUpdate() {
+      return isSignedIn() && onlyChangesKeys(['followersCount']);
+    }
+
+    // Review submission recalculates rating on guru/wellness profiles (client-side).
+    function isReviewStatsUpdate() {
+      return isSignedIn() && onlyChangesKeys(['rating', 'reviewCount']);
+    }
+
+    function isBookingParticipant(data) {
+      return isSignedIn() && (
+        request.auth.uid == data.userId ||
+        request.auth.uid == data.get('guruId', '') ||
+        request.auth.uid == data.get('wellnessId', '')
+      );
+    }
+
+    function isBookingProvider(data) {
+      return isSignedIn() && (
+        request.auth.uid == data.get('guruId', '') ||
+        request.auth.uid == data.get('wellnessId', '')
+      );
+    }
+
+    function isChatMember(chatId) {
+      return isSignedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+    }
+
+    function isValidBookingStatus(status) {
+      return status in ['pending', 'accepted', 'declined', 'cancelled', 'rejected'];
+    }
+
+    // ── Users ────────────────────────────────────────────────────────────────
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId)
+        || isFollowerCountUpdate()
+        || isReviewStatsUpdate();
+      allow delete: if isOwner(userId);
+
+      // Phase 3 — My Circle bookmarks (aspirant-owned)
+      match /savedProfiles/{profileId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Phase 3 — Wellness visit check-ins (aspirant-owned)
+      match /wellnessCheckIns/{checkInId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Social graph
+      match /followers/{followerId} {
+        allow read: if isSignedIn();
+        allow create, delete: if isSignedIn() && request.auth.uid == followerId;
+      }
+
+      match /following/{followingId} {
+        allow read: if isSignedIn();
+        allow create, delete: if isOwner(userId);
+      }
+
+      match /notifications/{notificationId} {
+        allow read, update, delete: if isOwner(userId);
+        allow create: if isSignedIn()
+          && request.resource.data.fromUserId == request.auth.uid;
+      }
+
+      match /blockedUsers/{blockedId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Phase 4.3 — Unified guru programs / products / classes
+      match /programs/{programId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      // Phase 4.4 — Wellness team & events
+      match /staff/{staffId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /events/{eventId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      // Legacy / business subcollections
+      match /classes/{classId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /students/{studentId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /products/{productId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /services/{serviceId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /gallery/{itemId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /membershipPlans/{planId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /specialOffers/{offerId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /awards/{awardId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /successStories/{storyId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+
+      match /videoTutorials/{videoId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+      }
+    }
+
+    // ── Booking requests (Phase 4.2 guru slots + wellness bookings) ──────────
+
+    match /booking_requests/{requestId} {
+      allow read: if isBookingParticipant(resource.data);
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && isValidBookingStatus(request.resource.data.status)
+        && (
+          request.resource.data.get('guruId', '') != ''
+          || request.resource.data.get('wellnessId', '') != ''
+        );
+
+      allow update: if isSignedIn() && (
+        // Requester can cancel their own booking
+        (
+          resource.data.userId == request.auth.uid
+          && onlyChangesKeys(['status'])
+          && request.resource.data.status == 'cancelled'
+        )
+        ||
+        // Guru / wellness owner can accept or decline
+        (
+          isBookingProvider(resource.data)
+          && onlyChangesKeys(['status'])
+          && isValidBookingStatus(request.resource.data.status)
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // ── Posts & engagement ───────────────────────────────────────────────────
+
+    match /posts/{postId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (
+        resource.data.userId == request.auth.uid
+        || onlyChangesKeys(['likeCount', 'commentCount', 'savesCount', 'likes'])
+      );
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      match /likes/{likeId} {
+        allow read: if isSignedIn();
+        allow create, delete: if isSignedIn() && request.auth.uid == likeId;
+      }
+
+      match /comments/{commentId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn()
+          && request.resource.data.userId == request.auth.uid;
+        allow update, delete: if isSignedIn()
+          && resource.data.userId == request.auth.uid;
+      }
+    }
+
+    // ── Reviews ──────────────────────────────────────────────────────────────
+
+    match /reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // ── Chat ─────────────────────────────────────────────────────────────────
+
+    match /chats/{chatId} {
+      allow read, update: if isSignedIn()
+        && request.auth.uid in resource.data.members;
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.members;
+
+      match /messages/{messageId} {
+        allow read: if isChatMember(chatId);
+        allow create: if isChatMember(chatId)
+          && request.resource.data.senderId == request.auth.uid;
+        allow update, delete: if isSignedIn()
+          && resource.data.senderId == request.auth.uid;
+      }
+    }
+
+    // ── Stories ──────────────────────────────────────────────────────────────
+
+    match /stories/{storyId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // ── Misc ─────────────────────────────────────────────────────────────────
+
+    match /relationships/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /feedback/{feedbackId} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if false;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

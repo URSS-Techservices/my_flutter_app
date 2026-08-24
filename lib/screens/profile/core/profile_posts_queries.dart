@@ -116,4 +116,44 @@ abstract final class ProfilePostsQueries {
       return [];
     }
   }
+
+  /// Aspirant profile highlights — latest posts with media metadata.
+  static Future<List<Map<String, dynamic>>> fetchAspirantProfilePostsPreview({
+    required FirebaseFirestore firestore,
+    required String profileUserId,
+  }) async {
+    try {
+      QuerySnapshot<Map<String, dynamic>> postsSnapshot;
+      try {
+        postsSnapshot = await firestore
+            .collection('posts')
+            .where('userId', isEqualTo: profileUserId)
+            .orderBy('timestamp', descending: true)
+            .limit(9)
+            .get();
+      } catch (_) {
+        postsSnapshot = await firestore
+            .collection('posts')
+            .where('userId', isEqualTo: profileUserId)
+            .limit(9)
+            .get();
+      }
+
+      return postsSnapshot.docs.map((doc) {
+        final d = doc.data();
+        return <String, dynamic>{
+          'id': doc.id,
+          'imageUrl': profilePostImageUrlFromMap(d),
+          'caption': d['caption'] ?? '',
+          'timestamp': d['timestamp'] ?? d['createdAt'],
+          'isVideo': d['isVideo'] == true,
+          'music': d['music'],
+          'type': d['type'],
+        };
+      }).toList();
+    } catch (e) {
+      debugPrint('Error loading aspirant posts preview: $e');
+      return [];
+    }
+  }
 }

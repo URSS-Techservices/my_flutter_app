@@ -5,6 +5,7 @@
 // Reel viewer: vertical PageView, single VideoPlayerController per page.
 
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -25,6 +26,7 @@ import 'package:halo/services/video_decoder_budget.dart';
 import 'package:halo/services/video_dispose_serial.dart';
 import 'package:halo/services/video_playback_resolver.dart';
 import 'package:halo/screens/profile/profile_router_screen.dart';
+import 'package:halo/utils/shell_back.dart';
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
@@ -100,6 +102,35 @@ String _posterUrlFor(_Post post) {
   return '';
 }
 
+/// Best full-resolution image URL for photo posts (not grid thumbnails).
+String _fullImage(Map<String, dynamic> d) {
+  for (final m in MediaModel.parsePostMedia(d)) {
+    if (m.isImage) {
+      final u = m.image.forFullscreen();
+      if (u.isNotEmpty && !_isVideoUrl(u)) return u;
+    }
+  }
+  final images = d['images'];
+  if (images is List && images.isNotEmpty) {
+    final s = images.first.toString().trim();
+    if (s.isNotEmpty && !_isVideoUrl(s)) return s;
+  }
+  for (final k in ['imageUrl', 'photoUrl', 'image']) {
+    final s = (d[k] ?? '').toString().trim();
+    if (s.isNotEmpty && !_isVideoUrl(s)) return s;
+  }
+  return _thumb(d);
+}
+
+String _fullImageUrlFor(_Post post) {
+  if (post.isVideo) return _posterUrlFor(post);
+  if (post.imageUrl.isNotEmpty && !_isVideoUrl(post.imageUrl)) {
+    return post.imageUrl;
+  }
+  if (post.thumbUrl.isNotEmpty) return post.thumbUrl;
+  return '';
+}
+
 /// Playable URL for Explore — processed MP4 first on iOS and Android; HLS as fallback.
 ({String primary, String fallback}) _resolveExploreUrls(Map<String, dynamic> d) {
   return resolveFeedVideoUrls(postData: d);
@@ -166,7 +197,7 @@ class _Post {
     final d = doc.data();
     final isVid = _isVideoPost(d);
     final tv = _thumb(d);
-    final iv = isVid ? tv : ((d['imageUrl'] ?? d['photoUrl'] ?? tv).toString().trim());
+    final iv = isVid ? tv : _fullImage(d);
     final urls = isVid ? _resolveExploreUrls(d) : (primary: '', fallback: '');
     return _Post(
       id: doc.id,
@@ -206,11 +237,11 @@ extension _FilterLabel on _Filter {
     }
   }
 
-  IconData get icon {
+  IconData? get chipIcon {
     switch (this) {
       case _Filter.forYou:   return Icons.auto_awesome_rounded;
-      case _Filter.videos:   return Icons.play_circle_outline_rounded;
-      case _Filter.photos:   return Icons.photo_library_outlined;
+      case _Filter.videos:   return null;
+      case _Filter.photos:   return null;
       case _Filter.trending: return Icons.local_fire_department_rounded;
     }
   }
@@ -221,7 +252,11 @@ extension _FilterLabel on _Filter {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class ExplorePage extends StatefulWidget {
-  const ExplorePage({super.key});
+  const ExplorePage({super.key, this.onBackToHome});
+
+  /// Switches to the Home tab when embedded in [HomePage]'s bottom nav.
+  final VoidCallback? onBackToHome;
+
   @override
   State<ExplorePage> createState() => _ExplorePageState();
 }
@@ -311,10 +346,6 @@ class _ExplorePageState extends State<ExplorePage> {
     _shown = list;
   }
 
-  void _onScroll() {
-    // could trigger pagination here; ExploreService is a stream so omitted
-  }
-
   void _openReel(_Post post) {
     // Use ALL video posts (not just current filter) so swipe-through works
     final videos = _all.where((p) => p.isVideo && p.videoUrl.isNotEmpty).toList();
@@ -354,14 +385,49 @@ class _ExplorePageState extends State<ExplorePage> {
     ).whenComplete(AppVideoFocus.instance.exitFullscreenReel);
   }
 
+  void _openPhotoViewer(_Post post) {
+    final photos = _all
+        .where((p) => !p.isVideo && _fullImageUrlFor(p).isNotEmpty)
+        .toList();
+    if (photos.isEmpty) return;
+    final idx = photos.indexWhere((p) => p.id == post.id);
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => _PhotoViewer(
+          posts: photos,
+          initialIndex: idx < 0 ? 0 : idx,
+        ),
+        transitionDuration: const Duration(milliseconds: 180),
+        reverseTransitionDuration: const Duration(milliseconds: 160),
+        transitionsBuilder: (_, animation, __, child) {
+          final curve = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return FadeTransition(
+            opacity: curve,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1.0).animate(curve),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   void _openDetail(_Post post) {
     if (post.isVideo && post.videoUrl.isNotEmpty) {
       _openReel(post);
     } else {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => _ImageDetail(post: post),
-      ));
+      _openPhotoViewer(post);
     }
+  }
+
+  void _onScroll() {
+    // could trigger pagination here; ExploreService is a stream so omitted
   }
 
   Future<void> _refresh() async {
@@ -375,116 +441,371 @@ class _ExplorePageState extends State<ExplorePage> {
     return Scaffold(
       backgroundColor: _kBg,
       body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _ExploreHeader(),
-            _SearchBar(ctrl: _searchCtrl),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                children: _Filter.values.map((f) {
-                  final selected = _filter == f;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: _FilterChip(
-                      label: f.label,
-                      icon: f.icon,
-                      selected: selected,
-                      onTap: () => setState(() {
-                        _filter = f;
-                        _applyFilter();
-                      }),
-                    ),
-                  );
-                }).toList(),
+        top: false,
+        child: RefreshIndicator(
+          onRefresh: _refresh,
+          color: _kPrimary,
+          backgroundColor: Colors.white,
+          child: CustomScrollView(
+            controller: _scrollCtrl,
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            slivers: [
+              SliverToBoxAdapter(
+                child: _ExploreTopSection(
+                  onBackToHome: widget.onBackToHome,
+                  searchCtrl: _searchCtrl,
+                  filter: _filter,
+                  onFilterSelected: (f) => setState(() {
+                    _filter = f;
+                    _applyFilter();
+                  }),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: _error
-                  ? _ErrorView(onRetry: _refresh)
-                  : _loading
-                      ? const _ShimmerGrid()
-                      : _shown.isEmpty
-                          ? _EmptyView(hasQuery: _query.isNotEmpty || _filter != _Filter.forYou)
-                          : RefreshIndicator(
-                              onRefresh: _refresh,
-                              color: _kPrimary,
-                              backgroundColor: Colors.white,
-                              child: _Grid(
-                                posts: _shown,
-                                scrollCtrl: _scrollCtrl,
-                                onTap: _openDetail,
-                              ),
-                            ),
-            ),
-          ],
+              const SliverToBoxAdapter(child: SizedBox(height: 4)),
+              if (_error)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _ErrorView(onRetry: _refresh),
+                )
+              else if (_loading)
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: MediaQuery.sizeOf(context).height * 0.55,
+                    child: const _ShimmerGrid(),
+                  ),
+                )
+              else if (_shown.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _EmptyView(
+                    hasQuery: _query.isNotEmpty || _filter != _Filter.forYou,
+                  ),
+                )
+              else
+                ..._Grid.buildSlivers(
+                  posts: _shown,
+                  onTap: _openDetail,
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-// ─── Explore header ────────────────────────────────────────────────────────────
+// ─── Explore header (purple hero + filter chips) ─────────────────────────────
 
-class _ExploreHeader extends StatelessWidget {
-  const _ExploreHeader();
+class _ExploreTopSection extends StatelessWidget {
+  const _ExploreTopSection({
+    required this.searchCtrl,
+    required this.filter,
+    required this.onFilterSelected,
+    this.onBackToHome,
+  });
+
+  final TextEditingController searchCtrl;
+  final _Filter filter;
+  final ValueChanged<_Filter> onFilterSelected;
+  final VoidCallback? onBackToHome;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Explore',
-                  style: GoogleFonts.poppins(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF1A1A2E),
-                    letterSpacing: -0.5,
-                  ),
-                ),
-                Text(
-                  'Discover videos & photos',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12.5,
-                    color: const Color(0xFF888899),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
+    final topInset = MediaQuery.paddingOf(context).top;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(28),
+              bottomRight: Radius.circular(28),
             ),
-          ),
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [_kPrimary, _kAccent],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+            boxShadow: [
+              BoxShadow(
+                color: _kPrimary.withValues(alpha: 0.22),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+                spreadRadius: -2,
               ),
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: _kPrimary.withValues(alpha: 0.28),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: const Icon(Icons.explore_rounded, color: Colors.white, size: 22),
+            ],
           ),
-        ],
+          child: ClipRRect(
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(28),
+              bottomRight: Radius.circular(28),
+            ),
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    Color(0xFF4A3488),
+                    Color(0xFF5B3FA3),
+                    Color(0xFF7A5FC8),
+                  ],
+                  stops: [0.0, 0.5, 1.0],
+                ),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _ExploreHeaderWavePainter(),
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(16, topInset + 8, 16, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            _ExploreGlassIconButton(
+                              icon: Icons.arrow_back_ios_new_rounded,
+                              onTap: () => popOrGoHome(
+                                context,
+                                onBackToHome: onBackToHome,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              'Explore',
+                              style: GoogleFonts.poppins(
+                                fontSize: 26,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                                letterSpacing: -0.4,
+                                height: 1,
+                              ),
+                            ),
+                            const Spacer(),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _ExploreGlassSearchField(controller: searchCtrl),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 36,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            children: _Filter.values.map((f) {
+              final selected = filter == f;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: _FilterChip(
+                  label: f.label,
+                  icon: f.chipIcon,
+                  selected: selected,
+                  onTap: () => onFilterSelected(f),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 4),
+      ],
+    );
+  }
+}
+
+class _ExploreHeaderWavePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final wavePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.06)
+      ..style = PaintingStyle.fill;
+
+    final wave = Path()
+      ..moveTo(size.width * 0.55, 0)
+      ..quadraticBezierTo(
+        size.width * 0.72,
+        size.height * 0.35,
+        size.width,
+        size.height * 0.2,
+      )
+      ..lineTo(size.width, 0)
+      ..close();
+    canvas.drawPath(wave, wavePaint);
+
+    final dotPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.14);
+    const cols = 3;
+    const rows = 4;
+    const spacing = 7.0;
+    final gridLeft = size.width - 28;
+    final gridTop = 14.0;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        canvas.drawCircle(
+          Offset(gridLeft + c * spacing, gridTop + r * spacing),
+          1.4,
+          dotPaint,
+        );
+      }
+    }
+
+    canvas.drawCircle(
+      Offset(size.width * 0.78, size.height * 0.55),
+      size.width * 0.22,
+      Paint()..color = Colors.white.withValues(alpha: 0.04),
+    );
+
+    _drawSparkle(canvas, Offset(18, size.height * 0.22), 0.35);
+    _drawSparkle(canvas, Offset(42, size.height * 0.38), 0.25);
+    _drawSparkle(canvas, Offset(size.width - 36, size.height * 0.18), 0.3);
+  }
+
+  void _drawSparkle(Canvas canvas, Offset center, double scale) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    final arm = 4.0 * scale;
+    canvas.drawLine(
+      Offset(center.dx - arm, center.dy),
+      Offset(center.dx + arm, center.dy),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(center.dx, center.dy - arm),
+      Offset(center.dx, center.dy + arm),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _ExploreGlassIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _ExploreGlassIconButton({
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.18),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.32),
+                ),
+              ),
+              child: Icon(icon, color: Colors.white, size: 17),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExploreGlassSearchField extends StatelessWidget {
+  final TextEditingController controller;
+
+  const _ExploreGlassSearchField({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: TextField(
+          controller: controller,
+          textAlignVertical: TextAlignVertical.center,
+          keyboardAppearance: Brightness.dark,
+          textInputAction: TextInputAction.search,
+          style: GoogleFonts.poppins(
+            color: Colors.white,
+            fontSize: 14.5,
+            fontWeight: FontWeight.w400,
+          ),
+          cursorColor: Colors.white,
+          decoration: InputDecoration(
+            hintText: 'Search posts, people, tags…',
+            hintStyle: GoogleFonts.poppins(
+              color: Colors.white.withValues(alpha: 0.72),
+              fontSize: 14,
+              fontWeight: FontWeight.w400,
+            ),
+            prefixIcon: Icon(
+              Icons.search_rounded,
+              color: Colors.white.withValues(alpha: 0.9),
+              size: 22,
+            ),
+            suffixIcon: ListenableBuilder(
+              listenable: controller,
+              builder: (_, __) {
+                if (controller.text.isNotEmpty) {
+                  return IconButton(
+                    icon: Icon(
+                      Icons.close_rounded,
+                      color: Colors.white.withValues(alpha: 0.85),
+                      size: 20,
+                    ),
+                    onPressed: controller.clear,
+                  );
+                }
+                return Icon(
+                  Icons.tune_rounded,
+                  color: Colors.white.withValues(alpha: 0.85),
+                  size: 22,
+                );
+              },
+            ),
+            filled: true,
+            fillColor: Colors.white.withValues(alpha: 0.14),
+            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(28),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(28),
+              borderSide: BorderSide(
+                color: Colors.white.withValues(alpha: 0.32),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(28),
+              borderSide: BorderSide(
+                color: Colors.white.withValues(alpha: 0.55),
+                width: 1.2,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -492,13 +813,13 @@ class _ExploreHeader extends StatelessWidget {
 
 class _FilterChip extends StatelessWidget {
   final String label;
-  final IconData icon;
+  final IconData? icon;
   final bool selected;
   final VoidCallback onTap;
 
   const _FilterChip({
     required this.label,
-    required this.icon,
+    this.icon,
     required this.selected,
     required this.onTap,
   });
@@ -510,121 +831,63 @@ class _FilterChip extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
+        padding: EdgeInsets.symmetric(
+          horizontal: icon != null ? 14 : 16,
+          vertical: 8,
+        ),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           gradient: selected
               ? const LinearGradient(
-                  colors: [_kPrimary, Color(0xFF7B5FC7)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF6E52B8), _kPrimary],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
                 )
               : null,
           color: selected ? null : Colors.white,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: selected ? Colors.transparent : const Color(0xFFE8E4F0),
+            color: selected
+                ? Colors.transparent
+                : const Color(0xFFE8E4F0),
             width: 1,
           ),
           boxShadow: selected
               ? [
                   BoxShadow(
-                    color: _kPrimary.withValues(alpha: 0.22),
-                    blurRadius: 10,
+                    color: _kPrimary.withValues(alpha: 0.24),
+                    blurRadius: 8,
                     offset: const Offset(0, 3),
                   ),
                 ]
               : [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
+                    color: Colors.black.withValues(alpha: 0.035),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
                   ),
                 ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 16, color: selected ? Colors.white : _kPrimary),
-            const SizedBox(width: 6),
+            if (icon != null) ...[
+              Icon(
+                icon,
+                size: 15,
+                color: selected ? Colors.white : _kPrimary,
+              ),
+              const SizedBox(width: 5),
+            ],
             Text(
               label,
               style: GoogleFonts.poppins(
-                color: selected ? Colors.white : const Color(0xFF444455),
+                color: selected ? Colors.white : _kPrimary,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 fontSize: 13,
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Search bar ──────────────────────────────────────────────────────────────
-
-class _SearchBar extends StatelessWidget {
-  final TextEditingController ctrl;
-  const _SearchBar({required this.ctrl});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Container(
-        height: 46,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFE8E4F0)),
-          boxShadow: [
-            BoxShadow(
-              color: _kPrimary.withValues(alpha: 0.06),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Theme(
-          data: Theme.of(context).copyWith(
-            textSelectionTheme: const TextSelectionThemeData(
-              cursorColor: Colors.black,
-              selectionColor: Color(0x33000000),
-            ),
-          ),
-          child: TextField(
-            controller: ctrl,
-            textAlignVertical: TextAlignVertical.center,
-            keyboardAppearance: Brightness.light,
-            style: const TextStyle(
-              color: Colors.black,
-              fontSize: 15,
-              fontWeight: FontWeight.w400,
-            ),
-            cursorColor: Colors.black,
-            decoration: InputDecoration(
-              hintText: 'Search posts, people, tags…',
-              hintStyle: TextStyle(
-                color: Colors.grey.shade500,
-                fontSize: 15,
-                fontWeight: FontWeight.w400,
-              ),
-              prefixIcon: Icon(Icons.search_rounded, color: Colors.grey.shade600, size: 22),
-              suffixIcon: ListenableBuilder(
-                listenable: ctrl,
-                builder: (_, __) => ctrl.text.isNotEmpty
-                    ? IconButton(
-                        icon: Icon(Icons.cancel_rounded, color: Colors.grey.shade400, size: 20),
-                        onPressed: ctrl.clear,
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-              isDense: true,
-            ),
-          ),
         ),
       ),
     );
@@ -702,20 +965,35 @@ class _ShimmerGrid extends StatelessWidget {
 
 // ─── Grid ────────────────────────────────────────────────────────────────────
 
-class _Grid extends StatelessWidget {
+class _Grid {
   final List<_Post> posts;
-  final ScrollController scrollCtrl;
   final void Function(_Post) onTap;
 
-  const _Grid({required this.posts, required this.scrollCtrl, required this.onTap});
+  const _Grid({required this.posts, required this.onTap});
 
-  @override
-  Widget build(BuildContext context) {
-    final w    = MediaQuery.of(context).size.width;
-    final cell = (w - _kGap * (_kCols - 1)) / _kCols;
+  static List<Widget> buildSlivers({
+    required List<_Post> posts,
+    required void Function(_Post) onTap,
+  }) {
+    return [
+      SliverLayoutBuilder(
+        builder: (context, constraints) {
+          final cell =
+              (constraints.crossAxisExtent - _kGap * (_kCols - 1)) / _kCols;
+          final sections =
+              _Grid(posts: posts, onTap: onTap)._buildSections(cell);
+          return SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) => sections[index],
+              childCount: sections.length,
+            ),
+          );
+        },
+      ),
+    ];
+  }
 
-    // Build sections: every _kFeatEvery items → featured row (1 big + 2 small)
-    // All others → plain row of 3 equal cells
+  List<Widget> _buildSections(double cell) {
     final sections = <Widget>[];
     int i = 0;
     while (i < posts.length) {
@@ -753,7 +1031,6 @@ class _Grid extends StatelessWidget {
         i += 3;
       } else {
         final rowItems = posts.sublist(i, (i + _kCols).clamp(0, posts.length));
-        // Pad row to always be 3 cells wide so alignment stays consistent
         sections.add(
           Row(
             children: List.generate(_kCols, (col) {
@@ -762,7 +1039,9 @@ class _Grid extends StatelessWidget {
               }
               return Row(mainAxisSize: MainAxisSize.min, children: [
                 if (col > 0) SizedBox(width: _kGap),
-                RepaintBoundary(child: _Cell(post: rowItems[col], size: cell, onTap: onTap)),
+                RepaintBoundary(
+                  child: _Cell(post: rowItems[col], size: cell, onTap: onTap),
+                ),
               ]);
             }),
           ),
@@ -771,13 +1050,7 @@ class _Grid extends StatelessWidget {
       }
       sections.add(SizedBox(height: _kGap));
     }
-
-    return ListView(
-      controller: scrollCtrl,
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 16),
-      children: sections,
-    );
+    return sections;
   }
 }
 
@@ -2781,34 +3054,446 @@ String _fmtN(int n) {
   return '$n';
 }
 
-// ─── Image detail ─────────────────────────────────────────────────────────────
+// ─── Photo viewer (vertical swipe, same chrome as reels) ─────────────────────
 
-class _ImageDetail extends StatelessWidget {
-  final _Post post;
-  const _ImageDetail({required this.post});
+class _PhotoViewer extends StatefulWidget {
+  final List<_Post> posts;
+  final int initialIndex;
+
+  const _PhotoViewer({
+    required this.posts,
+    required this.initialIndex,
+  });
+
+  @override
+  State<_PhotoViewer> createState() => _PhotoViewerState();
+}
+
+class _PhotoViewerState extends State<_PhotoViewer> {
+  late PageController _pc;
+  int _page = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _page = widget.initialIndex;
+    _pc = PageController(initialPage: _page);
+  }
+
+  @override
+  void dispose() {
+    _pc.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          child: CachedNetworkImage(
-            imageUrl: post.imageUrl.isNotEmpty ? post.imageUrl : post.thumbUrl,
-            fit: BoxFit.contain,
-            placeholder: (_, __) => const Center(child: CircularProgressIndicator(color: _kAccent)),
-            errorWidget: (_, __, ___) => const Icon(Icons.broken_image, color: Colors.white38, size: 64),
+      backgroundColor: const Color(0xFF1C1C1E),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          PageView.builder(
+            controller: _pc,
+            scrollDirection: Axis.vertical,
+            allowImplicitScrolling: false,
+            itemCount: widget.posts.length,
+            onPageChanged: (i) => setState(() => _page = i),
+            itemBuilder: (_, i) {
+              return AnimatedBuilder(
+                animation: _pc,
+                builder: (context, child) {
+                  var scale = 1.0;
+                  if (_pc.position.haveDimensions) {
+                    final delta = (_pc.page ?? _page.toDouble()) - i;
+                    scale = (1 - delta.abs() * 0.08).clamp(0.92, 1.0);
+                  }
+                  return Transform.scale(scale: scale, child: child);
+                },
+                child: _PhotoPage(
+                  key: ValueKey(widget.posts[i].id),
+                  post: widget.posts[i],
+                  isActive: i == _page,
+                ),
+              );
+            },
           ),
-        ),
+          Positioned(
+            top: 0,
+            left: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 2, top: 2),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => Navigator.pop(context),
+                    borderRadius: BorderRadius.circular(24),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+class _PhotoPage extends StatefulWidget {
+  final _Post post;
+  final bool isActive;
+
+  const _PhotoPage({
+    super.key,
+    required this.post,
+    required this.isActive,
+  });
+
+  @override
+  State<_PhotoPage> createState() => _PhotoPageState();
+}
+
+class _PhotoPageState extends State<_PhotoPage> {
+  bool _showHeart = false;
+  bool _chromeVisible = true;
+  Timer? _chromeTimer;
+  final String? _uid = FirebaseAuth.instance.currentUser?.uid;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isActive) _scheduleChromeHide();
+  }
+
+  @override
+  void dispose() {
+    _chromeTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_PhotoPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) {
+      setState(() => _chromeVisible = true);
+      _scheduleChromeHide();
+    }
+  }
+
+  void _setChromeVisible(bool visible) {
+    if (_chromeVisible == visible) return;
+    setState(() => _chromeVisible = visible);
+  }
+
+  void _scheduleChromeHide() {
+    _chromeTimer?.cancel();
+    if (!widget.isActive) return;
+    _chromeTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && widget.isActive) {
+        setState(() => _setChromeVisible(false));
+      }
+    });
+  }
+
+  void _revealChrome() {
+    setState(() => _setChromeVisible(true));
+    _scheduleChromeHide();
+  }
+
+  Widget _chromeLayer(Widget child, {Offset hideOffset = const Offset(0, 0.08)}) {
+    return AnimatedOpacity(
+      opacity: _chromeVisible ? 1 : 0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      child: AnimatedSlide(
+        offset: _chromeVisible ? Offset.zero : hideOffset,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        child: IgnorePointer(ignoring: !_chromeVisible, child: child),
+      ),
+    );
+  }
+
+  void _onTap() {
+    if (!widget.isActive) return;
+    setState(() {
+      if (_chromeVisible) {
+        _setChromeVisible(false);
+        _chromeTimer?.cancel();
+      } else {
+        _revealChrome();
+      }
+    });
+  }
+
+  void _openComments() {
+    _revealChrome();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ExploreReelCommentsSheet(postId: widget.post.id),
+    );
+  }
+
+  void _sharePost() {
+    _revealChrome();
+    final name =
+        widget.post.username.isNotEmpty ? widget.post.username : 'Halo';
+    Share.share('Check out this post from $name on Halo');
+  }
+
+  Future<void> _doubleTapLike() async {
+    if (_uid == null) return;
+    HapticFeedback.mediumImpact();
+    setState(() => _showHeart = true);
+    Future.delayed(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _showHeart = false);
+    });
+    try {
+      await FirebaseFirestore.instance
+          .collection('posts')
+          .doc(widget.post.id)
+          .collection('likes')
+          .doc(_uid)
+          .set({'userId': _uid, 'likedAt': FieldValue.serverTimestamp()});
+    } catch (_) {}
+  }
+
+  Future<void> _toggleLike() async {
+    if (_uid == null) return;
+    HapticFeedback.lightImpact();
+    final ref = FirebaseFirestore.instance
+        .collection('posts')
+        .doc(widget.post.id)
+        .collection('likes')
+        .doc(_uid);
+    final doc = await ref.get();
+    if (doc.exists) {
+      await ref.delete();
+    } else {
+      await ref.set({'userId': _uid, 'likedAt': FieldValue.serverTimestamp()});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final post = widget.post;
+    final fullUrl = _fullImageUrlFor(post);
+    final thumbUrl = post.thumbUrl;
+    final previewUrl =
+        thumbUrl.isNotEmpty && thumbUrl != fullUrl ? thumbUrl : fullUrl;
+
+    return GestureDetector(
+      onTap: _onTap,
+      onDoubleTap: _doubleTapLike,
+      behavior: HitTestBehavior.opaque,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xFF1C1C1E)),
+          Positioned.fill(
+            child: _ExplorePhotoImage(
+              previewUrl: previewUrl,
+              fullUrl: fullUrl,
+            ),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.12),
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.88),
+                    ],
+                    stops: const [0, 0.35, 1],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_showHeart)
+            Center(
+              child: TweenAnimationBuilder<double>(
+                key: ValueKey(_showHeart),
+                tween: Tween(begin: 0.6, end: 1.15),
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.elasticOut,
+                builder: (_, scale, child) =>
+                    Transform.scale(scale: scale, child: child),
+                child: const Icon(
+                  Icons.favorite,
+                  color: Colors.white,
+                  size: 96,
+                  shadows: [Shadow(blurRadius: 20, color: Colors.black54)],
+                ),
+              ),
+            ),
+          Positioned(
+            left: 14,
+            right: 80,
+            bottom: MediaQuery.of(context).padding.bottom + 16,
+            child: _chromeLayer(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ReelAuthorStrip(
+                    userId: post.userId,
+                    fallbackUsername: post.username,
+                    currentUid: _uid,
+                  ),
+                  if (post.caption.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _ReelCaption(caption: post.caption),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            right: 12,
+            bottom: MediaQuery.of(context).padding.bottom + 16,
+            child: _chromeLayer(
+              StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('posts')
+                    .doc(post.id)
+                    .snapshots(),
+                builder: (_, postSnap) {
+                  final data = postSnap.data?.data() ?? {};
+                  final likeCount =
+                      _postCount(data['likeCount'] ?? data['likesCount']);
+                  final commentCount = _postCount(
+                    data['commentCount'] ?? data['commentsCount'],
+                  );
+
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _SideBtn(
+                        icon: StreamBuilder<DocumentSnapshot>(
+                          stream: _uid != null
+                              ? FirebaseFirestore.instance
+                                  .collection('posts')
+                                  .doc(post.id)
+                                  .collection('likes')
+                                  .doc(_uid)
+                                  .snapshots()
+                              : const Stream.empty(),
+                          builder: (_, snap) {
+                            final liked = snap.data?.exists ?? false;
+                            return Icon(
+                              liked ? Icons.favorite : Icons.favorite_border,
+                              color: liked
+                                  ? const Color(0xFFED4956)
+                                  : Colors.white,
+                              size: 32,
+                            );
+                          },
+                        ),
+                        label: likeCount > 0 ? _fmtN(likeCount) : '',
+                        onTap: () {
+                          _revealChrome();
+                          _toggleLike();
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      _SideBtn(
+                        icon: const Icon(
+                          Icons.mode_comment_outlined,
+                          color: Colors.white,
+                          size: 30,
+                        ),
+                        label: commentCount > 0 ? _fmtN(commentCount) : '',
+                        onTap: _openComments,
+                      ),
+                      const SizedBox(height: 20),
+                      _SideBtn(
+                        icon: Transform.rotate(
+                          angle: -0.35,
+                          child: const Icon(
+                            Icons.send_rounded,
+                            color: Colors.white,
+                            size: 28,
+                          ),
+                        ),
+                        label: '',
+                        onTap: _sharePost,
+                      ),
+                      const SizedBox(height: 22),
+                      _ReelAudioDisc(imageUrl: previewUrl),
+                    ],
+                  );
+                },
+              ),
+              hideOffset: const Offset(0.12, 0),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Fullscreen explore photo (cached preview → sharp full res) ───────────────
+
+class _ExplorePhotoImage extends StatelessWidget {
+  final String previewUrl;
+  final String fullUrl;
+
+  const _ExplorePhotoImage({
+    required this.previewUrl,
+    required this.fullUrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final sameUrl = previewUrl == fullUrl;
+
+    return Stack(
+      fit: StackFit.expand,
+      alignment: Alignment.center,
+      children: [
+        if (previewUrl.isNotEmpty)
+          CachedNetworkImage(
+            imageUrl: previewUrl,
+            fit: BoxFit.contain,
+            width: double.infinity,
+            height: double.infinity,
+            fadeInDuration: Duration.zero,
+            fadeOutDuration: Duration.zero,
+            useOldImageOnUrlChange: true,
+            placeholder: (_, __) => const ColoredBox(color: Color(0xFF1C1C1E)),
+            errorWidget: (_, __, ___) =>
+                const ColoredBox(color: Color(0xFF1C1C1E)),
+          ),
+        if (!sameUrl && fullUrl.isNotEmpty)
+          CachedNetworkImage(
+            imageUrl: fullUrl,
+            fit: BoxFit.contain,
+            width: double.infinity,
+            height: double.infinity,
+            fadeInDuration: const Duration(milliseconds: 120),
+            fadeOutDuration: Duration.zero,
+            useOldImageOnUrlChange: true,
+            placeholder: (_, __) => const SizedBox.shrink(),
+            errorWidget: (_, __, ___) => const SizedBox.shrink(),
+          ),
+      ],
     );
   }
 }

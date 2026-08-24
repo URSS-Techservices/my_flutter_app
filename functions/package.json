@@ -6,7 +6,12 @@
     "shell": "firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "migrate:local": "node scripts/run_migrate_local.js",
+    "backfill:explore-rank": "node scripts/backfill_explore_rank.js",
+    "backfill:explore-author-meta": "node scripts/backfill_explore_author_meta.js",
+    "backfill:guru-program-flags": "node scripts/backfill_guru_program_flags.js",
+    "backfill:content-tokens": "node scripts/backfill_content_tokens.js"
   },
   "engines": {
     "node": "22"

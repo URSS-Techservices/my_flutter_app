@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
 
-/// Pins a [TabBar] below the flexible space in a nested scroll view.
+/// Pins a tab bar widget below the flexible space in a nested scroll view.
 class ProfileSliverTabBarDelegate extends SliverPersistentHeaderDelegate {
-  ProfileSliverTabBarDelegate(this.tabBar);
+  ProfileSliverTabBarDelegate(this.tabBar, {this.extent = 48});
 
-  final TabBar tabBar;
-
-  @override
-  double get minExtent => tabBar.preferredSize.height;
+  final Widget tabBar;
+  final double extent;
 
   @override
-  double get maxExtent => tabBar.preferredSize.height;
+  double get minExtent => extent;
+
+  @override
+  double get maxExtent => extent;
 
   @override
   Widget build(
@@ -18,14 +19,11 @@ class ProfileSliverTabBarDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    return Container(
-      color: Colors.white,
-      child: tabBar,
-    );
+    return tabBar;
   }
 
   @override
   bool shouldRebuild(ProfileSliverTabBarDelegate oldDelegate) {
-    return false;
+    return oldDelegate.tabBar != tabBar || oldDelegate.extent != extent;
   }
 }

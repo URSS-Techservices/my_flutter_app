@@ -38,8 +38,15 @@ class AspirantActionRow extends StatelessWidget {
                         borderRadius: BorderRadius.circular(30),
                       ),
                       side: BorderSide(color: accentColor),
+                      foregroundColor: ProfileLayout.textPrimary,
                     ),
-                    child: const Text('Edit Profile'),
+                    child: const Text(
+                      'Edit Profile',
+                      style: TextStyle(
+                        color: ProfileLayout.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
                 if (onSavedPosts != null) ...[

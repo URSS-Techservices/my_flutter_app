@@ -1,3 +1,4 @@
+import 'package:halo/screens/profile/core/profile_field_utils.dart';
 import 'package:halo/screens/profile/core/profile_type.dart';
 
 /// Unified profile snapshot for shared UI + controllers.
@@ -34,11 +35,7 @@ class ProfileData {
 
   factory ProfileData.fromFirestore(String id, Map<String, dynamic> data) {
     final kind = profileKindFromAccountType(data['accountType']?.toString());
-    final name = (data['full_name'] ??
-            data['name'] ??
-            data['business_name'] ??
-            '')
-        .toString();
+    final name = ProfileFieldUtils.displayName(data);
     final username = (data['username'] ?? '').toString();
     final bio = (data['bio'] ?? '').toString();
     final city = (data['city'] ?? data['location'] ?? '').toString();
@@ -51,8 +48,8 @@ class ProfileData {
       followersCount: (data['followersCount'] as num?)?.toInt() ?? 0,
       followingCount: (data['followingCount'] as num?)?.toInt() ?? 0,
       postsCount: (data['postsCount'] as num?)?.toInt() ?? 0,
-      profilePhoto: (data['profilePhoto'] ?? data['photoURL'] ?? '').toString(),
-      coverPhoto: (data['coverPhoto'] ?? '').toString(),
+      profilePhoto: ProfileFieldUtils.profilePhotoUrl(data),
+      coverPhoto: ProfileFieldUtils.coverPhotoUrl(data),
       kind: kind,
       extra: Map<String, dynamic>.from(data),
     );

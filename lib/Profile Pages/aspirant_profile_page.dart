@@ -1,16 +1,14 @@
 // profile_page_improved.dart  (Aspirant Profile)
 
 // -------------------- IMPORTS --------------------
-import 'package:camera/camera.dart';
-import 'package:halo/newpostpage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:halo/newpostpage.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:halo/screens/profile/core/profile_follow_toggle.dart';
 import 'package:halo/platform/profile_avatar_provider.dart';
 import 'package:halo/platform/profile_local_photo.dart';
@@ -47,13 +45,24 @@ import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover
 import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
 import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_profile_shell.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_profile_tab_content.dart';
 import 'package:halo/screens/profile/widgets/aspirant/aspirant_posts_tab.dart';
 import 'package:halo/screens/profile/widgets/common/profile_inline_tab_chip.dart';
 import 'package:halo/screens/profile/pages/follow_list_page.dart';
 import 'package:halo/models/aspirant_profile_model.dart';
 import 'package:halo/models/post_place.dart';
 import 'package:halo/screens/profile/configs/aspirant_profile_config.dart';
+import 'package:halo/screens/profile/core/profile_field_utils.dart';
+import 'package:halo/screens/profile/core/profile_posts_queries.dart';
+import 'package:halo/screens/profile/core/profile_type.dart';
+import 'package:halo/screens/profile/pages/aspirant_edit_profile_hub.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_progress_hub.dart';
+import 'package:halo/screens/profile/widgets/common/profile_completeness_meter.dart';
+import 'package:halo/screens/profile/widgets/common/profile_highlights_row.dart';
 import 'package:halo/Bottom Pages/SearchPage.dart';
+import 'package:halo/screens/profile/pages/profile_modules_editor_page.dart';
+import 'package:halo/screens/profile/widgets/common/profile_section_gate.dart';
+import 'package:halo/screens/profile/widgets/aspirant/aspirant_recent_posts_grid.dart';
 import 'edit_profile_sections.dart';
 
 // ===================================================================
@@ -133,21 +142,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   bool _isFollowing = false;
   bool _isPrivate = false;
   bool _isLoading = true;
-  int _selectedAspirantTab = 0;
-  final Map<String, bool> _suggestedFollowLoading = {};
-
   // Image picker
   final ImagePicker _picker = ImagePicker();
   ProfileLocalPhoto? _profilePhotoLocal;
   ProfileLocalPhoto? _coverPhotoLocal;
 
-  // Camera
-  CameraController? _cameraController;
-  List<CameraDescription>? _cameras;
-  bool _isCameraInitialized = false;
-
   List<int> _workoutCalendarDays = [];
   AspirantProfileModules _profileModules = const AspirantProfileModules();
+  List<Map<String, dynamic>> _highlightPosts = [];
+  Map<String, dynamic> _userDocSnapshot = {};
 
   // Animations
   late final AnimationController _followAnimController;
@@ -164,7 +167,6 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   @override
   void dispose() {
-    _cameraController?.dispose();
     _followAnimController.dispose();
     super.dispose();
   }
@@ -184,7 +186,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       await _firestore.collection('users').doc(widget.profileUserId).get();
       if (doc.exists) {
         final data = doc.data()!;
-        _fullName = (data['full_name'] ?? '') as String;
+        _fullName = ProfileFieldUtils.displayName(data);
         _username = (data['username'] ?? '') as String;
         _fitnessTag = (data['fitnessTag'] ?? 'Explorer on Halo') as String;
         _city = (data['city'] ?? '') as String;
@@ -268,6 +270,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         final modulesRaw =
             data['profileModules'] as Map<String, dynamic>?;
         _profileModules = AspirantProfileModules.fromMap(modulesRaw);
+        _userDocSnapshot = Map<String, dynamic>.from(data);
 
         // Social links
         final sl = data['socialLinks'] as Map<String, dynamic>?;
@@ -287,6 +290,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
         _isFollowing = followDoc.exists;
       }
+
+      _highlightPosts = await ProfilePostsQueries.fetchAspirantProfilePostsPreview(
+        firestore: _firestore,
+        profileUserId: widget.profileUserId,
+      );
     } catch (e) {
       debugPrint('profile load error: $e');
       Fluttertoast.showToast(msg: 'Failed to load profile');
@@ -299,27 +307,6 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   // ===================================================================
   //  CAMERA / IMAGE HANDLING (PROFILE + COVER)
   // ===================================================================
-  Future<void> _initializeCamera() async {
-    try {
-      final currentStatus = await Permission.camera.status;
-      if (currentStatus != PermissionStatus.granted) {
-        final status = await Permission.camera.request();
-        if (status != PermissionStatus.granted) return;
-      }
-
-      _cameras = await availableCameras();
-      if (_cameras != null && _cameras!.isNotEmpty) {
-        _cameraController =
-            CameraController(_cameras![0], ResolutionPreset.high);
-        await _cameraController!.initialize();
-        if (!mounted) return;
-        setState(() => _isCameraInitialized = true);
-      }
-    } catch (e) {
-      debugPrint('camera init error: $e');
-    }
-  }
-
   Future<void> _pickProfileImage() async {
     if (!_isOwnProfile || _currentUser == null) return; // sirf apni profile edit
     final XFile? picked =
@@ -531,33 +518,24 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   // ===================================================================
   Future<void> _handleEditProfile() async {
     if (!_isOwnProfile || _currentUser == null) return;
-    final updatedData = await Navigator.push(
+    final saved = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (ctx) => EditProfilePage(
-          initialUsername: _username,
-          initialName: _fullName,
-          initialBio: _bio,
-          initialGender: '',
-          initialprofessiontype: '',
-        ),
+        builder: (ctx) => AspirantEditProfileHub(initialData: _userDocSnapshot),
       ),
     );
-    if (updatedData != null) {
-      try {
-        final username = updatedData['username']?.toString().trim() ?? '';
-        final name = updatedData['name']?.toString().trim() ?? '';
-        await _firestore.collection('users').doc(_currentUser!.uid).update({
-          'username': username,
-          'name': name,
-          'bio': updatedData['bio'],
-          'searchTerms': buildSearchTerms(name: name, username: username),
-        });
-        await _loadProfileData();
-      } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to save profile');
-      }
+    if (saved == true) {
+      await _loadProfileData();
     }
+  }
+
+  void _openSearchForGoal(FitnessGoalItem goal, {required String accountType}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SearchPage(initialQuery: '${goal.name} $accountType'),
+      ),
+    );
   }
 
   Future<void> _signOut() async {
@@ -668,1955 +646,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     );
   }
 
-  // ===================================================================
-  //  NEW ASPIRANT UI SECTIONS (HOBBY FOCUSED)
-  // ===================================================================
 
-  /// Aspirant discovery tabs (lavender chips)
-  Widget _buildAspirantTabsRow() {
-    const tabs = ['Aspirant', 'Coaches', 'Wellness', 'Community'];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      child: Row(
-        children: List.generate(tabs.length, (index) {
-          return ProfileInlineTabChip(
-            label: tabs[index],
-            selected: _selectedAspirantTab == index,
-            onTap: () {
-              if (_selectedAspirantTab == index) return;
-              setState(() => _selectedAspirantTab = index);
-            },
-          );
-        }),
-      ),
-    );
-  }
-
-  Widget _buildAspirantTabContent() {
-    switch (_selectedAspirantTab) {
-      case 0: // Aspirant
-        return Column(
-          children: [
-            _buildSimilarAspirantsSection(),
-            _buildHobbiesSection(),
-          ],
-        );
-      case 1: // Coaches
-        return _buildSuggestedGurusSection();
-      case 2: // Wellness
-        return _buildSuggestedWellnessSection();
-      case 3: // Community
-        return Column(
-          children: [
-            _buildEventsChallengesSection(),
-            _buildSocialLinksSection(),
-          ],
-        );
-      default:
-        return const SizedBox.shrink();
-    }
-  }
-
-  List<String> _toLowerTrimmedList(dynamic raw) {
-    if (raw is! List) return const [];
-    return raw
-        .map((e) => e.toString().trim().toLowerCase())
-        .where((e) => e.isNotEmpty)
-        .toList();
-  }
-
-  String _commonMatchText(Map<String, dynamic> data) {
-    final mine = _interests
-        .map((e) => e.trim().toLowerCase())
-        .where((e) => e.isNotEmpty)
-        .toSet();
-    final theirs = <String>{
-      ..._toLowerTrimmedList(data['interests']),
-      ..._toLowerTrimmedList(data['specialties']),
-      ..._toLowerTrimmedList(data['services']),
-      (data['primaryCategory'] ?? '').toString().trim().toLowerCase(),
-      (data['category'] ?? '').toString().trim().toLowerCase(),
-      (data['wellness_category'] ?? '').toString().trim().toLowerCase(),
-    }..removeWhere((e) => e.isEmpty);
-
-    final common = mine.intersection(theirs).toList();
-    if (common.isNotEmpty) {
-      final first = common.first;
-      return '${first[0].toUpperCase()}${first.substring(1)} in common';
-    }
-
-    final fallback = (data['primaryCategory'] ??
-            data['category'] ??
-            data['wellness_category'] ??
-            '')
-        .toString()
-        .trim();
-    return fallback.isNotEmpty ? fallback : 'Suggested for you';
-  }
-
-  void _openSuggestedUserProfile(String userId) {
-    if (userId.isEmpty) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ProfileRouterScreen(profileUserId: userId),
-      ),
-    );
-  }
-
-  Future<void> _toggleSuggestedFollow({
-    required String profileUserId,
-    required bool isCurrentlyFollowing,
-  }) async {
-    final currentUid = _currentUser?.uid;
-    if (currentUid == null || profileUserId.isEmpty || profileUserId == currentUid) {
-      return;
-    }
-    setState(() => _suggestedFollowLoading[profileUserId] = true);
-    try {
-      await _followService.setFollowState(
-        currentUserId: currentUid,
-        profileUserId: profileUserId,
-        shouldFollow: !isCurrentlyFollowing,
-      );
-    } catch (_) {
-      Fluttertoast.showToast(msg: 'Could not update follow right now');
-    } finally {
-      if (!mounted) return;
-      setState(() => _suggestedFollowLoading[profileUserId] = false);
-    }
-  }
-
-  Widget _buildSuggestedFollowButton(String targetUserId) {
-    final currentUid = _currentUser?.uid;
-    if (currentUid == null || currentUid == targetUserId) {
-      return const SizedBox.shrink();
-    }
-    final loading = _suggestedFollowLoading[targetUserId] == true;
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: _firestore
-          .collection('users')
-          .doc(targetUserId)
-          .collection('followers')
-          .doc(currentUid)
-          .snapshots(),
-      builder: (context, snapshot) {
-        final isFollowing = snapshot.data?.exists ?? false;
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: _firestore
-                  .collection('users')
-                  .doc(currentUid)
-                  .collection('followers')
-                  .doc(targetUserId)
-                  .snapshots(),
-              builder: (context, reverseSnap) {
-                final followsYou = reverseSnap.data?.exists ?? false;
-                final isFollowBack = followsYou && !isFollowing;
-                final topLabel = isFollowBack ? 'Follow back' : null;
-                return Column(
-                  children: [
-                    if (topLabel != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Text(
-                          topLabel,
-                          style: GoogleFonts.poppins(
-                            fontSize: 8.5,
-                            color: ProfileLayout.deepLavender,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    SizedBox(
-                      height: 26,
-                      child: OutlinedButton(
-                        onPressed: loading
-                            ? null
-                            : () => _toggleSuggestedFollow(
-                                  profileUserId: targetUserId,
-                                  isCurrentlyFollowing: isFollowing,
-                                ),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                          side: BorderSide(
-                            color: isFollowing ? Colors.grey.shade400 : ProfileLayout.deepLavender,
-                          ),
-                          backgroundColor: isFollowing ? Colors.white : ProfileLayout.deepLavender,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: loading
-                            ? const SizedBox(
-                                width: 12,
-                                height: 12,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : Text(
-                                isFollowing ? 'Following' : 'Follow',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 9,
-                                  color: isFollowing ? Colors.black87 : Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                      ),
-                    ),
-                    if (followsYou)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          'Follows you',
-                          style: GoogleFonts.poppins(
-                            fontSize: 8,
-                            color: Colors.black54,
-                          ),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  // -------------------- Suggested Gurus --------------------
-  Widget _buildSuggestedGurusSection() {
-    // users collection standard field: accountType == 'guru'
-    Query<Map<String, dynamic>> query = _firestore
-        .collection('users')
-        .where('accountType', isEqualTo: 'guru');
-
-    if (_interests.isNotEmpty) {
-      final List<String> topInterests = _interests.length > 5
-          ? _interests.sublist(0, 5)
-          : _interests;
-      query = query.where('interests', arrayContainsAny: topInterests);
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(
-                  'Suggested Gurus (Coaches)',
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (_primaryCategory != null && _primaryCategory!.isNotEmpty)
-                Flexible(
-                  child: Text(
-                    _primaryCategory!,
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 110,
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: query.limit(10).snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(),
-                    ),
-                  );
-                }
-                final docs = snapshot.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const ProfileEmptyState(
-                    text: 'No gurus found yet for your interests.',
-                  );
-                }
-                return ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, index) {
-                    final d = docs[index];
-                    final data = d.data();
-                    final name = (data['name'] ?? 'Guru') as String;
-                    final category =
-                    (data['primaryCategory'] ?? '') as String;
-                    final photo = data['profilePhoto'] as String?;
-                    final matchText = _commonMatchText(data);
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => _openSuggestedUserProfile(d.id),
-                      child: Container(
-                        width: 110,
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 6,
-                              offset: const Offset(0, 3),
-                            )
-                          ],
-                        ),
-                        child: Column(
-                          children: [
-                            CircleAvatar(
-                              radius: 22,
-                              backgroundImage: photo != null
-                                  ? NetworkImage(photo)
-                                  : const AssetImage(
-                                      'assets/images/Profile.png',
-                                    ) as ImageProvider,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.poppins(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              category.isNotEmpty ? category : matchText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.poppins(
-                                fontSize: 10,
-                                color: Colors.black54,
-                              ),
-                            ),
-                            Text(
-                              matchText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.poppins(
-                                fontSize: 9,
-                                color: Colors.blueGrey,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            _buildSuggestedFollowButton(d.id),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // -------------------- Suggested Wellness --------------------
-  Widget _buildSuggestedWellnessSection() {
-    // users collection standard field: accountType == 'wellness'
-    Query<Map<String, dynamic>> query = _firestore
-        .collection('users')
-        .where('accountType', isEqualTo: 'wellness');
-
-    if (_interests.isNotEmpty) {
-      final List<String> topInterests = _interests.length > 5
-          ? _interests.sublist(0, 5)
-          : _interests;
-      query = query.where('interests', arrayContainsAny: topInterests);
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Explore Wellness (Shops / Places)',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 110,
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: query.limit(10).snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(),
-                    ),
-                  );
-                }
-                final docs = snapshot.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const ProfileEmptyState(
-                    text: 'No wellness profiles yet. They will appear here.',
-                  );
-                }
-                return ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, index) {
-                    final d = docs[index];
-                    final data = d.data();
-                    final name = (data['name'] ?? 'Wellness') as String;
-                    final category =
-                    (data['primaryCategory'] ?? '') as String;
-                    final photo = data['profilePhoto'] as String?;
-                    final matchText = _commonMatchText(data);
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => _openSuggestedUserProfile(d.id),
-                      child: Container(
-                        width: 150,
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 6,
-                              offset: const Offset(0, 3),
-                            )
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 20,
-                              backgroundImage: photo != null
-                                  ? NetworkImage(photo)
-                                  : const AssetImage(
-                                      'assets/images/Profile.png',
-                                    ) as ImageProvider,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(
-                                    category.isNotEmpty ? category : matchText,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 10,
-                                      color: Colors.black54,
-                                    ),
-                                  ),
-                                  Text(
-                                    matchText,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 9,
-                                      color: Colors.blueGrey,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  _buildSuggestedFollowButton(d.id),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // -------------------- Similar Aspirants --------------------
-  Widget _buildSimilarAspirantsSection() {
-    // users collection standard field: accountType == 'aspirant'
-    Query<Map<String, dynamic>> query = _firestore
-        .collection('users')
-        .where('accountType', isEqualTo: 'aspirant');
-
-    if (_primaryCategory != null && _primaryCategory!.isNotEmpty) {
-      query = query.where('primaryCategory', isEqualTo: _primaryCategory);
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'People Like You',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 90,
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: query.limit(15).snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(),
-                    ),
-                  );
-                }
-                var docs = snapshot.data?.docs ?? [];
-                // current user ko list se hata do
-                docs = docs
-                    .where((d) => d.id != widget.profileUserId)
-                    .toList();
-                if (docs.isEmpty) {
-                  return Text(
-                    'We will suggest other aspirants here.',
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                    ),
-                  );
-                }
-                return ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, index) {
-                    final d = docs[index];
-                    final data = d.data();
-                    final name = (data['name'] ?? 'User') as String;
-                    final username = (data['username'] ?? '') as String;
-                    final photo = data['profilePhoto'] as String?;
-                    final matchText = _commonMatchText(data);
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => _openSuggestedUserProfile(d.id),
-                      child: Container(
-                        width: 110,
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 6,
-                              offset: const Offset(0, 3),
-                            )
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            CircleAvatar(
-                              radius: 22,
-                              backgroundImage: photo != null
-                                  ? NetworkImage(photo)
-                                  : const AssetImage(
-                                      'assets/images/Profile.png',
-                                    ) as ImageProvider,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: GoogleFonts.poppins(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              username.isNotEmpty ? '@$username' : matchText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: GoogleFonts.poppins(
-                                fontSize: 10,
-                                color: Colors.black54,
-                              ),
-                            ),
-                            Text(
-                              matchText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: GoogleFonts.poppins(
-                                fontSize: 9,
-                                color: Colors.blueGrey,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            _buildSuggestedFollowButton(d.id),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // -------------------- Achievements & Badges --------------------
-  Widget _buildAchievementsSection() {
-    if (!_isSectionEnabled('achievements')) return const SizedBox.shrink();
-    if (_badges.isEmpty && !_isOwnProfile) {
-      return const SizedBox.shrink();
-    }
-
-    if (_badges.isEmpty && _isOwnProfile) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
-        child: ProfileEmptyStateRich(
-          text: 'Earn badges as you explore Halo',
-          icon: Icons.emoji_events_outlined,
-          actionLabel: 'Enable in Profile Sections',
-          onAction: _openProfileModules,
-          card: true,
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(
-                  'Achievements & Badges',
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (_isOwnProfile)
-                Flexible(
-                  child: Text(
-                    'Auto-unlocks as you use Halo',
-                    style: GoogleFonts.poppins(
-                      fontSize: 10,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _badges
-                .map(
-                  (b) => Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: ProfileLayout.chipBg,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.emoji_events,
-                      size: 16,
-                      color: ProfileLayout.deepLavender,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      b,
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
-                .toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // -------------------- Recent Activities --------------------
-  Widget _buildLastWorkoutsSection() {
-    if (!_isSectionEnabled('recent_activities')) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Recent Activities',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-              if (_isOwnProfile)
-                TextButton.icon(
-                  onPressed: () async {
-                    final updated = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (ctx) => EditWorkoutsPage(
-                          initialWorkouts: _lastWorkouts,
-                          userType: 'aspirant',
-                        ),
-                      ),
-                    );
-                    if (updated != null) {
-                      setState(() {
-                        _lastWorkouts =
-                        List<Map<String, dynamic>>.from(updated);
-                      });
-                      // Data is already saved to Firebase by EditWorkoutsPage
-                    }
-                  },
-                  icon: const Icon(Icons.edit, size: 18),
-                  label: const Text('Edit'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (_lastWorkouts.isEmpty && _isOwnProfile)
-            const ProfileEmptyStateRich(
-              text: 'No activities yet. Add your first match, session or practice!',
-              icon: Icons.star_border,
-              card: true,
-            )
-          else if (_lastWorkouts.isEmpty)
-            const SizedBox.shrink()
-          else
-            ..._lastWorkouts.map((w) {
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.sports, size: 24),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            w['title']?.toString() ?? 'Activity',
-                            style: GoogleFonts.poppins(
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 2,
-                            children: [
-                              if (w['intensity'] != null)
-                                _smallTag(w['intensity'].toString()),
-                              if (w['calories'] != null)
-                                _smallTag(w['calories'].toString()),
-                              if (w['duration'] != null)
-                                _smallTag(w['duration'].toString()),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-        ],
-      ),
-    );
-  }
-
-  Widget _smallTag(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Text(
-        text,
-        style: GoogleFonts.poppins(fontSize: 11),
-      ),
-    );
-  }
-
-  Widget _buildEventsChallengesSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              ProfileLayout.deepLavender,
-              ProfileLayout.lavender,
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Events & Challenges',
-                  style: GoogleFonts.poppins(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-                if (_isOwnProfile)
-                  TextButton.icon(
-                    onPressed: () async {
-                      final updated = await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (ctx) => EditEventsChallengesPage(
-                            initialEvents: _eventsChallenges,
-                          ),
-                        ),
-                      );
-                      if (updated != null) {
-                        setState(() {
-                          _eventsChallenges =
-                          List<Map<String, dynamic>>.from(updated);
-                        });
-                        // Data is already saved to Firebase by EditEventsChallengesPage
-                      }
-                    },
-                    icon:
-                    const Icon(Icons.edit, size: 18, color: Colors.white),
-                    label: const Text('Edit',
-                        style: TextStyle(color: Colors.white)),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (_eventsChallenges.isEmpty && _isOwnProfile)
-              const ProfileEmptyStateRich(
-                text: 'No events yet. Add your first tournament, show or meetup!',
-                textColor: Colors.white70,
-              )
-            else if (_eventsChallenges.isEmpty)
-              const SizedBox.shrink()
-            else
-              ..._eventsChallenges.map((e) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 4.0),
-                  child: Text(
-                    '${e['type'] ?? ''}: ${e['name'] ?? ''}  (${e['status'] ?? ''})',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontSize: 13,
-                    ),
-                  ),
-                );
-              }).toList(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSocialLinksSection() {
-    return ProfileSectionCard(
-      title: 'Social Links',
-      trailing: _isOwnProfile
-          ? TextButton.icon(
-              onPressed: () async {
-                final updated = await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (ctx) => EditSocialLinksPage(
-                      initialLinks: _socialLinks,
-                    ),
-                  ),
-                );
-                if (updated != null) {
-                  setState(() {
-                    _socialLinks = Map<String, String>.from(updated);
-                  });
-                }
-              },
-              icon: const Icon(Icons.edit, size: 18),
-              label: const Text('Edit'),
-            )
-          : null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_socialLinks.isEmpty && _isOwnProfile)
-            const ProfileEmptyState(
-              text: 'No social links yet. Add your links!',
-              card: true,
-            )
-          else if (_socialLinks.isEmpty)
-            const SizedBox.shrink()
-          else
-            Row(
-              children: [
-                if (_socialLinks['instagram'] != null)
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => _openSocialLink('instagram', _socialLinks['instagram']!),
-                      child: const Text('Instagram'),
-                    ),
-                  ),
-                if (_socialLinks['instagram'] != null)
-                  const SizedBox(width: 8),
-                if (_socialLinks['spotify'] != null)
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => _openSocialLink('spotify', _socialLinks['spotify']!),
-                      child: const Text('Spotify'),
-                    ),
-                  ),
-                if (_socialLinks['spotify'] != null)
-                  const SizedBox(width: 8),
-                if (_socialLinks['telegram'] != null)
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => _openSocialLink('telegram', _socialLinks['telegram']!),
-                      child: const Text('Telegram'),
-                    ),
-                  ),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHobbiesSection() {
-    if (_interests.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Hobbies & Mood',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _interests
-                .map(
-                  (i) => ActionChip(
-                label: Text(i, style: GoogleFonts.poppins(fontSize: 12)),
-                backgroundColor: ProfileLayout.chipBg,
-                side: BorderSide.none,
-                onPressed: () => _openInterestExplore(i),
-              ),
-            )
-                .toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFitnessArticlesSection() {
-    if (!_isSectionEnabled('learning_resources')) return const SizedBox.shrink();
-    if (_fitnessArticles.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Learning Resources',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 8),
-          ..._fitnessArticles.map((a) {
-            return ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                a['title']?.toString() ?? '',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-              subtitle: Text(
-                a['source']?.toString() ?? '',
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                ),
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _openArticle(a),
-            );
-          }).toList(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFitnessStatsSection() {
-    if (!_isSectionEnabled('activity_stats')) return const SizedBox.shrink();
-    final steps = _fitnessStats['steps'] ?? 0;
-    final calories = _fitnessStats['caloriesBurned'] ?? 0;
-    final workouts = _fitnessStats['workouts'] ?? 0;
-    if (steps == 0 && calories == 0 && workouts == 0 && !_isOwnProfile) {
-      return const SizedBox.shrink();
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Activity Stats',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-              if (_isOwnProfile)
-                TextButton.icon(
-                  onPressed: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (ctx) => EditFitnessStatsPage(
-                          initialStats: _fitnessStats,
-                        ),
-                      ),
-                    );
-                    await _loadProfileData();
-                  },
-                  icon: const Icon(Icons.edit, size: 18),
-                  label: const Text('Edit'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              _buildStatCard('Steps', steps.toString(), 'Today'),
-              _buildStatCard('Calories', calories.toString(), 'Today'),
-              _buildStatCard('Sessions', workouts.toString(), 'This week'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatCard(String title, String value, String subtitle) {
-    return Expanded(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: GoogleFonts.poppins(
-                fontSize: 11,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              value,
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              subtitle,
-              style: GoogleFonts.poppins(
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ===================================================================
-  //  NEW PROFESSIONAL FEATURES FOR ASPIRANTS
-  // ===================================================================
-
-  Widget _buildProgressTrackingSection() {
-    if (!_isSectionEnabled('progress_tracking')) return const SizedBox.shrink();
-    if (!_isOwnProfile) return const SizedBox.shrink();
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Flexible(
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: ProfileLayout.lavender.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(Icons.trending_up, color: ProfileLayout.lavender, size: 24),
-                      ),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          'Progress Tracking',
-                          style: GoogleFonts.poppins(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => _navigateToFullProgressPage(),
-                  child: Text(
-                    'View',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: ProfileLayout.lavender,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: _isOwnProfile ? () => _editProgress('weight') : null,
-                    child: _buildProgressCard(
-                      'Weight',
-                      '${(_fitnessStats['currentWeight'] ?? 0).toString()} kg',
-                      'Goal: ${(_fitnessStats['targetWeight'] ?? 0).toString()} kg',
-                      Icons.monitor_weight,
-                      ProfileLayout.lavender,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: _isOwnProfile ? () => _editProgress('bodyFat') : null,
-                    child: _buildProgressCard(
-                      'Body Fat',
-                      '${(_fitnessStats['bodyFat'] ?? 0).toString()}%',
-                      'Target: ${(_fitnessStats['targetBodyFat'] ?? 0).toString()}%',
-                      Icons.analytics,
-                      ProfileLayout.deepLavender,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (_fitnessGoalItems.isNotEmpty)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Active Goals',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ..._fitnessGoalItems.take(3).map((goal) => Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      children: [
-                        Icon(Icons.check_circle_outline, size: 18, color: ProfileLayout.lavender),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            goal.name,
-                            style: GoogleFonts.poppins(fontSize: 13),
-                          ),
-                        ),
-                        if (_isOwnProfile)
-                          IconButton(
-                            icon: Icon(Icons.edit, size: 16, color: Colors.grey[600]),
-                            onPressed: () => _editGoal(goal),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                      ],
-                    ),
-                  )),
-                ],
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProgressCard(String title, String value, String subtitle, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 18, color: color),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  title,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey[700],
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: GoogleFonts.poppins(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: GoogleFonts.poppins(
-              fontSize: 11,
-              color: Colors.grey[600],
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWorkoutCalendarSection() {
-    if (!_isSectionEnabled('workout_calendar')) return const SizedBox.shrink();
-    if (!_isOwnProfile) return const SizedBox.shrink();
-
-    final now = DateTime.now();
-    final currentMonth = now.month;
-    final currentYear = now.year;
-    final daysInMonth = DateTime(currentYear, currentMonth + 1, 0).day;
-    final workoutDays = workoutDaysForMonth(
-      year: currentYear,
-      month: currentMonth,
-      lastWorkouts: _lastWorkouts,
-      storedCalendarDays: _workoutCalendarDays,
-    );
-
-    if (workoutDays.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: ProfileEmptyStateRich(
-          text: 'Log activities to see them on your calendar',
-          icon: Icons.calendar_today_outlined,
-          actionLabel: 'Add Activity',
-          onAction: () async {
-            final updated = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (ctx) => EditWorkoutsPage(
-                  initialWorkouts: _lastWorkouts,
-                  userType: 'aspirant',
-                ),
-              ),
-            );
-            if (updated != null) {
-              setState(() {
-                _lastWorkouts = List<Map<String, dynamic>>.from(updated);
-              });
-            }
-          },
-          card: true,
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Flexible(
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: ProfileLayout.lavender.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(Icons.calendar_today, color: ProfileLayout.lavender, size: 24),
-                      ),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          'Workout Calendar',
-                          style: GoogleFonts.poppins(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Flexible(
-                  child: Text(
-                    '${_getMonthName(currentMonth)} $currentYear',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day) => 
-                Text(
-                  day,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ).toList(),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 4,
-              runSpacing: 4,
-              children: List.generate(daysInMonth, (index) {
-                final day = index + 1;
-                final isWorkoutDay = workoutDays.contains(day);
-                final isToday = day == now.day;
-                
-                return Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: isToday 
-                        ? ProfileLayout.lavender 
-                        : isWorkoutDay 
-                            ? ProfileLayout.lavender.withOpacity(0.2)
-                            : Colors.grey[100],
-                    borderRadius: BorderRadius.circular(8),
-                    border: isToday 
-                        ? Border.all(color: ProfileLayout.lavender, width: 2)
-                        : null,
-                  ),
-                  child: Center(
-                    child: Text(
-                      day.toString(),
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
-                        color: isToday 
-                            ? Colors.white 
-                            : isWorkoutDay 
-                                ? ProfileLayout.lavender 
-                                : Colors.grey[600],
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _buildLegendItem(ProfileLayout.lavender, 'Workout'),
-                const SizedBox(width: 16),
-                _buildLegendItem(ProfileLayout.lavender.withOpacity(0.3), 'Today'),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLegendItem(Color color, String label) {
-    return Row(
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(3),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[700]),
-        ),
-      ],
-    );
-  }
-
-  String _getMonthName(int month) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return months[month - 1];
-  }
-
-  Widget _buildFitnessGoalsSection() {
-    if (!_isSectionEnabled('fitness_goals')) return const SizedBox.shrink();
-    if (!_isOwnProfile && _fitnessGoalItems.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return AspirantFitnessGoalsSection(
-      goals: _fitnessGoalItems,
-      onAddGoal: _addNewGoal,
-      onEditGoal: _editGoal,
-      onDeleteGoal: _deleteGoal,
-      accentColor: ProfileLayout.lavender,
-      accentDarkColor: ProfileLayout.deepLavender,
-    );
-  }
-
-  Widget _buildWorkoutStreakSection() {
-    if (!_isSectionEnabled('workout_streak')) return const SizedBox.shrink();
-    final currentStreak = (_fitnessStats['currentStreak'] as num?)?.toInt() ?? 0;
-    final longestStreak = (_fitnessStats['longestStreak'] as num?)?.toInt() ?? 0;
-    if (currentStreak == 0 && longestStreak == 0 && !_isOwnProfile) {
-      return const SizedBox.shrink();
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              ProfileLayout.lavender.withValues(alpha: 0.25),
-              ProfileLayout.chipBg,
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: ProfileLayout.lavender.withValues(alpha: 0.15),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        child: Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.local_fire_department,
-                    color: ProfileLayout.deepLavender, size: 32),
-                const SizedBox(width: 12),
-                Text(
-                  '$currentStreak',
-                  style: GoogleFonts.poppins(
-                    fontSize: 36,
-                    fontWeight: FontWeight.bold,
-                    color: ProfileLayout.deepLavender,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Day Streak!',
-                  style: GoogleFonts.poppins(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: ProfileLayout.deepLavender,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              longestStreak > 0
-                  ? 'Keep it up! Your longest streak is $longestStreak days'
-                  : 'Start logging activities to build your streak',
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                color: ProfileLayout.deepLavender.withValues(alpha: 0.85),
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPersonalRecordsSection() {
-    if (!_isSectionEnabled('personal_records')) return const SizedBox.shrink();
-    if (_personalRecords.isEmpty && !_isOwnProfile) {
-      return const SizedBox.shrink();
-    }
-    if (_personalRecords.isEmpty && _isOwnProfile) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: ProfileEmptyStateRich(
-          text: 'Track your personal bests',
-          icon: Icons.emoji_events_outlined,
-          actionLabel: 'Add Record',
-          onAction: () => _editPersonalRecord(-1, {}),
-          card: true,
-        ),
-      );
-    }
-
-    final records = _personalRecords;
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: ProfileLayout.lavender.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(Icons.emoji_events, color: ProfileLayout.lavender, size: 24),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Personal Records',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 130,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: records.length,
-              itemBuilder: (context, index) {
-                final record = records[index];
-                return GestureDetector(
-                  onTap: _isOwnProfile ? () => _editPersonalRecord(index, record) : null,
-                  child: Container(
-                    width: 140,
-                    margin: const EdgeInsets.only(right: 12),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.06),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        )
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Icon(
-                              record['icon'] is IconData 
-                                  ? record['icon'] as IconData
-                                  : _getIconFromString(record['icon']?.toString() ?? 'fitness_center'),
-                              color: record['color'] is Color
-                                  ? record['color'] as Color
-                                  : _getColorFromString(record['color']?.toString() ?? 'blue'),
-                              size: 24,
-                            ),
-                            if (_isOwnProfile)
-                              Icon(Icons.edit, size: 14, color: Colors.grey[400]),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Flexible(
-                          child: Text(
-                            record['name']?.toString() ?? 'Record',
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: Colors.grey[600],
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          record['value']?.toString() ?? '0',
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: record['color'] is Color
-                                ? record['color'] as Color
-                                : _getColorFromString(record['color']?.toString() ?? 'blue'),
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWeeklyProgressSection() {
-    if (!_isSectionEnabled('weekly_progress')) return const SizedBox.shrink();
-    if (!_isOwnProfile) return const SizedBox.shrink();
-
-    if (_weeklyProgressData.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: ProfileEmptyStateRich(
-          text: 'Log weekly activity to see your progress chart',
-          icon: Icons.bar_chart_outlined,
-          card: true,
-        ),
-      );
-    }
-
-    final weeklyData = _weeklyProgressData;
-    final maxCalories = weeklyData
-        .map((d) => (d['calories'] as num?)?.toInt() ?? 0)
-        .fold<int>(0, (a, b) => a > b ? a : b);
-    
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: ProfileLayout.lavender.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(Icons.bar_chart, color: ProfileLayout.lavender, size: 24),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Weekly Progress',
-                          style: GoogleFonts.poppins(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Flexible(
-                  child: Text(
-                    'This Week',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: Colors.grey[600],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: weeklyData.map((data) {
-                final calories = (data['calories'] as num?)?.toInt() ?? 0;
-                final height = maxCalories > 0 
-                    ? (calories / maxCalories * 100).clamp(0.0, 100.0)
-                    : 0.0;
-                return Column(
-                  children: [
-                    Container(
-                      width: 32,
-                      height: height,
-                      decoration: BoxDecoration(
-                        color: calories > 0 
-                            ? ProfileLayout.lavender 
-                            : Colors.grey[300],
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      data['day']?.toString() ?? '',
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '$calories',
-                      style: GoogleFonts.poppins(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildWeeklyStat('Total Workouts', '${weeklyData.map((d) => (d['workouts'] as num?)?.toInt() ?? 0).reduce((a, b) => a + b)}'),
-                Container(width: 1, height: 30, color: Colors.grey[300]),
-                _buildWeeklyStat('Calories Burned', '${weeklyData.map((d) => (d['calories'] as num?)?.toInt() ?? 0).reduce((a, b) => a + b)}'),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWeeklyStat(String label, String value) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: GoogleFonts.poppins(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: ProfileLayout.lavender,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: GoogleFonts.poppins(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
-      ],
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -2815,14 +845,15 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
 
   Future<void> _openProfileModules() async {
     if (!_isOwnProfile) return;
-    final updated = await Navigator.push<AspirantProfileModules>(
+    final updated = await openProfileModulesEditor(
       context,
-      MaterialPageRoute(
-        builder: (_) => EditProfileModulesPage(initial: _profileModules),
-      ),
+      kind: ProfileKind.aspirant,
+      initialModulesRaw: _profileModules.toMap(),
     );
     if (updated != null && mounted) {
-      setState(() => _profileModules = updated);
+      setState(() {
+        _profileModules = AspirantProfileModules.fromMap(updated);
+      });
     }
   }
 
@@ -2921,32 +952,132 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         const SizedBox(height: 12),
         _buildActionButtons(),
         _buildBioCard(),
+        if (_isOwnProfile)
+          ProfileCompletenessMeter(
+            kind: ProfileKind.aspirant,
+            userData: _userDocSnapshot,
+            onTapImprove: _handleEditProfile,
+          ),
+        ProfileHighlightsRow(
+          posts: _highlightPosts,
+          onTapPost: (postId) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => PostDetailsPage(postId: postId)),
+            );
+          },
+        ),
         const SizedBox(height: 4),
       ],
     );
   }
 
+  String _getMonthName(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[month - 1];
+  }
+
   Widget _buildProfileTabContent() {
-    return ColoredBox(
-      color: ProfileLayout.bg,
-      child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildAspirantTabsRow(),
-        _buildAspirantTabContent(),
-        _buildAchievementsSection(),
-        _buildLastWorkoutsSection(),
-        _buildFitnessArticlesSection(),
-        _buildFitnessStatsSection(),
-        _buildProgressTrackingSection(),
-        _buildWorkoutCalendarSection(),
-        _buildFitnessGoalsSection(),
-        _buildWorkoutStreakSection(),
-        _buildPersonalRecordsSection(),
-        _buildWeeklyProgressSection(),
-        const SizedBox(height: 80),
-      ],
-      ),
+    return AspirantProfileTabContent(
+      profileUserId: widget.profileUserId,
+      currentUserId: _currentUser?.uid,
+      isOwnProfile: _isOwnProfile,
+      isPrivate: _isPrivate,
+      isFollowing: _isFollowing,
+      interests: _interests,
+      primaryCategory: _primaryCategory,
+      eventsChallenges: _eventsChallenges,
+      socialLinks: _socialLinks,
+      badges: _badges,
+      lastWorkouts: _lastWorkouts,
+      fitnessArticles: _fitnessArticles,
+      fitnessStats: _fitnessStats,
+      fitnessGoals: _fitnessGoalItems,
+      personalRecords: _personalRecords,
+      weeklyProgressData: _weeklyProgressData,
+      workoutCalendarDays: _workoutCalendarDays,
+      isSectionEnabled: _isSectionEnabled,
+      monthName: _getMonthName,
+      workoutDaysForMonth: workoutDaysForMonth,
+      onOpenInterestExplore: _openInterestExplore,
+      onOpenSocialLink: _openSocialLink,
+      onEditEvents: () async {
+        final updated = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => EditEventsChallengesPage(initialEvents: _eventsChallenges),
+          ),
+        );
+        if (updated != null && mounted) {
+          setState(() => _eventsChallenges = List<Map<String, dynamic>>.from(updated));
+        }
+      },
+      onEditSocialLinks: () async {
+        final updated = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => EditSocialLinksPage(initialLinks: _socialLinks),
+          ),
+        );
+        if (updated != null && mounted) {
+          setState(() => _socialLinks = Map<String, String>.from(updated));
+        }
+      },
+      onOpenProfileModules: _openProfileModules,
+      onEditActivities: () async {
+        final updated = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => EditWorkoutsPage(
+              initialWorkouts: _lastWorkouts,
+              userType: 'aspirant',
+            ),
+          ),
+        );
+        if (updated != null && mounted) {
+          setState(() => _lastWorkouts = List<Map<String, dynamic>>.from(updated));
+        }
+      },
+      onEditFitnessStats: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => EditFitnessStatsPage(initialStats: _fitnessStats),
+          ),
+        );
+        await _loadProfileData();
+      },
+      onOpenArticle: _openArticle,
+      onViewFullProgress: _navigateToFullProgressPage,
+      onEditProgress: _editProgress,
+      onAddGoal: _addNewGoal,
+      onEditGoal: _editGoal,
+      onDeleteGoal: _deleteGoal,
+      onFindCoachesForGoal: (goal) => _openSearchForGoal(goal, accountType: 'guru'),
+      onFindWellnessForGoal: (goal) => _openSearchForGoal(goal, accountType: 'wellness'),
+      onEditPersonalRecord: _editPersonalRecord,
+      onAddWorkoutFromCalendar: () async {
+        final updated = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (ctx) => EditWorkoutsPage(
+              initialWorkouts: _lastWorkouts,
+              userType: 'aspirant',
+            ),
+          ),
+        );
+        if (updated != null && mounted) {
+          setState(() => _lastWorkouts = List<Map<String, dynamic>>.from(updated));
+        }
+      },
+      postImageResolver: profilePostImageUrlFromMap,
+      onTapPost: (postId) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => PostDetailsPage(postId: postId)),
+        );
+      },
+      onTapViewAllPosts: () => _shellKey.currentState?.jumpToPostsTab(),
     );
   }
 

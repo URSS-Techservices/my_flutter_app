@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -63,7 +64,10 @@ class MediaItem {
 //  AddPostPage
 // ══════════════════════════════════════════════════════════════════════════
 class AddPostPage extends StatefulWidget {
-  const AddPostPage({super.key});
+  final VoidCallback? onBackToHome;
+
+  const AddPostPage({super.key, this.onBackToHome});
+
   @override
   State<AddPostPage> createState() => _AddPostPageState();
 }
@@ -86,7 +90,6 @@ class _AddPostPageState extends State<AddPostPage>
 
   // Upload state
   bool   _isUploading      = false;
-  bool   _isMigratingPosts = false;
   double _uploadProgress   = 0;
   String _uploadStatusMsg  = '';
   int    _currentUploadIdx = 0;
@@ -711,116 +714,16 @@ class _AddPostPageState extends State<AddPostPage>
     return false;
   }
 
-  Future<void> _runPostsBackfill() async {
-    if (_isUploading || _isMigratingPosts) return;
-    final shouldRun = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Backfill posts?'),
-        content: const Text(
-          'This will update existing posts with thumbnailUrl, likeCount, and commentCount. '
-          'Run this once and keep the app open until it finishes.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Run'),
-          ),
-        ],
-      ),
-    );
-
-    if (shouldRun != true || !mounted) return;
-    setState(() => _isMigratingPosts = true);
-
-    try {
-      const batchSize = 25;
-      DocumentSnapshot<Map<String, dynamic>>? cursor;
-      int scanned = 0;
-      int updated = 0;
-
-      while (true) {
-        Query<Map<String, dynamic>> query = FirebaseFirestore.instance
-            .collection('posts')
-            .orderBy(FieldPath.documentId)
-            .limit(batchSize);
-        if (cursor != null) query = query.startAfterDocument(cursor);
-
-        final page = await query.get();
-        if (page.docs.isEmpty) break;
-        cursor = page.docs.last;
-
-        for (final doc in page.docs) {
-          scanned++;
-          final data = doc.data();
-          final postRef = doc.reference;
-
-          final media = data['media'];
-          final images = data['images'];
-          final fallbackImageUrl = (data['imageUrl'] ?? '').toString().trim();
-          final existingThumb = (data['thumbnailUrl'] ?? '').toString().trim();
-
-          String computedThumb = existingThumb;
-          if (computedThumb.isEmpty) {
-            if (media is List) {
-              for (final item in media) {
-                if (item is Map) {
-                  final type = (item['type'] ?? '').toString().toLowerCase();
-                  final url = (item['url'] ?? '').toString().trim();
-                  if (type == 'image' && url.isNotEmpty) {
-                    computedThumb = url;
-                    break;
-                  }
-                }
-              }
-            }
-            if (computedThumb.isEmpty && images is List && images.isNotEmpty) {
-              computedThumb = images.first.toString().trim();
-            }
-            if (computedThumb.isEmpty) computedThumb = fallbackImageUrl;
-          }
-
-          final likeAgg = await postRef.collection('likes').count().get();
-          final commentAgg = await postRef.collection('comments').count().get();
-          final likeCount = likeAgg.count;
-          final commentCount = commentAgg.count;
-
-          final oldLike = data['likeCount'];
-          final oldComment = data['commentCount'];
-          final oldLikeInt = oldLike is int ? oldLike : int.tryParse('$oldLike') ?? -1;
-          final oldCommentInt =
-              oldComment is int ? oldComment : int.tryParse('$oldComment') ?? -1;
-
-          if (existingThumb != computedThumb ||
-              oldLikeInt != likeCount ||
-              oldCommentInt != commentCount) {
-            await postRef.update({
-              'thumbnailUrl': computedThumb,
-              'likeCount': likeCount,
-              'commentCount': commentCount,
-            });
-            updated++;
-          }
-        }
-      }
-
-      if (!mounted) return;
-      _showSnack('Backfill done. Scanned $scanned posts, updated $updated.');
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('Backfill failed: $e');
-    } finally {
-      if (mounted) setState(() => _isMigratingPosts = false);
-    }
-  }
-
   // ══════════════════════════════════════════════════════════════════════════
   //  BUILD
   // ══════════════════════════════════════════════════════════════════════════
+  void _handleBack() {
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+    widget.onBackToHome?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     final tt = GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
@@ -828,97 +731,37 @@ class _AddPostPageState extends State<AddPostPage>
       data: Theme.of(context).copyWith(textTheme: tt),
       child: Scaffold(
         backgroundColor: kBgColor,
-        appBar: _buildAppBar(),
-        body: Stack(
-          children: [
-            _buildBody(tt),
-            if (_isUploading) _buildUploadOverlay(tt),
-          ],
+        body: SafeArea(
+          top: false,
+          child: Stack(
+            children: [
+              CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: _AddPostTopSection(
+                      onBackToHome: _handleBack,
+                      onPreview: _isUploading ? null : _openPreview,
+                    ),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+                    sliver: SliverToBoxAdapter(
+                      child: _buildBodyContent(tt),
+                    ),
+                  ),
+                ],
+              ),
+              if (_isUploading) _buildUploadOverlay(tt),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  AppBar _buildAppBar() => AppBar(
-    elevation: 0,
-    scrolledUnderElevation: 0,
-    centerTitle: true,
-    backgroundColor: _kCardBg,
-    surfaceTintColor: Colors.transparent,
-    leading: IconButton(
-      icon: const Icon(Icons.close_rounded, color: _kTextPrimary, size: 26),
-      onPressed: () => Navigator.maybePop(context),
-    ),
-    title: Text(
-      'New Post',
-      style: GoogleFonts.poppins(
-        fontSize: 17,
-        fontWeight: FontWeight.w600,
-        color: _kTextPrimary,
-        letterSpacing: -0.2,
-      ),
-    ),
-    bottom: PreferredSize(
-      preferredSize: const Size.fromHeight(1),
-      child: Container(height: 1, color: _kBorder),
-    ),
-    actions: [
-      Padding(
-        padding: const EdgeInsets.only(right: 4),
-        child: TextButton(
-          onPressed: (_isUploading || _isMigratingPosts) ? null : _openPreview,
-          style: TextButton.styleFrom(
-            foregroundColor: kSecondaryColor,
-            backgroundColor: _kSurface,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-              side: BorderSide(color: kPrimaryColor.withValues(alpha: 0.35)),
-            ),
-          ),
-          child: Text(
-            'Preview',
-            style: GoogleFonts.poppins(
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-            ),
-          ),
-        ),
-      ),
-      PopupMenuButton<String>(
-        icon: const Icon(Icons.more_horiz_rounded, color: _kTextPrimary, size: 22),
-        onSelected: (value) {
-          if (value == 'backfill') _runPostsBackfill();
-        },
-        itemBuilder: (_) => [
-          PopupMenuItem(
-            value: 'backfill',
-            enabled: !_isUploading && !_isMigratingPosts,
-            child: Text(
-              'Backfill post counts',
-              style: GoogleFonts.poppins(fontSize: 13),
-            ),
-          ),
-        ],
-      ),
-      const SizedBox(width: 8),
-    ],
-  );
-
-  Widget _buildBody(TextTheme tt) => SingleChildScrollView(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-    child: Column(
+  Widget _buildBodyContent(TextTheme tt) => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Share photos and videos with your community',
-          style: GoogleFonts.poppins(
-            fontSize: 13,
-            color: _kTextSecondary,
-            height: 1.4,
-          ),
-        ),
-        const SizedBox(height: 20),
         _sectionCard(
           tt: tt,
           icon: Icons.perm_media_outlined,
@@ -956,8 +799,7 @@ class _AddPostPageState extends State<AddPostPage>
         const SizedBox(height: 24),
         _buildPostButton(tt),
       ],
-    ),
-  );
+    );
 
   Widget _sectionCard({
     required TextTheme tt,
@@ -2427,5 +2269,297 @@ class _VideoPreviewItemState extends State<_VideoPreviewItem> {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
+  }
+}
+
+// ─── Add Post header (matches Explore / Search / Notifications) ─────────────
+
+class _AddPostTopSection extends StatelessWidget {
+  const _AddPostTopSection({
+    required this.onBackToHome,
+    this.onPreview,
+  });
+
+  final VoidCallback onBackToHome;
+  final VoidCallback? onPreview;
+
+  @override
+  Widget build(BuildContext context) {
+    final topInset = MediaQuery.paddingOf(context).top;
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(28),
+          bottomRight: Radius.circular(28),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: kSecondaryColor.withValues(alpha: 0.22),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+            spreadRadius: -2,
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(28),
+          bottomRight: Radius.circular(28),
+        ),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                Color(0xFF4A3488),
+                Color(0xFF5B3FA3),
+                Color(0xFF7A5FC8),
+              ],
+              stops: [0.0, 0.5, 1.0],
+            ),
+          ),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _AddPostHeaderWavePainter(),
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(16, topInset + 8, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _AddPostGlassIconButton(
+                          icon: Icons.arrow_back_ios_new_rounded,
+                          iconSize: 17,
+                          onTap: onBackToHome,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'New Post',
+                            style: GoogleFonts.poppins(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                              letterSpacing: -0.4,
+                              height: 1,
+                            ),
+                          ),
+                        ),
+                        if (onPreview != null)
+                          _AddPostGlassPillButton(
+                            label: 'Preview',
+                            onTap: onPreview!,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(28),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(28),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.32),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.photo_library_outlined,
+                                color: Colors.white.withValues(alpha: 0.9),
+                                size: 20,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Add photos, videos, caption & location',
+                                  style: GoogleFonts.poppins(
+                                    color: Colors.white.withValues(alpha: 0.78),
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AddPostHeaderWavePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final wavePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.06)
+      ..style = PaintingStyle.fill;
+
+    final wave = Path()
+      ..moveTo(size.width * 0.55, 0)
+      ..quadraticBezierTo(
+        size.width * 0.72,
+        size.height * 0.35,
+        size.width,
+        size.height * 0.2,
+      )
+      ..lineTo(size.width, 0)
+      ..close();
+    canvas.drawPath(wave, wavePaint);
+
+    final dotPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.14);
+    const cols = 3;
+    const rows = 4;
+    const spacing = 7.0;
+    final gridLeft = size.width - 28;
+    const gridTop = 14.0;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        canvas.drawCircle(
+          Offset(gridLeft + c * spacing, gridTop + r * spacing),
+          1.4,
+          dotPaint,
+        );
+      }
+    }
+
+    canvas.drawCircle(
+      Offset(size.width * 0.78, size.height * 0.55),
+      size.width * 0.22,
+      Paint()..color = Colors.white.withValues(alpha: 0.04),
+    );
+
+    _drawSparkle(canvas, Offset(18, size.height * 0.22), 0.35);
+    _drawSparkle(canvas, Offset(42, size.height * 0.38), 0.25);
+    _drawSparkle(canvas, Offset(size.width - 36, size.height * 0.18), 0.3);
+  }
+
+  void _drawSparkle(Canvas canvas, Offset center, double scale) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    final arm = 4.0 * scale;
+    canvas.drawLine(
+      Offset(center.dx - arm, center.dy),
+      Offset(center.dx + arm, center.dy),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(center.dx, center.dy - arm),
+      Offset(center.dx, center.dy + arm),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _AddPostGlassIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback? onTap;
+  final double iconSize;
+
+  const _AddPostGlassIconButton({
+    required this.icon,
+    this.onTap,
+    this.iconSize = 20,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.18),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.32),
+                ),
+              ),
+              child: Icon(icon, color: Colors.white, size: iconSize),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AddPostGlassPillButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _AddPostGlassPillButton({
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.32),
+                ),
+              ),
+              child: Text(
+                label,
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
