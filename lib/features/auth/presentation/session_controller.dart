@@ -28,5 +28,26 @@ class AuthActionController extends StateNotifier<AsyncValue<void>> {
     state = await AsyncValue.guard(() => _repo.setAccountType(kind));
   }
 
-  Future<void> signOut() => _repo.signOut();
+  Future<void> signInWithEmailOrUsername({
+    required String identifier,
+    required String password,
+  }) async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(
+      () => _repo.signInWithEmailOrUsername(
+        identifier: identifier,
+        password: password,
+      ),
+    );
+  }
+
+  Future<void> signInWithGoogle() async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() => _repo.signInWithGoogle());
+  }
+
+  Future<void> signOut() async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() => _repo.signOut());
+  }
 }

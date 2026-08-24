@@ -15,7 +15,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 // local pages
 import '../../editprofilepage.dart';
-import '../../main.dart'; // LoginPage
+import 'package:halo/features/auth/presentation/login_page.dart';
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/utils/search_utils.dart';

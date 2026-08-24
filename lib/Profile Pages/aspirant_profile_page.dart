@@ -24,7 +24,7 @@ import 'package:halo/chat/chat_service.dart';
 
 // Local pages (paths adjust kar lena agar different ho)
 import '../editprofilepage.dart';
-import '../main.dart'; // LoginPage
+import 'package:halo/features/auth/presentation/login_page.dart';
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/Bottom Pages/saved_posts_page.dart';
