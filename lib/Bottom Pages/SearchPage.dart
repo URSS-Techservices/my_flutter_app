@@ -15,6 +15,7 @@ import 'package:halo/Profile Pages/aspirant_profile_page.dart' show PostDetailsP
 import 'package:halo/services/search_service.dart';
 import 'package:halo/utils/search_ranking.dart';
 
+import 'package:halo/core/halo_toast.dart';
 const Color kPrimaryColor = Color(0xFFA58CE3);
 const Color kSecondaryColor = Color(0xFF5B3FA3);
 const Color kBackgroundColor = Color(0xFFF4F1FB);
@@ -1280,8 +1281,7 @@ class _UserSearchResultCardState
     } catch (e) {
       if (!mounted) return;
       setState(() => _followLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')));
+      HaloToast.show('Error: $e');
     }
   }
 

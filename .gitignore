@@ -24,6 +24,7 @@ android/app/*.keystore
 # Firebase / GCP secrets
 # =========================
 halo_backend/serviceAccountKey.json
+functions/.env
 
 # =========================
 # iOS

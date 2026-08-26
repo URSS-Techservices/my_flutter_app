@@ -6,10 +6,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:halo/core/halo_toast.dart';
 // ===================================================================
 //  EDIT WORKOUTS PAGE (For Aspirant & Guru)
 // ===================================================================
@@ -46,10 +46,10 @@ class _EditWorkoutsPageState extends State<EditWorkoutsPage> {
       await _firestore.collection('users').doc(userId).update({
         'lastWorkouts': _workouts,
       });
-      Fluttertoast.showToast(msg: 'Workouts updated successfully');
+      HaloToast.show('Workouts updated successfully');
       Navigator.pop(context, _workouts);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update workouts: $e');
+      HaloToast.show('Failed to update workouts: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -247,10 +247,10 @@ class _EditEventsChallengesPageState extends State<EditEventsChallengesPage> {
       await _firestore.collection('users').doc(userId).update({
         'eventsChallenges': _events,
       });
-      Fluttertoast.showToast(msg: 'Events updated successfully');
+      HaloToast.show('Events updated successfully');
       Navigator.pop(context, _events);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update events: $e');
+      HaloToast.show('Failed to update events: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -432,10 +432,10 @@ class _EditFitnessStatsPageState extends State<EditFitnessStatsPage> {
           'lastUpdated': FieldValue.serverTimestamp(),
         },
       });
-      Fluttertoast.showToast(msg: 'Fitness stats updated successfully');
+      HaloToast.show('Fitness stats updated successfully');
       Navigator.pop(context);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update stats: $e');
+      HaloToast.show('Failed to update stats: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -548,10 +548,10 @@ class _EditSocialLinksPageState extends State<EditSocialLinksPage> {
       await _firestore.collection('users').doc(userId).update({
         'socialLinks': socialLinks,
       });
-      Fluttertoast.showToast(msg: 'Social links updated successfully');
+      HaloToast.show('Social links updated successfully');
       Navigator.pop(context, socialLinks);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update links: $e');
+      HaloToast.show('Failed to update links: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -644,10 +644,10 @@ class _EditProductsPageState extends State<EditProductsPage> {
       await _firestore.collection('users').doc(userId).update({
         'popularProducts': _products,
       });
-      Fluttertoast.showToast(msg: 'Products updated successfully');
+      HaloToast.show('Products updated successfully');
       Navigator.pop(context, _products);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update products: $e');
+      HaloToast.show('Failed to update products: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -695,7 +695,7 @@ class _EditProductsPageState extends State<EditProductsPage> {
           _products[index]['imageUrl'] = url;
         });
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to upload image');
+        HaloToast.show('Failed to upload image');
       }
     }
   }
@@ -858,10 +858,10 @@ class _EditSpecialtiesPageState extends State<EditSpecialtiesPage> {
         'specialties': _specialties,
         'certifications': _certifications,
       });
-      Fluttertoast.showToast(msg: 'Updated successfully');
+      HaloToast.show('Updated successfully');
       Navigator.pop(context);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update: $e');
+      HaloToast.show('Failed to update: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -1017,10 +1017,10 @@ class _EditServicesPageState extends State<EditServicesPage> {
       await _firestore.collection('users').doc(userId).update({
         'popularServices': _services,
       });
-      Fluttertoast.showToast(msg: 'Services updated successfully');
+      HaloToast.show('Services updated successfully');
       Navigator.pop(context, _services);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update services: $e');
+      HaloToast.show('Failed to update services: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -1142,10 +1142,10 @@ class _EditLocationAvailabilityPageState
         'studioLocation': _locationController.text.trim(),
         'serviceSlots': _slots,
       });
-      Fluttertoast.showToast(msg: 'Location & availability updated');
+      HaloToast.show('Location & availability updated');
       Navigator.pop(context);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update: $e');
+      HaloToast.show('Failed to update: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -1323,10 +1323,10 @@ class _EditFitnessEventsPageState extends State<EditFitnessEventsPage> {
       await _firestore.collection('users').doc(userId).update({
         'fitnessEvents': _events,
       });
-      Fluttertoast.showToast(msg: 'Events updated successfully');
+      HaloToast.show('Events updated successfully');
       Navigator.pop(context, _events);
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to update events: $e');
+      HaloToast.show('Failed to update events: $e');
     } finally {
       setState(() => _isLoading = false);
     }
@@ -1369,7 +1369,7 @@ class _EditFitnessEventsPageState extends State<EditFitnessEventsPage> {
           _events[index]['imageUrl'] = url;
         });
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to upload image');
+        HaloToast.show('Failed to upload image');
       }
     }
   }

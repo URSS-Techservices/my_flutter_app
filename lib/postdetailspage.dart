@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:halo/core/halo_toast.dart';
 /*
 class PostDetailPage extends StatefulWidget {
   final String username;
@@ -83,17 +84,13 @@ class _PostDetailPageState extends State<PostDetailPage> {
               IconButton(
                 icon: Icon(Icons.comment_outlined),
                 onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Comments not implemented yet!')),
-                  );
+                  HaloToast.show('Comments not implemented yet!');
                 },
               ),
               IconButton(
                 icon: Icon(Icons.share_outlined),
                 onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Sharing not implemented yet!')),
-                  );
+                  HaloToast.show('Sharing not implemented yet!');
                 },
               ),
             ],
@@ -194,17 +191,13 @@ class _PostDetailPageState extends State<PostDetailPage> {
                   IconButton(
                     icon: Icon(Icons.comment_outlined),
                     onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Comments not implemented yet!')),
-                      );
+                      HaloToast.show('Comments not implemented yet!');
                     },
                   ),
                   IconButton(
                     icon: Icon(Icons.share_outlined),
                     onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Sharing not implemented yet!')),
-                      );
+                      HaloToast.show('Sharing not implemented yet!');
                     },
                   ),
                 ],

@@ -12,6 +12,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
 
+import 'package:halo/core/halo_toast.dart';
 // ---------- HALO THEME COLORS ----------
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
@@ -103,13 +104,8 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
     if (value == null || value.isEmpty) {
       return 'Please enter a password';
     }
-    if (value.length < 8) {
-      return 'Password must be at least 8 characters long';
-    }
-    final passwordRegEx =
-        r'^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[!@#\$&*~]).{8,}$';
-    if (!RegExp(passwordRegEx).hasMatch(value)) {
-      return 'Password must contain:\n- 1 uppercase letter\n- 1 lowercase letter\n- 1 symbol\n- 1 number';
+    if (value.length < 6) {
+      return 'Password must be at least 6 characters';
     }
     return null;
   }
@@ -191,9 +187,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
             _selectedFiles.map((e) => e.split('/').last).join(", ");
       });
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No document selected.')),
-      );
+      HaloToast.show('No document selected.');
     }
   }
 
@@ -209,9 +203,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
             _selectedFiles.map((e) => e.split('/').last).join(", ");
       });
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No image selected.')),
-      );
+      HaloToast.show('No image selected.');
     }
   }
 
@@ -273,20 +265,14 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     if (!_isFirstToggleOn) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('You must agree to terms & conditions')),
-      );
+      HaloToast.show('You must agree to terms & conditions');
       return;
     }
 
     // Check username uniqueness
     bool isUnique = await _isUsernameUnique(_usernameController.text.trim());
     if (!isUnique) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Username already exists! Choose another one.')),
-      );
+      HaloToast.show('Username already exists! Choose another one.');
       return;
     }
 
@@ -332,23 +318,19 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         'timestamp': FieldValue.serverTimestamp(),
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Account Created Successfully!')),
-      );
+      HaloToast.show('Account Created Successfully!');
 
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => LoginPage()),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Registration failed: ${e.toString()}')),
-      );
+      HaloToast.show('Registration failed: ${e.toString()}');
     }
   }
 
   void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    HaloToast.show(msg);
   }
 
   // ---------- UI HELPERS ----------

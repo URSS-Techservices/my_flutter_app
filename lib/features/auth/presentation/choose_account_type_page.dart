@@ -5,6 +5,8 @@ import 'package:halo/core/halo_theme.dart';
 import 'package:halo/features/auth/presentation/session_controller.dart';
 import 'package:halo/screens/profile/core/profile_type.dart';
 
+import 'package:halo/core/halo_toast.dart';
+
 /// Logged-in user with no `accountType` yet. Does not create a new Firebase user.
 class ChooseAccountTypePage extends ConsumerWidget {
   const ChooseAccountTypePage({super.key});
@@ -21,9 +23,7 @@ class ChooseAccountTypePage extends ConsumerWidget {
     ref.listen(authActionProvider, (prev, next) {
       next.whenOrNull(
         error: (e, _) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not save type: $e')),
-          );
+          HaloToast.show('Could not save type: $e');
         },
       );
     });

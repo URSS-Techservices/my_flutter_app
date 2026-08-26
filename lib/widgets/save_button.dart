@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:halo/services/save_service.dart';
 
+import 'package:halo/core/halo_toast.dart';
+
 /// Reusable save/bookmark button. Listens to user's savedPosts in real time.
 class SaveButton extends StatelessWidget {
   final String postId;
@@ -63,9 +65,7 @@ class SaveButton extends StatelessWidget {
 
   Future<void> _onTap(BuildContext context) async {
     if (currentUserId == null || currentUserId!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sign in to save posts')),
-      );
+      HaloToast.show('Sign in to save posts');
       return;
     }
     try {
@@ -75,9 +75,7 @@ class SaveButton extends StatelessWidget {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not update save: $e')),
-        );
+        HaloToast.show('Could not update save: $e');
       }
     }
   }

@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'chat_service.dart';
 import 'chat_screen.dart';
 
+import 'package:halo/core/halo_toast.dart';
 // Reuse Halo chat colors
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
@@ -52,9 +53,7 @@ class _UserListPageState extends State<UserListPage> {
   }
 
   void _showComingSoon(String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$feature coming soon!')),
-    );
+    HaloToast.show('$feature coming soon!');
   }
 
   @override

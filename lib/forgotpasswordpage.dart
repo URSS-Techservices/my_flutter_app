@@ -3,6 +3,7 @@ import 'package:halo/features/auth/presentation/login_page.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:halo/core/halo_toast.dart';
 const Color _kPrimary = Color(0xFFA58CE3);
 const Color _kBgTop = Color(0xFF111111);
 const Color _kBgBottom = Color(0xFF050505);
@@ -48,13 +49,11 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       } else if (e.code == 'too-many-requests') {
         msg = 'Too many attempts. Please wait a moment and try again.';
       }
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg)));
+      HaloToast.show(msg);
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      HaloToast.show('Error: $e');
     }
   }
 

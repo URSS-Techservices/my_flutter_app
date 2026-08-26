@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:halo/services/follow_service.dart';
+
+import 'package:halo/core/halo_toast.dart';
 
 /// Centralized follow / unfollow flow for profile [State] classes.
 ///
@@ -36,7 +37,7 @@ abstract final class ProfileFollowToggle {
         debugPrint('follow toggle error: $e');
       }
       rollbackUi();
-      Fluttertoast.showToast(msg: errorToast);
+      HaloToast.show(errorToast);
     }
   }
 }

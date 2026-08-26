@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:halo/core/halo_toast.dart';
 class WellnessBookingSection extends StatefulWidget {
   final String wellnessUserId;
   final bool isOwner;
@@ -86,9 +87,7 @@ class _WellnessBookingSectionState extends State<WellnessBookingSection> {
 
               Navigator.pop(context);
 
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Booking request sent')),
-              );
+              HaloToast.show('Booking request sent');
             },
             child: const Text('Submit'),
           ),

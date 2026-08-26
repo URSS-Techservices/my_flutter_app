@@ -13,10 +13,14 @@ abstract class AuthRepository {
 
   /// Sign in by username, email, or mobile number. Firestore lookup for the
   /// non-email identifiers happens in the data layer, not the UI.
+  /// [password] is the account password, or a 6-digit email OTP.
   Future<void> signInWithEmailOrUsername({
     required String identifier,
     required String password,
   });
+
+  /// Emails a 6-digit login OTP to the account's email.
+  Future<void> sendLoginOtp({required String identifier});
 
   /// Google sign-in flow. Creates the initial user doc on first login only.
   /// Completes silently if the user cancels the picker.

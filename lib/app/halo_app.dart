@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:halo/app_theme_mode.dart';
 import 'package:halo/core/halo_theme.dart';
+import 'package:halo/core/halo_toast.dart';
 import 'package:halo/features/auth/presentation/auth_gate.dart';
 
 /// Root MaterialApp: theme + top-level route. UI-only, no side effects.
@@ -13,6 +14,7 @@ class HaloApp extends StatelessWidget {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: appThemeModeNotifier,
       builder: (context, themeMode, _) => MaterialApp(
+        navigatorKey: HaloToast.navigatorKey,
         debugShowCheckedModeBanner: false,
         themeMode: themeMode,
         theme: _lightTheme(),
@@ -35,7 +37,7 @@ ThemeData _lightTheme() {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: Colors.white,
-      hintStyle: GoogleFonts.poppins(color: Colors.black54),
+      hintStyle: GoogleFonts.poppins(color: Colors.white),
       labelStyle: GoogleFonts.poppins(color: Colors.black87),
     ),
     textSelectionTheme: const TextSelectionThemeData(

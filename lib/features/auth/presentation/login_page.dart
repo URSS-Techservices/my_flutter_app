@@ -9,6 +9,8 @@ import 'package:halo/features/auth/presentation/widgets/google_sign_in_button.da
 import 'package:halo/features/auth/presentation/widgets/legal_dialogs.dart';
 import 'package:halo/forgotpasswordpage.dart';
 
+import 'package:halo/core/halo_toast.dart';
+
 /// Login UI only. All auth work goes through [authActionProvider], so this
 /// page has no direct Firebase calls and stays testable.
 class LoginPage extends ConsumerStatefulWidget {
@@ -38,6 +40,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           identifier: _identifierController.text,
           password: _passwordController.text,
         );
+  }
+
+  Future<void> _sendOtp() async {
+    final id = _identifierController.text.trim();
+    if (id.isEmpty) {
+      HaloToast.show('Enter your username, mobile or email first');
+      return;
+    }
+    await ref.read(authActionProvider.notifier).sendLoginOtp(identifier: id);
+    if (!mounted) return;
+    if (ref.read(authActionProvider).hasError) return;
+    HaloToast.show('OTP sent to your email');
   }
 
   InputDecoration _decoration({
@@ -80,9 +94,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     ref.listen(authActionProvider, (previous, next) {
       final error = next.error;
       if (error != null && previous?.error != error) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Login failed: $error')),
-        );
+        HaloToast.show('$error');
       }
     });
 
@@ -128,6 +140,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       onTogglePasswordVisibility: () =>
                           setState(() => _obscurePassword = !_obscurePassword),
                       onSubmit: _signIn,
+                      onSendOtp: _sendOtp,
                       textTheme: textTheme,
                     ),
                     const SizedBox(height: 8),
@@ -172,6 +185,7 @@ class _LoginCard extends StatelessWidget {
     required this.obscurePassword,
     required this.onTogglePasswordVisibility,
     required this.onSubmit,
+    required this.onSendOtp,
     required this.textTheme,
   });
 
@@ -183,6 +197,7 @@ class _LoginCard extends StatelessWidget {
   final bool obscurePassword;
   final VoidCallback onTogglePasswordVisibility;
   final VoidCallback onSubmit;
+  final VoidCallback onSendOtp;
   final TextTheme textTheme;
 
   @override
@@ -251,15 +266,24 @@ class _LoginCard extends StatelessWidget {
               ),
               validator: (value) {
                 if (value == null || value.isEmpty) {
-                  return 'Please enter a password';
-                }
-                if (value.length < 8) {
-                  return 'Password must be at least 8 characters long';
+                  return 'Please enter your password or OTP';
                 }
                 return null;
               },
             ),
-            const SizedBox(height: 18),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: busy ? null : onSendOtp,
+                child: Text(
+                  'Send OTP',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: kPrimaryColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(

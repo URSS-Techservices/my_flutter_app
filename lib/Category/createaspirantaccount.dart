@@ -6,6 +6,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
 
+import 'package:halo/core/halo_toast.dart';
+
 // HALO THEME COLORS
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
@@ -119,11 +121,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
   String? _passwordValidator(String? value) {
     if (value == null || value.isEmpty) return 'Please enter a password';
-    if (value.length < 8) return 'Password must be at least 8 characters';
-    final reg = r'^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[!@#\$&*~]).{8,}$';
-    if (!RegExp(reg).hasMatch(value)) {
-      return 'Password must include uppercase, lowercase, number and symbol';
-    }
+    if (value.length < 6) return 'Password must be at least 6 characters';
     return null;
   }
 
@@ -262,7 +260,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
   }
 
   void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    HaloToast.show(msg);
   }
 
   // Move to next step after validating current step
@@ -274,17 +272,11 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
     } else if (_currentStep == 1) {
       if (_formKeyStep2.currentState?.validate() ?? false) {
         if (_selectedFitnessGoals.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Please select at least one fitness goal')),
-          );
+          HaloToast.show('Please select at least one fitness goal');
           return;
         }
         if (_selectedFitnessLevel == null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Please select your fitness level')),
-          );
+          HaloToast.show('Please select your fitness level');
           return;
         }
         setState(() => _currentStep = 2);
@@ -307,10 +299,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
   // Final submit - uses FirebaseAuth + Firestore
   Future<void> _submit() async {
     if (!_termsAccepted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please accept terms & conditions')),
-      );
+      HaloToast.show('Please accept terms & conditions');
       return;
     }
 
@@ -337,11 +326,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           .get();
 
       if (existing.docs.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content:
-              Text('Username already taken. Please choose another one.')),
-        );
+        HaloToast.show('Username already taken. Please choose another one.');
         setState(() => _isSubmitting = false);
         return;
       }
@@ -379,10 +364,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
       await _firestore.collection('users').doc(uid).set(payload);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Aspirant account created successfully!')),
-      );
+      HaloToast.show('Aspirant account created successfully!');
 
       // TODO: navigate to home screen
       // Navigator.pushReplacement(...);
@@ -396,12 +378,9 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
       } else if (e.code == 'invalid-email') {
         message = 'Invalid email format.';
       }
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      HaloToast.show(message);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to create account: $e')),
-      );
+      HaloToast.show('Failed to create account: $e');
     } finally {
       setState(() => _isSubmitting = false);
     }

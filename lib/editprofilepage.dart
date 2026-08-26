@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:halo/utils/search_utils.dart';
 
+import 'package:halo/core/halo_toast.dart';
 void saveProfileData({
   required String uid,
   required String name,
@@ -109,9 +110,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
       'searchTerms': buildSearchTerms(name: name, username: username),
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Profile updated')),
-    );
+    HaloToast.show('Profile updated');
   }
 
   @override
@@ -153,9 +152,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   bio: _bioController.text,
                 );
 
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Profile saved!')),
-                );
+                HaloToast.show('Profile saved!');
               },
               child: Text('Save Changes'),
             ),

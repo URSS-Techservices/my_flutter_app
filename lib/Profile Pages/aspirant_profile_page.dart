@@ -8,7 +8,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -46,6 +45,7 @@ import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover
 import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
 import 'package:halo/screens/profile/widgets/common/profile_media_preview_helpers.dart';
 import 'package:halo/screens/profile/widgets/common/profile_stats_bar.dart';
+import 'package:halo/core/halo_toast.dart';
 import 'edit_profile_sections.dart'; // Edit pages for profile sections
 
 // ===================================================================
@@ -255,7 +255,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       }
     } catch (e) {
       debugPrint('profile load error: $e');
-      Fluttertoast.showToast(msg: 'Failed to load profile');
+      HaloToast.show('Failed to load profile');
     } finally {
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -353,10 +353,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
           _profilePhotoUrl = url;
         }
       });
-      Fluttertoast.showToast(msg: 'Photo updated');
+      HaloToast.show('Photo updated');
     } catch (e) {
       debugPrint('upload error: $e');
-      Fluttertoast.showToast(msg: 'Upload failed');
+      HaloToast.show('Upload failed');
     }
   }
 
@@ -413,7 +413,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       );
     } catch (e) {
       debugPrint('Error opening chat: $e');
-      Fluttertoast.showToast(msg: 'Failed to open chat. Please try again.');
+      HaloToast.show('Failed to open chat. Please try again.');
     }
   }
 
@@ -425,7 +425,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
     if (_currentUser == null) {
-      Fluttertoast.showToast(msg: 'Please sign in to post');
+      HaloToast.show('Please sign in to post');
       return;
     }
     Navigator.push(
@@ -471,11 +471,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   .update({
                 'postsCount': FieldValue.increment(1),
               });
-              Fluttertoast.showToast(msg: 'Post uploaded');
+              HaloToast.show('Post uploaded');
               await _loadProfileData();
             } catch (e) {
               debugPrint('post upload error: $e');
-              Fluttertoast.showToast(msg: 'Upload failed');
+              HaloToast.show('Upload failed');
             }
           },
         ),
@@ -512,7 +512,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         });
         await _loadProfileData();
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to save profile');
+        HaloToast.show('Failed to save profile');
       }
     }
   }
@@ -526,7 +526,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         MaterialPageRoute(builder: (ctx) => LoginPage()),
       );
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Logout failed');
+      HaloToast.show('Logout failed');
     }
   }
 
@@ -721,7 +721,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
         shouldFollow: !isCurrentlyFollowing,
       );
     } catch (_) {
-      Fluttertoast.showToast(msg: 'Could not update follow right now');
+      HaloToast.show('Could not update follow right now');
     } finally {
       if (!mounted) return;
       setState(() => _suggestedFollowLoading[profileUserId] = false);
@@ -2579,8 +2579,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                                 .update({'isPrivate': updated});
                             setState(() => _isPrivate = updated);
                           } catch (e) {
-                            Fluttertoast.showToast(
-                                msg: 'Failed to update privacy');
+                            HaloToast.show('Failed to update privacy');
                           }
                         }
                       } else if (value == 'Saved') {
@@ -2826,9 +2825,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 
                 setState(() => _fitnessStats = updatedStats);
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Progress updated successfully!');
+                HaloToast.show('Progress updated successfully!');
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating progress: $e');
+                HaloToast.show('Error updating progress: $e');
               }
             },
             child: Text(
@@ -2901,9 +2900,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 
                 setState(() => _fitnessGoals = updatedGoals);
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Goal added successfully!');
+                HaloToast.show('Goal added successfully!');
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding goal: $e');
+                HaloToast.show('Error adding goal: $e');
               }
             },
             child: Text(
@@ -2978,10 +2977,10 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                   
                   setState(() => _fitnessGoals = updatedGoals);
                   Navigator.pop(ctx);
-                  Fluttertoast.showToast(msg: 'Goal updated successfully!');
+                  HaloToast.show('Goal updated successfully!');
                 }
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating goal: $e');
+                HaloToast.show('Error updating goal: $e');
               }
             },
             child: Text(
@@ -3047,9 +3046,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
             .update({'fitnessGoals': updatedGoals});
         
         setState(() => _fitnessGoals = updatedGoals);
-        Fluttertoast.showToast(msg: 'Goal deleted successfully!');
+        HaloToast.show('Goal deleted successfully!');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Error deleting goal: $e');
+        HaloToast.show('Error deleting goal: $e');
       }
     }
   }
@@ -3088,11 +3087,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        Fluttertoast.showToast(msg: 'Could not open $platform link');
+        HaloToast.show('Could not open $platform link');
       }
     } catch (e) {
       debugPrint('Error opening social link: $e');
-      Fluttertoast.showToast(msg: 'Failed to open link');
+      HaloToast.show('Failed to open link');
     }
   }
   
@@ -3100,7 +3099,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
     try {
       final url = article['url']?.toString() ?? article['link']?.toString();
       if (url == null || url.isEmpty) {
-        Fluttertoast.showToast(msg: 'Article link not available');
+        HaloToast.show('Article link not available');
         return;
       }
       
@@ -3113,11 +3112,11 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        Fluttertoast.showToast(msg: 'Could not open article');
+        HaloToast.show('Could not open article');
       }
     } catch (e) {
       debugPrint('Error opening article: $e');
-      Fluttertoast.showToast(msg: 'Failed to open article');
+      HaloToast.show('Failed to open article');
     }
   }
   
@@ -3241,9 +3240,9 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                 
                 setState(() => _personalRecords = updatedRecords);
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Record updated successfully!');
+                HaloToast.show('Record updated successfully!');
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating record: $e');
+                HaloToast.show('Error updating record: $e');
               }
             },
             child: Text(

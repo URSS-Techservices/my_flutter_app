@@ -4,9 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:fluttertoast/fluttertoast.dart';
-
 import 'package:halo/app_theme_mode.dart';
+
+import 'package:halo/core/halo_toast.dart';
 
 // HALO Theme Colors
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
@@ -100,18 +100,12 @@ class _SettingsPageState extends State<SettingsPage> {
       setAppThemeMode(_darkMode);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings saved successfully!')),
-        );
+        HaloToast.show('Settings saved successfully!');
       }
     } catch (e) {
       debugPrint('Error saving settings: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Something went wrong. Please try again.'),
-          ),
-        );
+        HaloToast.show('Something went wrong. Please try again.');
       }
     }
   }
@@ -591,11 +585,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
                   if (context.mounted) {
                     Navigator.pop(context);
-                    Fluttertoast.showToast(
-                      msg: 'Password changed successfully!',
-                      toastLength: Toast.LENGTH_SHORT,
-                      gravity: ToastGravity.BOTTOM,
-                    );
+                    HaloToast.show('Password changed successfully!');
                   }
                 } on FirebaseAuthException catch (e) {
                   setDialogState(() => isLoading = false);
@@ -608,18 +598,12 @@ class _SettingsPageState extends State<SettingsPage> {
                     errorMessage = e.message ?? 'An error occurred';
                   }
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(errorMessage)),
-                    );
+                    HaloToast.show(errorMessage);
                   }
                 } catch (e) {
                   setDialogState(() => isLoading = false);
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Something went wrong. Please try again.'),
-                      ),
-                    );
+                    HaloToast.show('Something went wrong. Please try again.');
                   }
                 }
               },
@@ -827,25 +811,15 @@ class _SettingsPageState extends State<SettingsPage> {
                       );
                   setState(() {});
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          _twoFactorEnabled
+                    HaloToast.show(_twoFactorEnabled
                               ? 'Preference saved (not real 2FA).'
-                              : 'Preference saved.',
-                        ),
-                      ),
-                    );
+                              : 'Preference saved.');
                     Navigator.pop(context);
                   }
                 } catch (e) {
                   debugPrint('Two-factor preference save error: $e');
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Something went wrong. Please try again.'),
-                      ),
-                    );
+                    HaloToast.show('Something went wrong. Please try again.');
                   }
                 }
               },
@@ -983,23 +957,13 @@ class _SettingsPageState extends State<SettingsPage> {
 
                   if (context.mounted) {
                     Navigator.pop(context);
-                    Fluttertoast.showToast(
-                      msg: 'Feedback submitted successfully!',
-                      toastLength: Toast.LENGTH_SHORT,
-                      gravity: ToastGravity.BOTTOM,
-                    );
+                    HaloToast.show('Feedback submitted successfully!');
                   }
                 } catch (e) {
                   debugPrint('Contact Us submit error: $e');
                   setDialogState(() => isLoading = false);
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Something went wrong. Please try again.',
-                        ),
-                      ),
-                    );
+                    HaloToast.show('Something went wrong. Please try again.');
                   }
                 }
               },
@@ -1233,18 +1197,11 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
         _blockedUsers.removeWhere((user) => user['userId'] == userId);
       });
 
-      Fluttertoast.showToast(
-        msg: '$userName has been unblocked',
-        toastLength: Toast.LENGTH_SHORT,
-      );
+      HaloToast.show('$userName has been unblocked');
     } catch (e) {
       debugPrint('Error unblocking user: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Something went wrong. Please try again.'),
-          ),
-        );
+        HaloToast.show('Something went wrong. Please try again.');
       }
     }
   }

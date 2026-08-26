@@ -8,7 +8,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -51,6 +50,8 @@ import '../Sections/Guru Section/guru_classes_section.dart';
 import '../Sections/Guru Section/guru_earnings_section.dart';
 import '../Sections/Guru Section/guru_students_section.dart';
 import '../Sections/Guru Section/guru_analytics_section.dart';
+
+import 'package:halo/core/halo_toast.dart';
 
 // ===================================================================
 //  GURU PROFILE PAGE
@@ -579,7 +580,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       }
     } catch (e) {
       debugPrint('guru profile load error: $e');
-      Fluttertoast.showToast(msg: 'Failed to load profile');
+      HaloToast.show('Failed to load profile');
     } finally {
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -691,10 +692,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           _profilePhotoUrl = url;
         }
       });
-      Fluttertoast.showToast(msg: 'Photo updated');
+      HaloToast.show('Photo updated');
     } catch (e) {
       debugPrint('upload error: $e');
-      Fluttertoast.showToast(msg: 'Upload failed');
+      HaloToast.show('Upload failed');
     }
   }
 
@@ -751,7 +752,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       );
     } catch (e) {
       debugPrint('Error opening chat: $e');
-      Fluttertoast.showToast(msg: 'Failed to open chat. Please try again.');
+      HaloToast.show('Failed to open chat. Please try again.');
     }
   }
 
@@ -763,7 +764,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
     if (_currentUser == null) {
-      Fluttertoast.showToast(msg: 'Please sign in to post');
+      HaloToast.show('Please sign in to post');
       return;
     }
     Navigator.push(
@@ -793,11 +794,11 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                   .update({
                 'postsCount': FieldValue.increment(1),
               });
-              Fluttertoast.showToast(msg: 'Post uploaded');
+              HaloToast.show('Post uploaded');
               await _loadProfileData();
             } catch (e) {
               debugPrint('post upload error: $e');
-              Fluttertoast.showToast(msg: 'Upload failed');
+              HaloToast.show('Upload failed');
             }
           },
         ),
@@ -839,7 +840,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     if (_isOwnProfile) return;
 
     if (_currentUser == null) {
-      Fluttertoast.showToast(msg: 'Please login to book a session');
+      HaloToast.show('Please login to book a session');
       return;
     }
 
@@ -971,7 +972,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         });
         await _loadProfileData();
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to save profile');
+        HaloToast.show('Failed to save profile');
       }
     }
   }
@@ -985,7 +986,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
         MaterialPageRoute(builder: (ctx) => LoginPage()),
       );
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Logout failed');
+      HaloToast.show('Logout failed');
     }
   }
 
@@ -1278,8 +1279,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                                   .update({'isPrivate': updated});
                               setState(() => _isPrivate = updated);
                             } catch (e) {
-                              Fluttertoast.showToast(
-                                  msg: 'Failed to update privacy');
+                              HaloToast.show('Failed to update privacy');
                             }
                           }
                         } else if (value == 'Settings') {
@@ -1587,9 +1587,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             .doc(_currentUser!.uid)
             .update({'bio': result});
         setState(() => _bio = result);
-        Fluttertoast.showToast(msg: 'Bio updated');
+        HaloToast.show('Bio updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update bio');
+        HaloToast.show('Failed to update bio');
       }
     }
   }
@@ -1727,9 +1727,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             .doc(_currentUser!.uid)
             .update({'specialties': specialties});
         setState(() => _specialties = specialties);
-        Fluttertoast.showToast(msg: 'Specializations updated');
+        HaloToast.show('Specializations updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update specializations');
+        HaloToast.show('Failed to update specializations');
       }
     }
   }
@@ -1836,9 +1836,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
           .doc(_currentUser!.uid)
           .update({'galleryImages': updated});
       setState(() => _galleryImages = updated);
-      Fluttertoast.showToast(msg: 'Image added to gallery');
+      HaloToast.show('Image added to gallery');
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to add image');
+      HaloToast.show('Failed to add image');
     }
   }
 
@@ -2267,9 +2267,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             .doc(_currentUser!.uid)
             .update({'popularProducts': updated});
         setState(() => _programs = updated);
-        Fluttertoast.showToast(msg: 'Program added');
+        HaloToast.show('Program added');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to add program');
+        HaloToast.show('Failed to add program');
       }
     }
   }
@@ -2606,9 +2606,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             .doc(_currentUser!.uid)
             .update({'achievements': updated});
         setState(() => _achievements = updated);
-        Fluttertoast.showToast(msg: 'Achievement added');
+        HaloToast.show('Achievement added');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to add achievement');
+        HaloToast.show('Failed to add achievement');
       }
     }
   }
@@ -3879,9 +3879,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 
                 setState(() => _certifications = updatedCerts);
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Certification added successfully!');
+                HaloToast.show('Certification added successfully!');
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding certification: $e');
+                HaloToast.show('Error adding certification: $e');
               }
             },
             child: Text(
@@ -4002,9 +4002,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 
                 setState(() => _certifications = updatedCerts);
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Certification updated successfully!');
+                HaloToast.show('Certification updated successfully!');
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating certification: $e');
+                HaloToast.show('Error updating certification: $e');
               }
             },
             child: Text(
@@ -4070,9 +4070,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             .update({'certifications': updatedCerts});
         
         setState(() => _certifications = updatedCerts);
-        Fluttertoast.showToast(msg: 'Certification deleted successfully!');
+        HaloToast.show('Certification deleted successfully!');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Error deleting certification: $e');
+        HaloToast.show('Error deleting certification: $e');
       }
     }
   }
@@ -4203,9 +4203,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 
                 setState(() => _programs = updatedPrograms);
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Training program added successfully!');
+                HaloToast.show('Training program added successfully!');
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding program: $e');
+                HaloToast.show('Error adding program: $e');
               }
             },
             child: Text(
@@ -4345,9 +4345,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 
                 setState(() => _programs = updatedPrograms);
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Program updated successfully!');
+                HaloToast.show('Program updated successfully!');
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating program: $e');
+                HaloToast.show('Error updating program: $e');
               }
             },
             child: Text(
@@ -4413,9 +4413,9 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             .update({'trainingPrograms': updatedPrograms});
         
         setState(() => _programs = updatedPrograms);
-        Fluttertoast.showToast(msg: 'Program deleted successfully!');
+        HaloToast.show('Program deleted successfully!');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Error deleting program: $e');
+        HaloToast.show('Error deleting program: $e');
       }
     }
   }
@@ -4528,10 +4528,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     .add(newStory);
                 
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Success story added successfully!');
+                HaloToast.show('Success story added successfully!');
                 await _loadProfileData(); // Reload to show updated data
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding story: $e');
+                HaloToast.show('Error adding story: $e');
               }
             },
             child: Text(
@@ -4645,10 +4645,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 
                 // Update in Firestore - you'll need to track document IDs
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Success story updated successfully!');
+                HaloToast.show('Success story updated successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating story: $e');
+                HaloToast.show('Error updating story: $e');
               }
             },
             child: Text(
@@ -4708,10 +4708,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     if (confirmed == true) {
       try {
         // Delete from Firestore - you'll need to track document IDs
-        Fluttertoast.showToast(msg: 'Success story deleted successfully!');
+        HaloToast.show('Success story deleted successfully!');
         await _loadProfileData();
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Error deleting story: $e');
+        HaloToast.show('Error deleting story: $e');
       }
     }
   }
@@ -4822,10 +4822,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                     .add(newTutorial);
                 
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Video tutorial added successfully!');
+                HaloToast.show('Video tutorial added successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding tutorial: $e');
+                HaloToast.show('Error adding tutorial: $e');
               }
             },
             child: Text(
@@ -4932,10 +4932,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
               try {
                 // Update in Firestore - you'll need to track document IDs
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Video tutorial updated successfully!');
+                HaloToast.show('Video tutorial updated successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating tutorial: $e');
+                HaloToast.show('Error updating tutorial: $e');
               }
             },
             child: Text(
@@ -4995,10 +4995,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
     if (confirmed == true) {
       try {
         // Delete from Firestore - you'll need to track document IDs
-        Fluttertoast.showToast(msg: 'Video tutorial deleted successfully!');
+        HaloToast.show('Video tutorial deleted successfully!');
         await _loadProfileData();
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Error deleting tutorial: $e');
+        HaloToast.show('Error deleting tutorial: $e');
       }
     }
   }
@@ -5010,7 +5010,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   Future<void> _openSocialLink(String platform, String link) async {
     try {
       if (link.isEmpty) {
-        Fluttertoast.showToast(msg: '$platform link not available');
+        HaloToast.show('$platform link not available');
         return;
       }
       
@@ -5048,17 +5048,17 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        Fluttertoast.showToast(msg: 'Could not open $platform link');
+        HaloToast.show('Could not open $platform link');
       }
     } catch (e) {
       debugPrint('Error opening social link: $e');
-      Fluttertoast.showToast(msg: 'Failed to open link');
+      HaloToast.show('Failed to open link');
     }
   }
   
   Future<void> _showWriteReviewDialog() async {
     if (_currentUser == null) {
-      Fluttertoast.showToast(msg: 'Please login to write a review');
+      HaloToast.show('Please login to write a review');
       return;
     }
     
@@ -5129,7 +5129,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
             ),
             onPressed: () async {
               if (reviewCtrl.text.trim().isEmpty) {
-                Fluttertoast.showToast(msg: 'Please write a review');
+                HaloToast.show('Please write a review');
                 return;
               }
               
@@ -5167,10 +5167,10 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                 });
                 
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Review submitted successfully!');
+                HaloToast.show('Review submitted successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error submitting review: $e');
+                HaloToast.show('Error submitting review: $e');
               }
             },
             child: Text(
@@ -5678,13 +5678,13 @@ class _AllVideosPage extends StatelessWidget {
                         if (await canLaunchUrl(uri)) {
                           await launchUrl(uri, mode: LaunchMode.externalApplication);
                         } else {
-                          Fluttertoast.showToast(msg: 'Could not open video');
+                          HaloToast.show('Could not open video');
                         }
                       } catch (e) {
-                        Fluttertoast.showToast(msg: 'Failed to open video');
+                        HaloToast.show('Failed to open video');
                       }
                     } else {
-                      Fluttertoast.showToast(msg: 'Video link not available');
+                      HaloToast.show('Video link not available');
                     }
                   },
                   child: Container(

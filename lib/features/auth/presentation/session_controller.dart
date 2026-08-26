@@ -41,6 +41,13 @@ class AuthActionController extends StateNotifier<AsyncValue<void>> {
     );
   }
 
+  Future<void> sendLoginOtp({required String identifier}) async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(
+      () => _repo.sendLoginOtp(identifier: identifier),
+    );
+  }
+
   Future<void> signInWithGoogle() async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() => _repo.signInWithGoogle());

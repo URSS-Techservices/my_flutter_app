@@ -8,8 +8,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:fluttertoast/fluttertoast.dart';
-
 // -------------------- SECTIONS --------------------
 import '../Sections/Wellness Section/wellness_products_section.dart';
 import '../Sections/Wellness Section/wellness_services_section.dart';
@@ -49,6 +47,7 @@ import 'package:halo/screens/profile/widgets/common/profile_cover_hero.dart';
 import 'package:halo/screens/profile/widgets/common/profile_flexible_space_cover_stack.dart';
 import 'package:halo/screens/profile/widgets/common/profile_loading_gate.dart';
 
+import 'package:halo/core/halo_toast.dart';
 // ===================================================================
 //  WELLNESS PROFILE PAGE
 // ===================================================================
@@ -356,9 +355,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         _profilePhotoFile = null;
       });
 
-      Fluttertoast.showToast(msg: 'Profile photo updated');
+      HaloToast.show('Profile photo updated');
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to upload photo');
+      HaloToast.show('Failed to upload photo');
       setState(() => _profilePhotoFile = null);
     }
   }
@@ -391,9 +390,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
         _coverPhotoFile = null;
       });
 
-      Fluttertoast.showToast(msg: 'Cover photo updated');
+      HaloToast.show('Cover photo updated');
     } catch (e) {
-      Fluttertoast.showToast(msg: 'Failed to upload photo');
+      HaloToast.show('Failed to upload photo');
       setState(() => _coverPhotoFile = null);
     }
   }
@@ -584,9 +583,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
             .doc(_currentUser!.uid)
             .update({'bio': result});
         setState(() => _bio = result);
-        Fluttertoast.showToast(msg: 'Bio updated');
+        HaloToast.show('Bio updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update bio');
+        HaloToast.show('Failed to update bio');
       }
     }
   }
@@ -638,9 +637,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
             .doc(_currentUser!.uid)
             .update({'services': services});
         setState(() => _services = services);
-        Fluttertoast.showToast(msg: 'Services updated');
+        HaloToast.show('Services updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update services');
+        HaloToast.show('Failed to update services');
       }
     }
   }
@@ -707,9 +706,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
             .doc(_currentUser!.uid)
             .update({'availability': newAvailability});
         setState(() => _availability = newAvailability);
-        Fluttertoast.showToast(msg: 'Availability updated');
+        HaloToast.show('Availability updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update availability');
+        HaloToast.show('Failed to update availability');
       }
     }
   }
@@ -754,9 +753,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
             .doc(_currentUser!.uid)
             .update({'category': result, 'wellness_category': result});
         setState(() => _category = result);
-        Fluttertoast.showToast(msg: 'Category updated');
+        HaloToast.show('Category updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update category');
+        HaloToast.show('Failed to update category');
       }
     }
   }
@@ -1874,9 +1873,9 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
             .doc(_currentUser!.uid)
             .update({'socialLinks': newLinks});
         setState(() => _socialLinks = newLinks);
-        Fluttertoast.showToast(msg: 'Social links updated');
+        HaloToast.show('Social links updated');
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Failed to update social links');
+        HaloToast.show('Failed to update social links');
       }
     }
   }
@@ -2687,7 +2686,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     if (!_isOwnProfile || _currentUser == null) return;
     
     // In a real app, you would use ImagePicker here
-    Fluttertoast.showToast(msg: 'Gallery image upload feature coming soon!');
+    HaloToast.show('Gallery image upload feature coming soon!');
   }
 
   Future<void> _addMembershipPlan() async {
@@ -2817,10 +2816,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     .add(newPlan);
                 
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Membership plan added successfully!');
+                HaloToast.show('Membership plan added successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding plan: $e');
+                HaloToast.show('Error adding plan: $e');
               }
             },
             child: Text(
@@ -2954,10 +2953,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                 
                 // Update in Firestore - you'll need to track document IDs
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Membership plan updated successfully!');
+                HaloToast.show('Membership plan updated successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating plan: $e');
+                HaloToast.show('Error updating plan: $e');
               }
             },
             child: Text(
@@ -3017,10 +3016,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     if (confirmed == true) {
       try {
         // Delete from Firestore - you'll need to track document IDs
-        Fluttertoast.showToast(msg: 'Membership plan deleted successfully!');
+        HaloToast.show('Membership plan deleted successfully!');
         await _loadProfileData();
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Error deleting plan: $e');
+        HaloToast.show('Error deleting plan: $e');
       }
     }
   }
@@ -3131,10 +3130,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     .add(newOffer);
                 
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Special offer added successfully!');
+                HaloToast.show('Special offer added successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding offer: $e');
+                HaloToast.show('Error adding offer: $e');
               }
             },
             child: Text(
@@ -3241,10 +3240,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
               try {
                 // Update in Firestore - you'll need to track document IDs
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Special offer updated successfully!');
+                HaloToast.show('Special offer updated successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating offer: $e');
+                HaloToast.show('Error updating offer: $e');
               }
             },
             child: Text(
@@ -3304,10 +3303,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     if (confirmed == true) {
       try {
         // Delete from Firestore - you'll need to track document IDs
-        Fluttertoast.showToast(msg: 'Special offer deleted successfully!');
+        HaloToast.show('Special offer deleted successfully!');
         await _loadProfileData();
       } catch (e) {
-        Fluttertoast.showToast(msg: 'Error deleting offer: $e');
+        HaloToast.show('Error deleting offer: $e');
       }
     }
   }
@@ -3414,10 +3413,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     });
                 
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Facility hours updated successfully!');
+                HaloToast.show('Facility hours updated successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error updating hours: $e');
+                HaloToast.show('Error updating hours: $e');
               }
             },
             child: Text(
@@ -3457,7 +3456,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       );
     } catch (e) {
       debugPrint('Error opening chat: $e');
-      Fluttertoast.showToast(msg: 'Failed to open chat. Please try again.');
+      HaloToast.show('Failed to open chat. Please try again.');
     }
   }
   
@@ -3465,7 +3464,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
     if (_isOwnProfile) return;
     
     if (_currentUser == null) {
-      Fluttertoast.showToast(msg: 'Please login to book');
+      HaloToast.show('Please login to book');
       return;
     }
     
@@ -3512,11 +3511,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                   .update({
                 'postsCount': FieldValue.increment(1),
               });
-              Fluttertoast.showToast(msg: 'Post uploaded');
+              HaloToast.show('Post uploaded');
               await _loadProfileData();
             } catch (e) {
               debugPrint('post upload error: $e');
-              Fluttertoast.showToast(msg: 'Upload failed');
+              HaloToast.show('Upload failed');
             }
           },
         ),
@@ -3527,7 +3526,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   Future<void> _openSocialLink(String platform, String link) async {
     try {
       if (link.isEmpty) {
-        Fluttertoast.showToast(msg: '$platform link not available');
+        HaloToast.show('$platform link not available');
         return;
       }
       
@@ -3564,18 +3563,18 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        Fluttertoast.showToast(msg: 'Could not open $platform link');
+        HaloToast.show('Could not open $platform link');
       }
     } catch (e) {
       debugPrint('Error opening social link: $e');
-      Fluttertoast.showToast(msg: 'Failed to open link');
+      HaloToast.show('Failed to open link');
     }
   }
   
   Future<void> _openMaps() async {
     try {
       if (_location.isEmpty) {
-        Fluttertoast.showToast(msg: 'Location not available');
+        HaloToast.show('Location not available');
         return;
       }
       
@@ -3587,11 +3586,11 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        Fluttertoast.showToast(msg: 'Could not open maps');
+        HaloToast.show('Could not open maps');
       }
     } catch (e) {
       debugPrint('Error opening maps: $e');
-      Fluttertoast.showToast(msg: 'Failed to open maps');
+      HaloToast.show('Failed to open maps');
     }
   }
   
@@ -3642,7 +3641,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
   
   Future<void> _subscribeToPlan(Map<String, dynamic> plan) async {
     if (_currentUser == null) {
-      Fluttertoast.showToast(msg: 'Please login to subscribe');
+      HaloToast.show('Please login to subscribe');
       return;
     }
     
@@ -3698,7 +3697,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
             ),
             onPressed: () {
               Navigator.pop(ctx);
-              Fluttertoast.showToast(msg: 'Subscription feature coming soon!');
+              HaloToast.show('Subscription feature coming soon!');
             },
             child: Text(
               'Continue',
@@ -3825,10 +3824,10 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                     .add(newAward);
                 
                 Navigator.pop(ctx);
-                Fluttertoast.showToast(msg: 'Award added successfully!');
+                HaloToast.show('Award added successfully!');
                 await _loadProfileData();
               } catch (e) {
-                Fluttertoast.showToast(msg: 'Error adding award: $e');
+                HaloToast.show('Error adding award: $e');
               }
             },
             child: Text(

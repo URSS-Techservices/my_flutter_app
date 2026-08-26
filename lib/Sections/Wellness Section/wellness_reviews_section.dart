@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:halo/core/halo_toast.dart';
 class WellnessReviewsSection extends StatefulWidget {
   final String wellnessUserId;
 
@@ -83,9 +84,7 @@ class _WellnessReviewsSectionState extends State<WellnessReviewsSection> {
     _reviewCtrl.clear();
     setState(() => _selectedRating = 5);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Review submitted')),
-    );
+    HaloToast.show('Review submitted');
   }
 
   Widget _buildReviewForm() {

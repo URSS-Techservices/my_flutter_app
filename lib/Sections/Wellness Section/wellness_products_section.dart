@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:halo/core/halo_toast.dart';
 class WellnessProductsSection extends StatefulWidget {
   final String wellnessUserId;
   final bool isOwner;
@@ -193,11 +194,7 @@ class _WellnessProductsSectionState extends State<WellnessProductsSection> {
                           ElevatedButton(
                             onPressed: () {
                               _registerInterest(d.id);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content:
-                                    Text('Interest registered')),
-                              );
+                              HaloToast.show('Interest registered');
                             },
                             child: const Text('View'),
                           ),

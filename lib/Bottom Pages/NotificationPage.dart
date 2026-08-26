@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:halo/core/halo_toast.dart';
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
 const Color kBackgroundColor = Color(0xFFF4F1FB); // Light lavender-gray;
@@ -62,9 +63,7 @@ class _NotificationPageState extends State<NotificationPage> {
       }
       await batch.commit();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error marking all as read: $e')),
-      );
+      HaloToast.show('Error marking all as read: $e');
     } finally {
       if (mounted) {
         setState(() => _isMarkingAll = false);

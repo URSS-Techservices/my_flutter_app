@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'chat_service.dart';
 import 'message_bubble.dart';
 
+import 'package:halo/core/halo_toast.dart';
 // Halo chat theme colors (same as we used elsewhere)
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
@@ -338,12 +339,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 reactions: reactions,
                                 onLongPress: () {
                                   // TODO: show bottom sheet for reply/copy/delete/star/react
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                          'Long-press actions coming soon'),
-                                    ),
-                                  );
+                                  HaloToast.show('Long-press actions coming soon');
                                 },
                                 onTap: () {
                                   // Future: open media, show message info, etc.

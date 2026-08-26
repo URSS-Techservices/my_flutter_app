@@ -2231,3 +2231,7 @@ exports.migrateLegacyVideos = onCall(
     return result;
   },
 );
+
+const emailOtp = require('./email_otp');
+exports.sendLoginOtp = emailOtp.sendLoginOtp;
+exports.verifyLoginOtp = emailOtp.verifyLoginOtp;

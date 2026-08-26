@@ -13,6 +13,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 
 
 
+import 'package:halo/core/halo_toast.dart';
 // THEME CONSTANTS (match Login / Home)
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
@@ -80,12 +81,7 @@ class _AddPostPageState extends State<AddPostPage> {
     final status = await Permission.camera.request();
     if (status != PermissionStatus.granted) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-            Text("Camera permission is required to take photos and videos."),
-          ),
-        );
+        HaloToast.show("Camera permission is required to take photos and videos.");
       }
       return;
     }
@@ -214,17 +210,13 @@ class _AddPostPageState extends State<AddPostPage> {
   /// Upload and save post
   Future<void> _submitPost() async {
     if (_selectedImages.isEmpty && _selectedVideos.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please select at least one image or a video.")),
-      );
+      HaloToast.show("Please select at least one image or a video.");
       return;
     }
 
     final caption = _captionController.text.trim();
     if (caption.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please enter a caption.")),
-      );
+      HaloToast.show("Please enter a caption.");
       return;
     }
 
@@ -234,9 +226,7 @@ class _AddPostPageState extends State<AddPostPage> {
       final userId = FirebaseAuth.instance.currentUser?.uid;
 
       if (userId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please sign in to post")),
-        );
+        HaloToast.show("Please sign in to post");
         setState(() => _isLoading = false);
         return;
       }
@@ -302,9 +292,7 @@ class _AddPostPageState extends State<AddPostPage> {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Post uploaded successfully!")),
-      );
+      HaloToast.show("Post uploaded successfully!");
 
       setState(() {
         _selectedImages = [];
@@ -317,9 +305,7 @@ class _AddPostPageState extends State<AddPostPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: $e")),
-      );
+      HaloToast.show("Error: $e");
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);

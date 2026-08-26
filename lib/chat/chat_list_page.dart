@@ -7,6 +7,8 @@ import 'chat_screen.dart';
 import 'user_list_page.dart';
 import 'package:halo/Bottom%20Pages/HomePage.dart';
 
+import 'package:halo/core/halo_toast.dart';
+
 // THEME COLORS (reuse Halo theme where possible)
 const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
 const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
@@ -129,14 +131,10 @@ class _ChatListPageState extends State<ChatListPage> {
       await batch.commit();
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chat deleted')),
-      );
+      HaloToast.show('Chat deleted');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error deleting chat: $e')),
-      );
+      HaloToast.show('Error deleting chat: $e');
     }
   }
 
@@ -179,10 +177,7 @@ class _ChatListPageState extends State<ChatListPage> {
                 title: const Text('Mute (coming soon)'),
                 onTap: () {
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Mute feature coming soon!')),
-                  );
+                  HaloToast.show('Mute feature coming soon!');
                 },
               ),
               ListTile(
