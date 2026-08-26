@@ -64,6 +64,8 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/images/Halo.png"
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: "assets/images/Halo.png"
   remove_alpha_ios: true
 
 dependency_overrides:
