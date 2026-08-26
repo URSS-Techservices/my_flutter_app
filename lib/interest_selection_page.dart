@@ -253,12 +253,12 @@ class _InterestTile extends StatelessWidget {
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
         decoration: BoxDecoration(
-          color: selected ? kSecondaryColor : Colors.white.withOpacity(0.95),
+          color: selected ? kSecondaryColor : Colors.white.withValues(alpha:0.95),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
             color: selected
-                ? kSecondaryColor.withOpacity(0.9)
-                : Colors.deepPurple.withOpacity(0.15),
+                ? kSecondaryColor.withValues(alpha: 0.9)
+                : Colors.deepPurple.withValues(alpha:0.15),
             width: 1.1,
           ),
           boxShadow: selected
@@ -267,7 +267,7 @@ class _InterestTile extends StatelessWidget {
               blurRadius: 16,
               spreadRadius: -4,
               offset: const Offset(0, 10),
-              color: kSecondaryColor.withOpacity(0.35),
+              color: kSecondaryColor.withValues(alpha:0.35),
             ),
           ]
               : [
@@ -275,7 +275,7 @@ class _InterestTile extends StatelessWidget {
               blurRadius: 10,
               spreadRadius: -6,
               offset: const Offset(0, 6),
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha:0.06),
             ),
           ],
         ),

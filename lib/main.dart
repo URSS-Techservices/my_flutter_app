@@ -17,8 +17,8 @@ import 'package:halo/services/video_memory_bridge.dart';
 import 'firebase_options.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  AppLogger.init();
+  WidgetsFlutterBinding.ensureInitialized(); // initialized the firebase services
+  AppLogger.init(); // application login system
   VideoMemoryBridge.install();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -33,8 +33,6 @@ Future<void> main() async {
   runApp(const ProviderScope(child: _AppRoot()));
 }
 
-/// Firebase + AppCheck bootstrap. Shows [HaloSplash] until Firebase is ready,
-/// then hands off to [HaloApp].
 class _AppRoot extends StatefulWidget {
   const _AppRoot();
 
@@ -50,17 +48,12 @@ class _AppRootState extends State<_AppRoot> {
       options: DefaultFirebaseOptions.currentPlatform,
     );
 
-    // Persistent offline cache. Posts, likes, comments load from disk on next
-    // launch without a network round-trip.
     FirebaseFirestore.instance.settings = const Settings(
       persistenceEnabled: true,
       cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
     );
 
     try {
-      // iOS appAttest requires the bundle to be registered in Firebase Console
-      // (App Check → Apps). Until that is done, appAttest returns 400 and
-      // blocks Firestore requests, so we stay on debug for iOS.
       await FirebaseAppCheck.instance.activate(
         androidProvider:
             kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,

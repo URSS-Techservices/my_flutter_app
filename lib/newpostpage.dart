@@ -5,7 +5,7 @@ class Newpostpage extends StatelessWidget {
   final String imagePath;
   final Function(String caption) onPostSubmit;
 
-  Newpostpage({required this.imagePath, required this.onPostSubmit});
+  const Newpostpage({super.key, required this.imagePath, required this.onPostSubmit});
 
   @override
   Widget build(BuildContext context) {

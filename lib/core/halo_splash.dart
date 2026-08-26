@@ -48,11 +48,13 @@ class _HaloSplashState extends State<HaloSplash>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Image.asset(
-                  'assets/images/Halo.png',
-                  height: 120,
-                  width: 120,
-                  fit: BoxFit.contain,
+                ClipOval(
+                  child: Image.asset(
+                    'assets/images/Halo.png',
+                    height: 120,
+                    width: 120,
+                    fit: BoxFit.cover,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 Text(
