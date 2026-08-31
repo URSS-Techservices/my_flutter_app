@@ -51,6 +51,7 @@ dependencies:
   flutter_cache_manager: ^3.4.1
   flutter_staggered_grid_view: ^0.7.0
   media_info: ^0.12.0+2
+  flutter_svg: ^2.3.0
 
 
 
@@ -63,9 +64,12 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/images/Halo.png"
+  # Padded variants of assets/images/Halo.png. The adaptive foreground has to
+  # stay inside Android's 66/108 safe zone or the launcher crops and enlarges
+  # it, and it must be transparent for adaptive_icon_background to show.
+  image_path: "assets/images/icon_ios.png"
   adaptive_icon_background: "#ffffff"
-  adaptive_icon_foreground: "assets/images/Halo.png"
+  adaptive_icon_foreground: "assets/images/icon_foreground.png"
   remove_alpha_ios: true
 
 dependency_overrides:
@@ -87,3 +91,4 @@ flutter:
     - assets/images/Aspirant.png
     - assets/images/Guru.png
     - assets/images/Wellness.png
+    - assets/svg_icons/

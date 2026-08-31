@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:halo/core/session.dart';
 import 'package:halo/features/auth/domain/auth_repository.dart';
+import 'package:halo/features/auth/domain/phone_otp_session.dart';
 import 'package:halo/features/auth/domain/session_mapper.dart';
 import 'package:halo/screens/profile/core/profile_type.dart';
 
@@ -17,6 +20,16 @@ class FirebaseAuthRepository implements AuthRepository {
         _googleSignIn =
             googleSignIn ?? GoogleSignIn(scopes: const ['email']);
 
+  @override
+  Future<void> signUpWithEmail({
+    required String email,
+    required String password,
+  }) async {
+    await _auth.createUserWithEmailAndPassword(
+      email: email.trim(),
+      password: password,
+    );
+  }
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
   final GoogleSignIn _googleSignIn;
@@ -29,14 +42,62 @@ class FirebaseAuthRepository implements AuthRepository {
 
   @override
   Stream<Session> watchSession() {
-    return _auth.authStateChanges().asyncExpand((user) {
-      if (user == null) {
-        return Stream.value(const Session.loggedOut());
-      }
-      return _firestore.collection('users').doc(user.uid).snapshots().map(
-            (snap) => sessionFromUserDoc(user.uid, snap.data()),
+    // IMPORTANT: `asyncExpand` waits for the *previous* inner stream to finish
+    // before consuming the next auth event. The Firestore `snapshots()` stream
+    // below never completes, so a `null` user event from `signOut()` would be
+    // buffered forever and the UI would stay logged in until the app is killed.
+    // We therefore switch to explicit switchMap semantics: every auth change
+    // cancels the previous user-doc subscription and starts a fresh one.
+    final controller = StreamController<Session>();
+    StreamSubscription<User?>? authSub;
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? userSub;
+    String? activeUid;
+
+    controller.onListen = () {
+      authSub = _auth.authStateChanges().listen(
+        (user) {
+          // Cancel the previous user doc listener before starting a new one.
+          userSub?.cancel();
+          userSub = null;
+
+          if (user == null) {
+            activeUid = null;
+            if (!controller.isClosed) {
+              controller.add(const Session.loggedOut());
+            }
+            return;
+          }
+
+          final uid = user.uid;
+          activeUid = uid;
+          userSub = _firestore
+              .collection('users')
+              .doc(uid)
+              .snapshots()
+              .listen(
+            (snap) {
+              // Ignore late events from a doc we've since switched away from.
+              if (activeUid != uid || controller.isClosed) return;
+              controller.add(sessionFromUserDoc(uid, snap.data()));
+            },
+            onError: (Object e, StackTrace st) {
+              if (!controller.isClosed) controller.addError(e, st);
+            },
           );
-    });
+        },
+        onError: (Object e, StackTrace st) {
+          if (!controller.isClosed) controller.addError(e, st);
+        },
+      );
+    };
+
+    controller.onCancel = () async {
+      await userSub?.cancel();
+      await authSub?.cancel();
+      activeUid = null;
+    };
+
+    return controller.stream;
   }
 
   @override
@@ -171,6 +232,13 @@ class FirebaseAuthRepository implements AuthRepository {
     final googleUser = await _googleSignIn.signIn();
     if (googleUser == null) return;
     final googleAuth = await googleUser.authentication;
+    if (googleAuth.idToken == null) {
+      // Usually a SHA-1 / OAuth client mismatch for this build.
+      throw FirebaseAuthException(
+        code: 'invalid-credential',
+        message: 'Google sign-in failed. Check the app SHA-1 in Firebase.',
+      );
+    }
     final credential = GoogleAuthProvider.credential(
       idToken: googleAuth.idToken,
       accessToken: googleAuth.accessToken,
@@ -189,5 +257,181 @@ class FirebaseAuthRepository implements AuthRepository {
         'createdAt': FieldValue.serverTimestamp(),
       });
     }
+  }
+
+  @override
+  Future<void> signInWithApple() async {
+    // No extra plugin needed: firebase_auth runs this natively on iOS 13+ and
+    // hands off to a Custom Tab on Android.
+    final provider = AppleAuthProvider()
+      ..addScope('email')
+      ..addScope('name');
+    try {
+      final userCred = await _auth.signInWithProvider(provider);
+      final user = userCred.user;
+      if (user == null) return;
+      await _ensureAppleUserDoc(user, userCred);
+    } on FirebaseAuthException catch (e) {
+      // Backing out of the Apple sheet or browser tab is not a failure.
+      if (_isUserCancellation(e.code)) return;
+      rethrow;
+    }
+  }
+
+  Future<void> _ensureAppleUserDoc(User user, UserCredential cred) async {
+    final ref = _firestore.collection('users').doc(user.uid);
+    final doc = await ref.get();
+    // Apple sends the real name only on the very first authorization, so it has
+    // to be persisted now or it is gone for good. Email may be a
+    // @privaterelay.appleid.com alias if the user chose to hide it.
+    final name = user.displayName?.trim().isNotEmpty == true
+        ? user.displayName!.trim()
+        : _appleFullName(cred);
+
+    if (!doc.exists) {
+      await ref.set({
+        'uid': user.uid,
+        'name': name,
+        'email': user.email,
+        'loginType': 'apple',
+        'createdAt': FieldValue.serverTimestamp(),
+        'lastSeen': FieldValue.serverTimestamp(),
+      });
+    } else {
+      final existingName = doc.data()?['name'];
+      final hasName = existingName is String && existingName.trim().isNotEmpty;
+      await ref.set(
+        {
+          // Never clobber a name the user has since edited themselves.
+          if (!hasName && name != null) 'name': name,
+          if (user.email != null) 'email': user.email,
+          'lastSeen': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+
+    if (name != null && (user.displayName?.isEmpty ?? true)) {
+      await user.updateDisplayName(name);
+    }
+  }
+
+  /// Apple delivers the name split across the raw provider profile rather than
+  /// on the Firebase user.
+  static String? _appleFullName(UserCredential cred) {
+    final profile = cred.additionalUserInfo?.profile;
+    if (profile == null) return null;
+    final parts = <String>[];
+    for (final key in const ['given_name', 'givenName']) {
+      final value = profile[key];
+      if (value is String && value.trim().isNotEmpty) {
+        parts.add(value.trim());
+        break;
+      }
+    }
+    for (final key in const ['family_name', 'familyName']) {
+      final value = profile[key];
+      if (value is String && value.trim().isNotEmpty) {
+        parts.add(value.trim());
+        break;
+      }
+    }
+    return parts.isEmpty ? null : parts.join(' ');
+  }
+
+  static bool _isUserCancellation(String code) {
+    return code == 'web-context-canceled' ||
+        code == 'web-context-cancelled' ||
+        code == 'canceled' ||
+        code == 'cancelled' ||
+        code == 'user-canceled' ||
+        code == 'user-cancelled';
+  }
+
+  @override
+  Future<PhoneOtpSession> sendPhoneOtp({
+    required String phoneNumber,
+    int? resendToken,
+    void Function(String verificationId)? onVerificationId,
+  }) {
+    final completer = Completer<PhoneOtpSession>();
+
+    void settle(PhoneOtpSession session) {
+      if (!completer.isCompleted) completer.complete(session);
+    }
+
+    _auth.verifyPhoneNumber(
+      phoneNumber: phoneNumber,
+      forceResendingToken: resendToken,
+      timeout: const Duration(seconds: 60),
+      // Android only: the SMS was read for us, so sign in without an OTP step.
+      verificationCompleted: (credential) async {
+        try {
+          final cred = await _auth.signInWithCredential(credential);
+          await _ensurePhoneUserDoc(cred.user!);
+          settle(const PhoneOtpSession(autoVerified: true));
+        } catch (_) {
+          // Fall back to manual entry; codeSent/timeout still settles below.
+        }
+      },
+      verificationFailed: (e) {
+        if (!completer.isCompleted) completer.completeError(e);
+      },
+      codeSent: (verificationId, token) {
+        onVerificationId?.call(verificationId);
+        settle(
+          PhoneOtpSession(verificationId: verificationId, resendToken: token),
+        );
+      },
+      // Fires ~60s after codeSent. This id supersedes the codeSent one, so it
+      // must reach the caller even though the future already resolved.
+      codeAutoRetrievalTimeout: (verificationId) {
+        onVerificationId?.call(verificationId);
+        settle(PhoneOtpSession(verificationId: verificationId));
+      },
+    );
+
+    return completer.future;
+  }
+
+  @override
+  Future<void> verifyPhoneOtp({
+    required String verificationId,
+    required String smsCode,
+  }) async {
+    final credential = PhoneAuthProvider.credential(
+      verificationId: verificationId,
+      smsCode: smsCode.trim(),
+    );
+    final cred = await _auth.signInWithCredential(credential);
+    await _ensurePhoneUserDoc(cred.user!);
+  }
+
+  /// First phone login creates the doc without an accountType, so
+  /// OnboardingGate sends the user to ChooseAccountTypePage.
+  Future<void> _ensurePhoneUserDoc(User user) async {
+    final ref = _firestore.collection('users').doc(user.uid);
+    final doc = await ref.get();
+    final phone = user.phoneNumber;
+    if (!doc.exists) {
+      await ref.set({
+        'uid': user.uid,
+        'phone': phone,
+        // Existing screens look up accounts by `mobile`; keep both in sync.
+        'mobile': phone,
+        'loginType': 'phone',
+        'createdAt': FieldValue.serverTimestamp(),
+        'lastSeen': FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+    await ref.set(
+      {
+        if (phone != null) 'phone': phone,
+        if (phone != null) 'mobile': phone,
+        'lastSeen': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
   }
 }

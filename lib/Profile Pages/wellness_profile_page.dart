@@ -17,7 +17,7 @@ import '../Sections/Wellness Section/wellness_analytics_section.dart';
 
 // -------------------- EXISTING PAGES --------------------
 import '../../editprofilepage.dart';
-import 'package:halo/features/auth/presentation/login_page.dart';
+import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:url_launcher/url_launcher.dart';

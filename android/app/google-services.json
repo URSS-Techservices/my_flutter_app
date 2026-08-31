@@ -7,56 +7,28 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:61069233213:android:488a5691a5034b494fee54",
-        "android_client_info": {
-          "package_name": "com.example.classic_1"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "61069233213-hbag2f2mlq4o73n4h5ah0b8ae70q8ldm.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.example.classic_1",
-            "certificate_hash": "eecd42dceb94805007ea5da419ea3a9a35385bb6"
-          }
-        },
-        {
-          "client_id": "61069233213-feutoc7e2j7cdgvt691tkcj743bgddh4.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyC-JvudW2bdu7KnKOl-cMTKHqZYrqF0ia8"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "61069233213-feutoc7e2j7cdgvt691tkcj743bgddh4.apps.googleusercontent.com",
-              "client_type": 3
-            },
-            {
-              "client_id": "61069233213-jta9a2d14c33kvj36uiub69u6r5uqtae.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.example.classic1"
-              }
-            }
-          ]
-        }
-      }
-    },
-    {
-      "client_info": {
         "mobilesdk_app_id": "1:61069233213:android:56f62973f9b741e74fee54",
         "android_client_info": {
           "package_name": "in.urss.halo"
         }
       },
       "oauth_client": [
+        {
+          "client_id": "61069233213-dfv56or8uh3hqp1b6trq6d39iknok6pv.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "in.urss.halo",
+            "certificate_hash": "eecd42dceb94805007ea5da419ea3a9a35385bb6"
+          }
+        },
+        {
+          "client_id": "61069233213-jbpki1vrsic5o62gn1ooumurk902dc8t.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "in.urss.halo",
+            "certificate_hash": "11f8147acba1453bc861726493155d73fc6b9444"
+          }
+        },
         {
           "client_id": "61069233213-feutoc7e2j7cdgvt691tkcj743bgddh4.apps.googleusercontent.com",
           "client_type": 3

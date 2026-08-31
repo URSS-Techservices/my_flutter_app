@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:halo/features/auth/presentation/login_page.dart';
+import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/features/auth/presentation/onboarding_gate.dart';
 import 'package:halo/features/auth/presentation/startup_router.dart';
 

@@ -4,12 +4,14 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:halo/Category/categorypage.dart'
     hide kPrimaryColor, kSecondaryColor, kDarkTop, kDarkBottom;
 import 'package:halo/core/halo_theme.dart';
+import 'package:halo/features/auth/presentation/pages/phone_login_page.dart';
 import 'package:halo/features/auth/presentation/session_controller.dart';
-import 'package:halo/features/auth/presentation/widgets/google_sign_in_button.dart';
 import 'package:halo/features/auth/presentation/widgets/legal_dialogs.dart';
 import 'package:halo/forgotpasswordpage.dart';
 
 import 'package:halo/core/halo_toast.dart';
+
+import '../widgets/login_button.dart';
 
 /// Login UI only. All auth work goes through [authActionProvider], so this
 /// page has no direct Firebase calls and stays testable.
@@ -45,13 +47,85 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   Future<void> _sendOtp() async {
     final id = _identifierController.text.trim();
     if (id.isEmpty) {
-      HaloToast.show('Enter your username, mobile or email first');
+      HaloToast.show(
+          'Enter your username, mobile or email first',
+      );
       return;
     }
-    await ref.read(authActionProvider.notifier).sendLoginOtp(identifier: id);
+    await ref
+        .read(authActionProvider.notifier)
+        .sendLoginOtp(identifier: id);
+
     if (!mounted) return;
     if (ref.read(authActionProvider).hasError) return;
     HaloToast.show('OTP sent to your email');
+  }
+
+  Future<void> _signInWithGoogle() async {
+    await ref.read(authActionProvider.notifier).signInWithGoogle();
+  }
+
+  Future<void> _signInWithApple() async {
+    await ref.read(authActionProvider.notifier).signInWithApple();
+  }
+
+  void _openPhoneLogin() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const PhoneLoginPage(),
+      ),
+    );
+  }
+
+  Widget _buildLogo() {
+    return Container(
+      width: 76,
+      height: 76,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: kPrimaryColor.withValues(alpha: 0.25),
+            blurRadius: 28,
+            spreadRadius: 20,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: ClipOval(
+        child: Image.asset(
+          'assets/images/Halo.png',
+          fit: BoxFit.cover,
+        ),
+      ),
+    );
+  }
+
+  void _togglePasswordVisibility() {
+    setState(() {
+      _obscurePassword = !_obscurePassword;
+    });
+  }
+
+  void _openCreateAccount() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CategoryPage(),
+      ),
+    );
+  }
+
+  void _openForgotPassword() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ForgotPasswordPage(),
+      ),
+    );
   }
 
   InputDecoration _decoration({
@@ -66,23 +140,51 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       hintText: hint,
       labelStyle: textTheme.labelMedium?.copyWith(
         color: Colors.black87,
-        fontWeight: FontWeight.w500,
+        fontWeight: FontWeight.w600,
       ),
-      hintStyle: textTheme.bodySmall?.copyWith(color: Colors.black54),
+      hintStyle: textTheme.bodySmall?.copyWith(
+          // color: Colors.white),
+      color: Colors.black38),
+
+
       filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.05),
+      fillColor: const Color(0xFFF7F5FA),
+      // fillColor: Colors.white.withValues(alpha: 0.05),
+
+
       prefixIcon: prefixIcon,
       suffixIcon: suffixIcon,
-      border: OutlineInputBorder(
+
+
+      enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(16),
-        borderSide: BorderSide.none,
+        borderSide: const BorderSide(
+          color: Color(0xFFE7E3ED),
+        ),
       ),
+
+
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: kPrimaryColor, width: 1.5),
       ),
+
+
+
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(
+          color: Colors.redAccent,
+          width: 1.5,
+        ),
+      ),
+
+
       contentPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 16,
+          ),
     );
   }
 
@@ -101,24 +203,38 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final textTheme = GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [kDarkBackgroundTop, kDarkBackgroundBottom],
-          ),
-        ),
-        child: SafeArea(
+      backgroundColor: const Color(0xFFF9F7FC),
+
+      body:
+      // Container(
+      //   decoration: const BoxDecoration(
+      //     gradient: LinearGradient(
+      //       begin: Alignment.topCenter,
+      //       end: Alignment.bottomCenter,
+      //       colors: [Colors.white, Colors.white],          ),
+      //   ),
+      //   child:
+      SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              physics: const BouncingScrollPhysics(),
+
+              padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 16,
+                  ),
+
+
+
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 430),
+
+
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // _buildLogo(),
+
                     const SizedBox(height: 20),
                     Text(
                       'Halo.',
@@ -146,16 +262,75 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     const SizedBox(height: 8),
                     _FooterRow(textTheme: textTheme, busy: busy),
                     const SizedBox(height: 32),
-                    Text(
-                      'Login with Social',
-                      style: textTheme.titleSmall?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Divider(
+                            color: Color(0xFFE5E1EA),
+                          ),
+                        ),
+
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: Text(
+                            'Or continue with',
+                            style: textTheme.bodySmall?.copyWith(
+                              color: Colors.black45,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+
+                        const Expanded(
+                          child: Divider(
+                            color: Color(0xFFE5E1EA),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    const GoogleSignInButton(),
-                    const SizedBox(height: 36),
+                    SizedBox(height: 15),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        LoginButton(
+                          iconPath: 'assets/svg_icons/google.svg',
+                          onTap: () {
+                            if (busy) return;
+                            _signInWithGoogle();
+                          },
+                        ),
+
+                        const SizedBox(width: 14),
+
+                        LoginButton(
+                          iconPath: 'assets/svg_icons/fb.svg',
+                          onTap: () {
+                            // Facebook auth
+                          },
+                        ),
+
+                        const SizedBox(width: 14),
+
+                        LoginButton(
+                          iconPath: 'assets/svg_icons/phone.svg',
+                          onTap: () {
+                            if (busy) return;
+                            _openPhoneLogin();
+                          },
+                        ),
+
+                        const SizedBox(width: 14),
+
+                        LoginButton(
+                          iconPath: 'assets/svg_icons/apple.svg',
+                          onTap: () {
+                            if (busy) return;
+                            _signInWithApple();
+                          },
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 45),
                     _LegalLinks(textTheme: textTheme),
                   ],
                 ),
@@ -163,7 +338,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             ),
           ),
         ),
-      ),
+
+
     );
   }
 }
@@ -205,13 +381,13 @@ class _LoginCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.78),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
             color: kPrimaryColor.withValues(alpha: 0.25),
             blurRadius: 28,
-            spreadRadius: -10,
+            spreadRadius: 20,
             offset: const Offset(0, 18),
           ),
         ],
@@ -226,18 +402,18 @@ class _LoginCard extends StatelessWidget {
           children: [
             TextFormField(
               controller: identifierController,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.black87),
               decoration: decoration(
                 label: 'Login ID',
-                hint: 'Username / Mobile No. / Email ID',
+                hint: 'Email ID',
                 prefixIcon: const Icon(
                   Icons.person_outline_rounded,
-                  color: Colors.white70,
+                  color: Colors.black,
                 ),
               ),
               validator: (value) {
                 if (value == null || value.trim().isEmpty) {
-                  return 'Please enter your username, mobile or email';
+                  return 'Enter username, mobile or email';
                 }
                 return null;
               },
@@ -245,21 +421,21 @@ class _LoginCard extends StatelessWidget {
             const SizedBox(height: 16),
             TextFormField(
               controller: passwordController,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.black87),
               obscureText: obscurePassword,
               decoration: decoration(
-                label: 'Password / OTP',
-                hint: 'Enter your password or OTP',
+                label: 'Password',
+                hint: 'Enter your password',
                 prefixIcon: const Icon(
                   Icons.lock_outline_rounded,
-                  color: Colors.white70,
+                  color: Colors.black,
                 ),
                 suffixIcon: IconButton(
                   icon: Icon(
                     obscurePassword
                         ? Icons.visibility_off_rounded
                         : Icons.visibility_rounded,
-                    color: Colors.white70,
+                    color: Colors.black87,
                   ),
                   onPressed: onTogglePasswordVisibility,
                 ),
@@ -271,19 +447,21 @@ class _LoginCard extends StatelessWidget {
                 return null;
               },
             ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: busy ? null : onSendOtp,
-                child: Text(
-                  'Send OTP',
-                  style: textTheme.bodySmall?.copyWith(
-                    color: kPrimaryColor,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
+
+            const SizedBox(height: 50),
+            // Align(
+            //   alignment: Alignment.centerRight,
+            //   child: TextButton(
+            //     onPressed: busy ? null : onSendOtp,
+            //     child: Text(
+            //       'Send OTP',
+            //       style: textTheme.bodySmall?.copyWith(
+            //         color: kPrimaryColor,
+            //         fontWeight: FontWeight.w600,
+            //       ),
+            //     ),
+            //   ),
+            // ),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
@@ -330,6 +508,7 @@ class _FooterRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+   const  SizedBox(height: 50);
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -337,7 +516,7 @@ class _FooterRow extends StatelessWidget {
           children: [
             Text(
               'New here? ',
-              style: textTheme.bodySmall?.copyWith(color: Colors.white70),
+              style: textTheme.bodySmall?.copyWith(color: Colors.black87),
             ),
             GestureDetector(
               onTap: busy

@@ -1,4 +1,4 @@
-import 'package:halo/features/auth/presentation/login_page.dart';
+import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/utils/search_utils.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
