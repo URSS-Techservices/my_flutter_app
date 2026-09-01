@@ -25,14 +25,126 @@ class FirebaseAuthRepository implements AuthRepository {
     required String email,
     required String password,
   }) async {
-    await _auth.createUserWithEmailAndPassword(
+    final cred = await _auth.createUserWithEmailAndPassword(
       email: email.trim(),
       password: password,
     );
+    final user = cred.user;
+    if (user == null) return;
+    try {
+      await _ensureEmailUserDoc(user);
+    } catch (_) {}
+    // Do not swallow this — a silent catch made signup look successful
+    // while no email was actually sent.
+    await user.sendEmailVerification();
   }
+
+  /// Stub HALO doc for a brand-new email user. No accountType and
+  /// onboardingCompleted stays false, so the gate sends them to categories
+  /// after they verify.
+  Future<void> _ensureEmailUserDoc(User user) async {
+    final ref = _firestore.collection('users').doc(user.uid);
+    final doc = await ref.get();
+    if (doc.exists) return;
+    await ref.set({
+      'uid': user.uid,
+      'email': user.email,
+      if (user.email != null) 'email_lower': user.email!.toLowerCase(),
+      'loginType': 'email',
+      'onboardingCompleted': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  Future<void> sendEmailVerification() async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Not signed in');
+    }
+    await user.sendEmailVerification();
+  }
+
+  @override
+  Future<bool> reloadAndCheckEmailVerified() async {
+    final user = _auth.currentUser;
+    if (user == null) return false;
+    await user.reload();
+    final refreshed = _auth.currentUser;
+    final verified = refreshed?.emailVerified ?? false;
+    // reload() does not fire authStateChanges, so nudge watchSession to
+    // re-evaluate with the refreshed verification flag.
+    if (!_refresh.isClosed) _refresh.add(null);
+    return verified;
+  }
+
+  @override
+  Future<bool> isUsernameAvailable(String username) async {
+    final name = username.trim();
+    if (name.isEmpty) return false;
+    final uid = _auth.currentUser?.uid;
+    final lower = name.toLowerCase();
+    final byLower = await _firestore
+        .collection('users')
+        .where('username_lower', isEqualTo: lower)
+        .limit(1)
+        .get();
+    if (byLower.docs.any((d) => d.id != uid)) return false;
+    // Older docs stored only the raw `username`.
+    final byExact = await _firestore
+        .collection('users')
+        .where('username', isEqualTo: name)
+        .limit(1)
+        .get();
+    return byExact.docs.every((d) => d.id == uid);
+  }
+
+  @override
+  Future<void> completeProfileOnboarding(Map<String, dynamic> profile) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Not signed in');
+    }
+    final payload = <String, dynamic>{
+      ...profile,
+      'uid': user.uid,
+      if (user.email != null) 'email': user.email,
+      if (user.email != null) 'email_lower': user.email!.toLowerCase(),
+      // Only flips true because the write below succeeded.
+      'onboardingCompleted': true,
+      'onboardingCompletedAt': FieldValue.serverTimestamp(),
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+    // Passwords are Firebase Auth's job. Never persist them on the user doc,
+    // even if a caller accidentally includes them.
+    payload.remove('password');
+    payload.remove('confirmPassword');
+    payload.remove('confirm_password');
+    await _firestore
+        .collection('users')
+        .doc(user.uid)
+        .set(payload, SetOptions(merge: true));
+  }
+
+  @override
+  Future<void> sendPasswordResetEmail(String email) {
+    return _auth.sendPasswordResetEmail(email: email.trim());
+  }
+
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
   final GoogleSignIn _googleSignIn;
+
+  /// Broadcasts a manual re-evaluation request (after an email reload).
+  final StreamController<void> _refresh = StreamController<void>.broadcast();
+
+  /// Only password-provider accounts must verify their email. Provider logins
+  /// (Google / Apple / Phone) and custom-token OTP logins are already trusted.
+  static bool _needsEmailVerification(User user) {
+    final isPasswordUser =
+        user.providerData.any((p) => p.providerId == 'password');
+    return isPasswordUser && !user.emailVerified;
+  }
 
   static FirebaseFunctions get _functions =>
       FirebaseFunctions.instanceFor(region: 'us-central1');
@@ -51,14 +163,38 @@ class FirebaseAuthRepository implements AuthRepository {
     final controller = StreamController<Session>();
     StreamSubscription<User?>? authSub;
     StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? userSub;
+    StreamSubscription<void>? refreshSub;
     String? activeUid;
+    Map<String, dynamic>? lastData;
+
+    // Re-derive the session from the freshest Firebase user plus the last-known
+    // user doc. Called on every auth change, doc change, and manual refresh.
+    void emitForCurrentUser() {
+      if (controller.isClosed) return;
+      final user = _auth.currentUser;
+      if (user == null) {
+        controller.add(const Session.loggedOut());
+        return;
+      }
+      controller.add(
+        sessionFromUserDoc(
+          user.uid,
+          lastData,
+          email: user.email,
+          requiresEmailVerification: _needsEmailVerification(user),
+        ),
+      );
+    }
 
     controller.onListen = () {
+      refreshSub = _refresh.stream.listen((_) => emitForCurrentUser());
+
       authSub = _auth.authStateChanges().listen(
         (user) {
           // Cancel the previous user doc listener before starting a new one.
           userSub?.cancel();
           userSub = null;
+          lastData = null;
 
           if (user == null) {
             activeUid = null;
@@ -78,7 +214,8 @@ class FirebaseAuthRepository implements AuthRepository {
             (snap) {
               // Ignore late events from a doc we've since switched away from.
               if (activeUid != uid || controller.isClosed) return;
-              controller.add(sessionFromUserDoc(uid, snap.data()));
+              lastData = snap.data();
+              emitForCurrentUser();
             },
             onError: (Object e, StackTrace st) {
               if (!controller.isClosed) controller.addError(e, st);
@@ -92,6 +229,7 @@ class FirebaseAuthRepository implements AuthRepository {
     };
 
     controller.onCancel = () async {
+      await refreshSub?.cancel();
       await userSub?.cancel();
       await authSub?.cancel();
       activeUid = null;
@@ -125,6 +263,22 @@ class FirebaseAuthRepository implements AuthRepository {
         'accountType': type,
         'category': label,
         'profileType': type,
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  @override
+  Future<void> clearAccountType() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      throw StateError('Not signed in');
+    }
+    return _firestore.collection('users').doc(uid).set(
+      {
+        'accountType': FieldValue.delete(),
+        'category': FieldValue.delete(),
+        'profileType': FieldValue.delete(),
       },
       SetOptions(merge: true),
     );
@@ -252,8 +406,10 @@ class FirebaseAuthRepository implements AuthRepository {
         'uid': user.uid,
         'name': user.displayName,
         'email': user.email,
+        if (user.email != null) 'email_lower': user.email!.toLowerCase(),
         'photoUrl': user.photoURL,
         'loginType': 'google',
+        'onboardingCompleted': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
     }
@@ -293,7 +449,9 @@ class FirebaseAuthRepository implements AuthRepository {
         'uid': user.uid,
         'name': name,
         'email': user.email,
+        if (user.email != null) 'email_lower': user.email!.toLowerCase(),
         'loginType': 'apple',
+        'onboardingCompleted': false,
         'createdAt': FieldValue.serverTimestamp(),
         'lastSeen': FieldValue.serverTimestamp(),
       });
@@ -408,7 +566,7 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   /// First phone login creates the doc without an accountType, so
-  /// OnboardingGate sends the user to ChooseAccountTypePage.
+  /// OnboardingGate sends the user to the 3-category page.
   Future<void> _ensurePhoneUserDoc(User user) async {
     final ref = _firestore.collection('users').doc(user.uid);
     final doc = await ref.get();
@@ -420,6 +578,7 @@ class FirebaseAuthRepository implements AuthRepository {
         // Existing screens look up accounts by `mobile`; keep both in sync.
         'mobile': phone,
         'loginType': 'phone',
+        'onboardingCompleted': false,
         'createdAt': FieldValue.serverTimestamp(),
         'lastSeen': FieldValue.serverTimestamp(),
       });

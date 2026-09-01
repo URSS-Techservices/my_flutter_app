@@ -20,15 +20,61 @@ void main() {
     expect(profileKindFromAccountType(null), ProfileKind.aspirant);
   });
 
-  test('sessionFromUserDoc asks for type when the user doc has none', () {
-    final session = sessionFromUserDoc('u1', {'email': 'a@b.com'});
-    expect(session.status, SessionStatus.needsAccountType);
-    expect(session.uid, 'u1');
+  test('unverified email/password user is gated before onboarding', () {
+    final session = sessionFromUserDoc(
+      'u1',
+      {'accountType': 'aspirant', 'username': 'pat'},
+      email: 'a@b.com',
+      requiresEmailVerification: true,
+    );
+    expect(session.status, SessionStatus.emailVerificationRequired);
+    expect(session.email, 'a@b.com');
+    expect(session.onboardingCompleted, isFalse);
   });
 
-  test('sessionFromUserDoc is ready when category is set', () {
-    final session = sessionFromUserDoc('u1', {'category': 'Guru'});
-    expect(session.status, SessionStatus.ready);
+  test('no HALO doc routes to category selection', () {
+    final session = sessionFromUserDoc('u1', null, email: 'a@b.com');
+    expect(session.status, SessionStatus.onboardingRequired);
+    expect(session.needsCategorySelection, isTrue);
+    expect(session.needsProfileOnboarding, isFalse);
+  });
+
+  test('stub doc without account type routes to category selection', () {
+    final session = sessionFromUserDoc('u1', {
+      'email': 'a@b.com',
+      'loginType': 'google',
+      'onboardingCompleted': false,
+    });
+    expect(session.status, SessionStatus.onboardingRequired);
+    expect(session.needsCategorySelection, isTrue);
+  });
+
+  test('account type chosen but profile unfinished resumes profile', () {
+    final session = sessionFromUserDoc('u1', {
+      'accountType': 'guru',
+      'onboardingCompleted': false,
+    });
+    expect(session.status, SessionStatus.onboardingRequired);
+    expect(session.accountType, 'guru');
+    expect(session.needsProfileOnboarding, isTrue);
+    expect(session.needsCategorySelection, isFalse);
+  });
+
+  test('onboardingCompleted true goes home', () {
+    final session = sessionFromUserDoc('u1', {
+      'accountType': 'wellness',
+      'onboardingCompleted': true,
+    });
+    expect(session.status, SessionStatus.authenticated);
+    expect(session.onboardingCompleted, isTrue);
+  });
+
+  test('legacy profile with username skips onboarding', () {
+    final session = sessionFromUserDoc('u1', {
+      'category': 'Guru',
+      'username': 'olduser',
+    });
+    expect(session.status, SessionStatus.authenticated);
     expect(session.accountType, 'guru');
   });
 }

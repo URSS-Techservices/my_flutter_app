@@ -1,214 +1,130 @@
-import 'package:halo/Category/createaspirantaccount.dart';
-import 'package:halo/Category/createguruaccount.dart';
-import 'package:halo/Category/createwellnessaccount.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:halo/core/halo_theme.dart';
+import 'package:halo/core/halo_toast.dart';
+import 'package:halo/features/auth/presentation/onboarding_ui.dart';
+import 'package:halo/features/auth/presentation/session_controller.dart';
+import 'package:halo/screens/profile/core/profile_type.dart';
 
-// HALO Theme Colors
-const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
-const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
-const Color kDarkTop = Color(0xFF111111);
-const Color kDarkBottom = Color(0xFF050505);
+/// 3-category onboarding step. Does not create a Firebase account — the user
+/// is already authenticated. Picking a type writes `accountType` on
+/// `users/{uid}` and the gate then shows the matching profile form.
+class CategoryPage extends ConsumerStatefulWidget {
+  const CategoryPage({super.key});
 
-class CategoryPage extends StatefulWidget {
   @override
-  _CategoryPageState createState() => _CategoryPageState();
+  ConsumerState<CategoryPage> createState() => _CategoryPageState();
 }
 
-class _CategoryPageState extends State<CategoryPage>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
-  late Animation<Offset> _slideAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 700),
-      vsync: this,
-    );
-
-    _fadeAnimation = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: Curves.easeOut,
-      ),
-    );
-
-    _slideAnimation =
-        Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(
-          CurvedAnimation(
-            parent: _controller,
-            curve: Curves.easeOut,
-          ),
-        );
-
-    _controller.forward();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
+class _CategoryPageState extends ConsumerState<CategoryPage> {
+  Future<void> _pick(ProfileKind kind) {
+    return ref.read(authActionProvider.notifier).setAccountType(kind);
   }
 
   @override
   Widget build(BuildContext context) {
-    final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final busy = ref.watch(authActionProvider).isLoading;
+    final padding = OnboardingUi.pagePadding(context);
+    final textTheme = GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+
+    ref.listen(authActionProvider, (prev, next) {
+      next.whenOrNull(
+        error: (e, _) => HaloToast.show('Could not save type: $e'),
+      );
+    });
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [kDarkTop, kDarkBottom],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: SlideTransition(
-              position: _slideAnimation,
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+      backgroundColor: OnboardingUi.pageBg,
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: OnboardingUi.maxWidth),
+            child: Column(
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(8, 4, padding, 0),
+                  child: Row(
                     children: [
-                      // BACK BUTTON
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: IconButton(
-                          icon: const Icon(
-                            Icons.arrow_back_ios_new_rounded,
+                      TextButton(
+                        onPressed: busy
+                            ? null
+                            : () =>
+                                ref.read(authActionProvider.notifier).signOut(),
+                        child: Text(
+                          'Sign out',
+                          style: GoogleFonts.poppins(
                             color: kPrimaryColor,
-                            size: 26,
+                            fontWeight: FontWeight.w600,
                           ),
-                          onPressed: () {
-                            Navigator.pop(context);
-                          },
                         ),
                       ),
-
-                      const SizedBox(height: 10),
-
-                      // TITLE
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView(
+                    padding: EdgeInsets.fromLTRB(padding, 8, padding, 24),
+                    children: [
                       Text(
-                        "Choose Your Preference",
+                        'Choose your path',
+                        textAlign: TextAlign.center,
                         style: textTheme.headlineSmall?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
+                          color: OnboardingUi.text,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Pick your account type",
-                        style: textTheme.titleMedium?.copyWith(
-                          color: Colors.white70,
+                        'Pick the account that fits you. You can go back and change this before you finish your profile.',
+                        textAlign: TextAlign.center,
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: OnboardingUi.muted,
+                          height: 1.4,
                         ),
                       ),
-
-                      const SizedBox(height: 40),
-
-                      // CARDS (all equal)
-                      _animatedCard(
-                        child: _CategoryCard(
-                          title: "Wellness",
-                          description:
-                          "Promote your products & services\nand attract fitness-focused individuals.",
-                          imagePath: "assets/images/Wellness.png",
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => CreateWellnessAccount(),
-                              ),
-                            );
-                          },
+                      const SizedBox(height: 28),
+                      if (busy)
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 16),
+                          child: LinearProgressIndicator(color: kPrimaryColor),
                         ),
+                      _CategoryCard(
+                        title: 'Wellness',
+                        description:
+                            'Promote your gym, studio, or wellness business.',
+                        imagePath: 'assets/images/Wellness.png',
+                        onTap: busy ? null : () => _pick(ProfileKind.wellness),
                       ),
-                      const SizedBox(height: 20),
-
-                      _animatedCard(
-                        child: _CategoryCard(
-                          title: "Aspirant",
-                          description:
-                          "Find your fitness path with\nexpert guidance tailored for you.",
-                          imagePath: "assets/images/Aspirant.png",
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => CreateAspirantAccount(),
-                              ),
-                            );
-                          },
-                        ),
+                      const SizedBox(height: 14),
+                      _CategoryCard(
+                        title: 'Aspirant',
+                        description:
+                            'Find coaches, wellness spaces, and your fitness path.',
+                        imagePath: 'assets/images/Aspirant.png',
+                        onTap: busy ? null : () => _pick(ProfileKind.aspirant),
                       ),
-                      const SizedBox(height: 20),
-
-                      _animatedCard(
-                        child: _CategoryCard(
-                          title: "Guru",
-                          description:
-                          "Share your expertise\nand connect with seekers.",
-                          imagePath: "assets/images/Guru.png",
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => CreateGuruAccount(),
-                              ),
-                            );
-                          },
-                        ),
+                      const SizedBox(height: 14),
+                      _CategoryCard(
+                        title: 'Guru',
+                        description:
+                            'Share expertise and manage bookings with clients.',
+                        imagePath: 'assets/images/Guru.png',
+                        onTap: busy ? null : () => _pick(ProfileKind.guru),
                       ),
-
-                      const SizedBox(height: 30),
                     ],
                   ),
                 ),
-              ),
+              ],
             ),
           ),
         ),
       ),
     );
   }
-
-  // fade+slide animation wrapper for each card
-  Widget _animatedCard({required Widget child}) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 500),
-      curve: Curves.easeOut,
-      builder: (context, value, _) {
-        return Transform.translate(
-          offset: Offset(0, (1 - value) * 20),
-          child: Opacity(
-            opacity: value,
-            child: child,
-          ),
-        );
-      },
-    );
-  }
 }
 
-// -----------------------------------------------------
-//  Category Card with hover zoom + glow & equal size
-// -----------------------------------------------------
-class _CategoryCard extends StatefulWidget {
-  final String title;
-  final String description;
-  final String imagePath;
-  final VoidCallback onTap;
-
+class _CategoryCard extends StatelessWidget {
   const _CategoryCard({
     required this.title,
     required this.description,
@@ -216,89 +132,75 @@ class _CategoryCard extends StatefulWidget {
     required this.onTap,
   });
 
-  @override
-  State<_CategoryCard> createState() => _CategoryCardState();
-}
-
-class _CategoryCardState extends State<_CategoryCard> {
-  bool _isHovered = false;
+  final String title;
+  final String description;
+  final String imagePath;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme
-        .of(context)
-        .textTheme);
-
-    double size = MediaQuery
-        .of(context)
-        .size
-        .width * 0.70;
-    size = size.clamp(200, 300); // Square size (min 200, max 300)
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
-        onTapDown: (_) => setState(() => _isHovered = true),
-        onTapUp: (_) => setState(() => _isHovered = false),
-        onTapCancel: () => setState(() => _isHovered = false),
-        onTap: widget.onTap,
-        child: AnimatedScale(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          scale: _isHovered ? 1.05 : 1.0,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOut,
-            width: size,
-            // SQUARE WIDTH
-            height: size,
-            // SQUARE HEIGHT
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
-            decoration: BoxDecoration(
-              color: const Color(0xFF221E36),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: _isHovered
-                    ? kPrimaryColor.withOpacity(0.9)
-                    : Colors.white.withOpacity(0.12),
-                width: 1.1,
+    final textTheme = GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(22),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: OnboardingUi.fieldBorder),
+            boxShadow: [
+              BoxShadow(
+                color: kPrimaryColor.withValues(alpha: 0.12),
+                blurRadius: 22,
+                offset: const Offset(0, 10),
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: _isHovered
-                      ? kPrimaryColor.withOpacity(0.55)
-                      : Colors.black.withOpacity(0.70),
-                  blurRadius: _isHovered ? 32 : 22,
-                  spreadRadius: _isHovered ? -4 : -12,
-                  offset: const Offset(0, 20),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
               children: [
-                Text(
-                  widget.title,
-                  style: textTheme.titleLarge?.copyWith(
-                    color: kPrimaryColor,
-                    fontWeight: FontWeight.w700,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Image.asset(
+                    imagePath,
+                    width: 72,
+                    height: 72,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 72,
+                      height: 72,
+                      color: OnboardingUi.fieldFill,
+                      child: const Icon(Icons.person, color: OnboardingUi.muted),
+                    ),
                   ),
                 ),
-                Image.asset(
-                  widget.imagePath,
-                  width: size * 0.33,
-                  height: size * 0.33,
-                ),
-                Text(
-                  widget.description,
-                  style: textTheme.bodySmall?.copyWith(
-                    color: Colors.white70,
-                    height: 1.3,
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: textTheme.titleMedium?.copyWith(
+                          color: OnboardingUi.text,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        description,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: OnboardingUi.muted,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                   ),
-                  textAlign: TextAlign.center,
                 ),
+                const Icon(Icons.chevron_right_rounded, color: kPrimaryColor),
               ],
             ),
           ),

@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:halo/core/halo_theme.dart';
+import 'package:halo/core/session.dart';
 import 'package:halo/features/auth/presentation/phone_auth_controller.dart';
+import 'package:halo/features/auth/presentation/session_controller.dart';
 
 const _kFieldFill = Color(0xFFF7F5FA);
 const _kFieldBorder = Color(0xFFE7E3ED);
@@ -79,6 +81,18 @@ class _PhoneLoginPageState extends ConsumerState<PhoneLoginPage> {
       final feedback = next.feedback;
       if (feedback == null || previous?.feedback == feedback) return;
       if (feedback.isError) HapticFeedback.mediumImpact();
+    });
+
+    // PhoneLoginPage is pushed on top of AuthGate. Once the session leaves
+    // loggedOut, pop back so the gate (Verify / Categories / Home) is visible.
+    ref.listen(sessionProvider, (previous, next) {
+      final status = next.asData?.value.status;
+      if (status == null ||
+          status == SessionStatus.loggedOut ||
+          status == SessionStatus.loading) {
+        return;
+      }
+      Navigator.of(context).popUntil((route) => route.isFirst);
     });
 
     return PopScope(

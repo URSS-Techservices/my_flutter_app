@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:halo/Category/categorypage.dart'
-    hide kPrimaryColor, kSecondaryColor, kDarkTop, kDarkBottom;
 import 'package:halo/core/halo_theme.dart';
+import 'package:halo/features/auth/presentation/pages/email_signup_page.dart';
 import 'package:halo/features/auth/presentation/pages/phone_login_page.dart';
 import 'package:halo/features/auth/presentation/session_controller.dart';
 import 'package:halo/features/auth/presentation/widgets/legal_dialogs.dart';
@@ -114,7 +113,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CategoryPage(),
+        builder: (_) => const EmailSignupPage(),
       ),
     );
   }
@@ -524,7 +523,7 @@ class _FooterRow extends StatelessWidget {
                   : () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => CategoryPage(),
+                          builder: (_) => const EmailSignupPage(),
                         ),
                       ),
               child: Text(

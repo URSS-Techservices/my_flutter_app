@@ -1,33 +1,26 @@
-import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/utils/search_utils.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
 
 import 'package:halo/core/halo_toast.dart';
-// ---------- HALO THEME COLORS ----------
-const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
-const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
-const Color kBgTop = Color(0xFF111111);
-const Color kBgBottom = Color(0xFF050505);
+import 'package:halo/core/halo_theme.dart';
+import 'package:halo/features/auth/presentation/onboarding_ui.dart';
+import 'package:halo/features/auth/presentation/session_controller.dart';
 
-class CreateGuruAccount extends StatefulWidget {
+class CreateGuruAccount extends ConsumerStatefulWidget {
   @override
-  _CreateGuruAccount createState() => _CreateGuruAccount();
+  ConsumerState<CreateGuruAccount> createState() => _CreateGuruAccount();
 }
 
-class _CreateGuruAccount extends State<CreateGuruAccount> {
+class _CreateGuruAccount extends ConsumerState<CreateGuruAccount> {
   final _formKey = GlobalKey<FormState>();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // ---------- Controllers ----------
 
@@ -35,10 +28,6 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController =
-  TextEditingController();
   final TextEditingController _dateofbirth = TextEditingController();
   final TextEditingController _location = TextEditingController();
 
@@ -66,9 +55,8 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
   // Multi-step control
   int _currentStep = 0;
   String? _specializationError;
-  bool _obscurePassword = true;
-  bool _obscureConfirmPassword = true;
   bool _isFetchingLocation = false;
+  bool _isSubmitting = false;
 
   // ---------- Helpers ----------
 
@@ -78,18 +66,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
       initialDate: DateTime(1995),
       firstDate: DateTime(1900),
       lastDate: DateTime.now(),
-      builder: (ctx, child) {
-        return Theme(
-          data: Theme.of(ctx).copyWith(
-            colorScheme: ColorScheme.dark(
-              primary: kPrimaryColor,
-              surface: const Color(0xFF1C1C1C),
-              onSurface: Colors.white,
-            ),
-          ),
-          child: child!,
-        );
-      },
+      builder: (ctx, child) => OnboardingUi.datePickerTheme(ctx, child),
     );
     if (pickedDate != null) {
       String formattedDate = DateFormat('dd-MM-yyyy').format(pickedDate);
@@ -98,24 +75,6 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         selectedDate = formattedDate;
       });
     }
-  }
-
-  String? _validatePassword(String? value) {
-    if (value == null || value.isEmpty) {
-      return 'Please enter a password';
-    }
-    if (value.length < 6) {
-      return 'Password must be at least 6 characters';
-    }
-    return null;
-  }
-
-  Future<bool> _isUsernameUnique(String username) async {
-    final querySnapshot = await _firestore
-        .collection('users')
-        .where('username', isEqualTo: username)
-        .get();
-    return querySnapshot.docs.isEmpty;
   }
 
   Future<void> _detectCurrentCity() async {
@@ -269,63 +228,53 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
       return;
     }
 
-    // Check username uniqueness
-    bool isUnique = await _isUsernameUnique(_usernameController.text.trim());
-    if (!isUnique) {
-      HaloToast.show('Username already exists! Choose another one.');
-      return;
-    }
-
+    setState(() => _isSubmitting = true);
     try {
-      // Create User with Firebase Authentication
-      UserCredential userCredential =
-      await _auth.createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-
       final username = _usernameController.text.trim();
+      final available = await ref
+          .read(onboardingControllerProvider.notifier)
+          .isUsernameAvailable(username);
+      if (!available) {
+        HaloToast.show('Username already exists! Choose another one.');
+        return;
+      }
+
       final fullName = _nameController.text.trim();
-      // Store profile in Firestore (CLEAN SCHEMA)
-      await _firestore.collection('users').doc(userCredential.user!.uid).set({
+      final ok = await ref
+          .read(onboardingControllerProvider.notifier)
+          .completeOnboarding({
         'category': 'Guru',
         'accountType': 'guru',
         'profileType': 'guru',
         'username': username,
+        'username_lower': username.toLowerCase(),
         'full_name': fullName,
         'searchTerms': buildSearchTerms(username: username, fullName: fullName),
         'phone': _phoneController.text.trim(),
-        'email': _emailController.text.trim(),
+        'mobile': _phoneController.text.trim(),
         'date_of_birth': _dateofbirth.text.trim(),
         'gender': _selectedGender,
         'location': _location.text.trim(),
-
-        // Professional
         'profession': _selectedProfessionType,
         'areas_of_specialization': _selectedSpecializations,
         'experience_level': _experienceLevel,
         'languages_spoken': _selectedLanguages,
-
-        // Additional
         'hourly_fees': _hourlyfees.text.trim(),
         'availability': _availability.text.trim(),
-        'certifications': _selectedFiles, // file paths / names
-
-        // Settings
+        'certifications': _selectedFiles,
         'terms_accepted': _isFirstToggleOn,
         'promotional_emails': _isSecondToggleOn,
-
-        'timestamp': FieldValue.serverTimestamp(),
       });
-
-      HaloToast.show('Account Created Successfully!');
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => LoginPage()),
-      );
+      if (!mounted) return;
+      if (ok) {
+        HaloToast.show('Profile saved. Welcome to HALO!');
+      } else {
+        HaloToast.show('Could not save your profile. Please try again.');
+      }
     } catch (e) {
-      HaloToast.show('Registration failed: ${e.toString()}');
+      HaloToast.show('Could not save profile: $e');
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -341,42 +290,12 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
     IconData? icon,
     Widget? suffixIcon,
   }) {
-    final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
-
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      labelStyle: textTheme.labelMedium?.copyWith(
-        color: Colors.grey.shade300,
-        fontWeight: FontWeight.w500,
-      ),
-      hintStyle: textTheme.bodySmall?.copyWith(
-        color: Colors.grey.shade500,
-      ),
-      filled: true,
-      fillColor: Colors.white.withOpacity(0.05),
-      prefixIcon: icon != null
-          ? Icon(
-        icon,
-        color: Colors.white70,
-      )
-          : null,
+    return OnboardingUi.field(
+      context: context,
+      label: label,
+      hint: hint,
+      icon: icon,
       suffixIcon: suffixIcon,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: BorderSide.none,
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(
-          color: kPrimaryColor,
-          width: 1.5,
-        ),
-      ),
-      errorMaxLines: 4,
-      contentPadding:
-      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
   }
 
@@ -397,16 +316,16 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
           label: Text(
             option,
             style: textTheme.bodySmall?.copyWith(
-              color: isSelected ? Colors.black : Colors.white70,
+              color: isSelected ? Colors.black : OnboardingUi.muted,
             ),
           ),
           selected: isSelected,
           selectedColor: kPrimaryColor,
-          backgroundColor: Colors.white.withOpacity(0.08),
+          backgroundColor: OnboardingUi.fieldFill,
           side: BorderSide(
             color: isSelected
-                ? kPrimaryColor.withOpacity(0.9)
-                : Colors.white.withOpacity(0.25),
+                ? kPrimaryColor.withValues(alpha: 0.9)
+                : OnboardingUi.fieldBorder,
           ),
           onSelected: (_) => onTap(option),
         );
@@ -426,7 +345,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         Text(
           "Basic Account Info",
           style: textTheme.headlineSmall?.copyWith(
-            color: Colors.white,
+            color: OnboardingUi.text,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -435,7 +354,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         // Username
         TextFormField(
           controller: _usernameController,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Username',
             icon: Icons.person_outline_rounded,
@@ -452,7 +371,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         // Full Name
         TextFormField(
           controller: _nameController,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Full Name*',
             icon: Icons.badge_outlined,
@@ -473,7 +392,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         TextFormField(
           controller: _phoneController,
           keyboardType: TextInputType.phone,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Mobile Number*',
             icon: Icons.phone_outlined,
@@ -490,86 +409,13 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         ),
         const SizedBox(height: 16),
 
-        // Email
-        TextFormField(
-          controller: _emailController,
-          style: const TextStyle(color: Colors.white),
-          decoration: _inputDecoration(
-            label: 'Email',
-            icon: Icons.email_outlined,
-          ),
-          validator: (value) {
-            if (value == null || value.isEmpty) {
-              return 'Please enter your email';
-            }
-            if (!RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-                .hasMatch(value)) {
-              return 'Please enter a valid email';
-            }
-            return null;
-          },
-        ),
-        const SizedBox(height: 16),
-
-        // Password
-        TextFormField(
-          controller: _passwordController,
-          obscureText: _obscurePassword,
-          style: const TextStyle(color: Colors.white),
-          decoration: _inputDecoration(
-            label: 'Create Password*',
-            icon: Icons.lock_outline_rounded,
-            suffixIcon: IconButton(
-              icon: Icon(
-                _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                color: Colors.white70,
-              ),
-              onPressed: () => setState(
-                  () => _obscurePassword = !_obscurePassword),
-            ),
-          ),
-          validator: _validatePassword,
-        ),
-        const SizedBox(height: 16),
-
-        // Confirm Password
-        TextFormField(
-          controller: _confirmPasswordController,
-          obscureText: _obscureConfirmPassword,
-          style: const TextStyle(color: Colors.white),
-          decoration: _inputDecoration(
-            label: 'Confirm Password',
-            icon: Icons.lock,
-            suffixIcon: IconButton(
-              icon: Icon(
-                _obscureConfirmPassword
-                    ? Icons.visibility_off
-                    : Icons.visibility,
-                color: Colors.white70,
-              ),
-              onPressed: () => setState(() => _obscureConfirmPassword =
-                  !_obscureConfirmPassword),
-            ),
-          ),
-          validator: (value) {
-            if (value == null || value.isEmpty) {
-              return 'Please confirm your password';
-            }
-            if (value != _passwordController.text) {
-              return 'Passwords do not match';
-            }
-            return null;
-          },
-        ),
-        const SizedBox(height: 16),
-
         // Gender
         DropdownButtonFormField<String>(
           decoration: _inputDecoration(
             label: 'Gender*',
             icon: Icons.wc_rounded,
           ),
-          dropdownColor: const Color(0xFF221E36),
+          dropdownColor: Colors.white,
           value: _selectedGender,
           items: ['Male', 'Female', 'Other']
               .map((gender) => DropdownMenuItem(
@@ -595,12 +441,12 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         TextFormField(
           controller: _dateofbirth,
           readOnly: true,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Date of Birth (DD-MM-YYYY)*',
             icon: Icons.cake_outlined,
             suffixIcon: const Icon(Icons.calendar_today_rounded,
-                color: Colors.white70),
+                color: OnboardingUi.muted),
           ),
           onTap: _pickdateofbirth,
           validator: (value) {
@@ -616,7 +462,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         TextFormField(
           controller: _location,
           readOnly: true,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Location (City)',
             icon: Icons.location_on_outlined,
@@ -630,7 +476,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
                     ),
                   )
                 : const Icon(Icons.my_location_rounded,
-                    color: Colors.white70),
+                    color: OnboardingUi.muted),
           ),
           onTap: _detectCurrentCity,
         ),
@@ -704,7 +550,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         Text(
           "Professional Details",
           style: textTheme.headlineSmall?.copyWith(
-            color: Colors.white,
+            color: OnboardingUi.text,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -716,7 +562,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
             label: 'Your Profession*',
             icon: Icons.work_outline_rounded,
           ),
-          dropdownColor: const Color(0xFF221E36),
+          dropdownColor: Colors.white,
           value: _selectedProfessionType,
           items: professionOptions
               .map(
@@ -744,7 +590,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         Text(
           'Area of Specialization*',
           style: textTheme.titleSmall?.copyWith(
-            color: Colors.white70,
+            color: OnboardingUi.muted,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -778,7 +624,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
             label: 'Experience Level',
             icon: Icons.trending_up_rounded,
           ),
-          dropdownColor: const Color(0xFF221E36),
+          dropdownColor: Colors.white,
           value: _experienceLevel,
           items: experienceOptions
               .map(
@@ -800,7 +646,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         Text(
           'Languages Spoken',
           style: textTheme.titleSmall?.copyWith(
-            color: Colors.white70,
+            color: OnboardingUi.muted,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -834,7 +680,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         Text(
           "Additional Details (Optional)",
           style: textTheme.headlineSmall?.copyWith(
-            color: Colors.white,
+            color: OnboardingUi.text,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -844,7 +690,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         TextFormField(
           controller: _hourlyfees,
           keyboardType: TextInputType.number,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Hourly Charges / Fees (₹)',
             icon: Icons.currency_rupee_rounded,
@@ -856,7 +702,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         TextFormField(
           controller: _certification,
           readOnly: true,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Upload Certifications (PDF/JPEG)',
             icon: Icons.workspace_premium_outlined,
@@ -864,7 +710,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
               onTap: _showFileSourceDialog,
               child: const Icon(
                 Icons.arrow_circle_up_outlined,
-                color: Colors.white70,
+                color: OnboardingUi.muted,
               ),
             ),
           ),
@@ -881,7 +727,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
                   filePath.split('/').last,
                   style: GoogleFonts.poppins(
                     fontSize: 13,
-                    color: Colors.white,
+                    color: OnboardingUi.text,
                   ),
                 ),
                 trailing: Row(
@@ -906,7 +752,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         // Availability
         TextFormField(
           controller: _availability,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Availability (e.g. Mon–Fri, 6–9 PM)',
             icon: Icons.event_available_outlined,
@@ -928,7 +774,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
         Text(
           "Final Step",
           style: textTheme.headlineSmall?.copyWith(
-            color: Colors.white,
+            color: OnboardingUi.text,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -941,7 +787,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
               child: Text(
                 'Agree to Terms & Conditions*',
                 style: textTheme.bodyMedium?.copyWith(
-                  color: Colors.white70,
+                  color: OnboardingUi.muted,
                 ),
               ),
             ),
@@ -966,7 +812,7 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
               child: Text(
                 'Allow promotional emails',
                 style: textTheme.bodyMedium?.copyWith(
-                  color: Colors.white70,
+                  color: OnboardingUi.muted,
                 ),
               ),
             ),
@@ -1033,18 +879,18 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
     }
   }
 
-  Future<bool> _onWillPop() async {
+  Future<void> _handleBack() async {
     if (_currentStep > 0) {
       setState(() => _currentStep--);
-      return false;
+      return;
     }
-    return true;
+    await ref.read(authActionProvider.notifier).clearAccountType();
   }
 
   Widget _buildProgress() {
     final progress = (_currentStep + 1) / 4;
     final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+        GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
 
     return Column(
       children: [
@@ -1053,15 +899,14 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
           child: LinearProgressIndicator(
             value: progress,
             minHeight: 6,
-            backgroundColor: Colors.white.withOpacity(0.14),
-            valueColor:
-            const AlwaysStoppedAnimation<Color>(kPrimaryColor),
+            backgroundColor: OnboardingUi.fieldBorder,
+            valueColor: const AlwaysStoppedAnimation<Color>(kPrimaryColor),
           ),
         ),
         const SizedBox(height: 6),
         Text(
           'Step ${_currentStep + 1} of 4',
-          style: textTheme.bodySmall?.copyWith(color: Colors.white70),
+          style: textTheme.bodySmall?.copyWith(color: OnboardingUi.muted),
         ),
       ],
     );
@@ -1072,136 +917,115 @@ class _CreateGuruAccount extends State<CreateGuruAccount> {
   @override
   Widget build(BuildContext context) {
     final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+        GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final padding = OnboardingUi.pagePadding(context);
 
-    return WillPopScope(
-      onWillPop: _onWillPop,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
       child: Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        title: Text(
-          'Create Guru Account',
-          style: textTheme.titleMedium?.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
+        backgroundColor: OnboardingUi.pageBg,
+        appBar: AppBar(
+          backgroundColor: OnboardingUi.pageBg,
+          elevation: 0,
+          centerTitle: true,
+          iconTheme: const IconThemeData(color: OnboardingUi.text),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+            onPressed: _handleBack,
+          ),
+          title: Text(
+            'Guru profile',
+            style: textTheme.titleMedium?.copyWith(
+              color: OnboardingUi.text,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.white),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () async {
-            final allowPop = await _onWillPop();
-            if (allowPop && mounted) Navigator.of(context).pop();
-          },
-        ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [kBgTop, kBgBottom],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Column(
-          children: [
-            const SizedBox(height: kToolbarHeight + 10),
-            Padding(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
-              child: _buildProgress(),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0, vertical: 8.0),
-                child: Form(
-                  key: _formKey,
-                  child: _getStepContent(),
-                ),
-              ),
-            ),
-
-            // Buttons
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16.0, vertical: 12.0),
-              child: Row(
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: OnboardingUi.maxWidth),
+              child: Column(
                 children: [
-                  if (_currentStep > 0)
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () {
-                          setState(() {
-                            _currentStep--;
-                          });
-                        },
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: kPrimaryColor),
-                          foregroundColor: kPrimaryColor,
-                          padding:
-                          const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: const Text('Back'),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: padding),
+                    child: _buildProgress(),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.fromLTRB(padding, 8, padding, 16),
+                      child: Form(
+                        key: _formKey,
+                        child: _getStepContent(),
                       ),
                     ),
-                  if (_currentStep > 0) const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _onPrimaryButtonPressed,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: kPrimaryColor,
-                        foregroundColor: Colors.white,
-                        padding:
-                        const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(padding, 8, padding, 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _isSubmitting ? null : _handleBack,
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: kPrimaryColor),
+                              foregroundColor: kPrimaryColor,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: Text(
+                              _currentStep == 0 ? 'Change type' : 'Back',
+                            ),
+                          ),
                         ),
-                      ),
-                      child: Text(
-                        _getPrimaryButtonText(),
-                        style: textTheme.labelLarge?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: ElevatedButton(
+                            onPressed:
+                                _isSubmitting ? null : _onPrimaryButtonPressed,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: kPrimaryColor,
+                              foregroundColor: Colors.white,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: _isSubmitting
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
+                                  )
+                                : Text(
+                                    _getPrimaryButtonText(),
+                                    style: textTheme.labelLarge?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
-
-            // Login Link
-            Padding(
-              padding: const EdgeInsets.only(bottom: 18.0),
-              child: GestureDetector(
-                onTap: () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => LoginPage(),
-                    ),
-                  );
-                },
-                child: Text(
-                  'Already have an account? Login',
-                  style: textTheme.bodySmall?.copyWith(
-                    color: kPrimaryColor,
-                    fontWeight: FontWeight.w600,
-                    decoration: TextDecoration.underline,
-                  ),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
-      ),
       ),
     );
   }

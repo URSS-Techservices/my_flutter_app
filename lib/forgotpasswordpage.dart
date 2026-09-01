@@ -1,19 +1,21 @@
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
-
 import 'package:halo/core/halo_toast.dart';
+import 'package:halo/features/auth/presentation/pages/login_page.dart';
+import 'package:halo/features/auth/presentation/session_controller.dart';
 const Color _kPrimary = Color(0xFFA58CE3);
 const Color _kBgTop = Color(0xFF111111);
 const Color _kBgBottom = Color(0xFF050505);
 
-class ForgotPasswordPage extends StatefulWidget {
+class ForgotPasswordPage extends ConsumerStatefulWidget {
+  const ForgotPasswordPage({super.key});
+
   @override
-  _ForgotPasswordPageState createState() => _ForgotPasswordPageState();
+  ConsumerState<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
 }
 
-class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
+class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   bool _isLoading = false;
@@ -29,32 +31,35 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() => _isLoading = true);
-    try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(
-        email: _emailController.text.trim(),
-      );
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _emailSent = true;
-      });
-    } on FirebaseAuthException catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      String msg = 'Something went wrong. Please try again.';
-      if (e.code == 'user-not-found') {
-        msg = 'No account found with that email address.';
-      } else if (e.code == 'invalid-email') {
-        msg = 'Please enter a valid email address.';
-      } else if (e.code == 'too-many-requests') {
-        msg = 'Too many attempts. Please wait a moment and try again.';
-      }
-      HaloToast.show(msg);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      HaloToast.show('Error: $e');
+    await ref
+        .read(authActionProvider.notifier)
+        .sendPasswordResetEmail(_emailController.text.trim());
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    final error = ref.read(authActionProvider).error;
+    if (error != null) {
+      HaloToast.show(_friendlyResetError(error));
+      return;
     }
+    setState(() => _emailSent = true);
+  }
+
+  static String _friendlyResetError(Object error) {
+    final text = error.toString();
+    if (text.contains('user-not-found')) {
+      return 'No account found with that email address.';
+    }
+    if (text.contains('invalid-email')) {
+      return 'Please enter a valid email address.';
+    }
+    if (text.contains('too-many-requests')) {
+      return 'Too many attempts. Please wait a moment and try again.';
+    }
+    if (text.contains('network-request-failed')) {
+      return 'No internet connection. Check your network.';
+    }
+    return 'Something went wrong. Please try again.';
   }
 
   @override

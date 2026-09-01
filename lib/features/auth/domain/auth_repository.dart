@@ -12,6 +12,11 @@ abstract class AuthRepository {
   /// Writes `accountType` on the existing uid. Never creates a second account.
   Future<void> setAccountType(ProfileKind kind);
 
+  /// Clears the chosen account type so onboarding can return to the
+  /// 3-category page. Does not sign the user out and does not mark
+  /// onboarding complete.
+  Future<void> clearAccountType();
+
   /// Sign in by username, email, or mobile number. Firestore lookup for the
   /// non-email identifiers happens in the data layer, not the UI.
   /// [password] is the account password, or a 6-digit email OTP.
@@ -20,12 +25,36 @@ abstract class AuthRepository {
     required String password,
   });
 
-  /// Creates a new email/password account. Used by the sign-up flow before the
-  /// user picks an account type. UI never talks to Firebase directly.
+  /// Creates a new email/password account and immediately sends the Firebase
+  /// verification email. Used by the sign-up flow before the user picks an
+  /// account type. UI never talks to Firebase directly.
+  ///
+  /// The new user is signed in but unverified, so the session reports
+  /// [SessionStatus.emailVerificationRequired] until the email is confirmed.
   Future<void> signUpWithEmail({
     required String email,
     required String password,
   });
+
+  /// Re-sends the verification email to the current unverified user.
+  Future<void> sendEmailVerification();
+
+  /// Reloads the current Firebase user, re-emits the session, and reports
+  /// whether the email is now verified. The cached [User] must never be
+  /// trusted without this reload.
+  Future<bool> reloadAndCheckEmailVerified();
+
+  /// Sends a Firebase password-reset email. Used by Forgot Password.
+  Future<void> sendPasswordResetEmail(String email);
+
+  /// Case-insensitive username availability check for profile onboarding.
+  /// Lives in the data layer so onboarding widgets never touch Firestore.
+  Future<bool> isUsernameAvailable(String username);
+
+  /// Merges profile data onto `users/{uid}` for the signed-in user and flips
+  /// `onboardingCompleted` to true — but only if the write succeeds. Never
+  /// creates a second account and never stores passwords.
+  Future<void> completeProfileOnboarding(Map<String, dynamic> profile);
 
   /// Emails a 6-digit login OTP to the account's email.
   Future<void> sendLoginOtp({required String identifier});

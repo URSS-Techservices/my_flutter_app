@@ -83,16 +83,15 @@ class _HaloToastBannerState extends State<_HaloToastBanner>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 420),
-    reverseDuration: const Duration(milliseconds: 280),
+    duration: const Duration(milliseconds: 280),
+    reverseDuration: const Duration(milliseconds: 200),
   );
-  late final Animation<Offset> _slide = Tween<Offset>(
-    begin: const Offset(0, -1.15),
-    end: Offset.zero,
-  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
   late final Animation<double> _fade = CurvedAnimation(
     parent: _controller,
     curve: Curves.easeOut,
+  );
+  late final Animation<double> _scale = Tween<double>(begin: 0.94, end: 1).animate(
+    CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
   );
 
   @override
@@ -140,22 +139,20 @@ class _HaloToastBannerState extends State<_HaloToastBanner>
 
   @override
   Widget build(BuildContext context) {
-    final top = MediaQuery.paddingOf(context).top;
-    return Positioned(
-      top: top + 8,
-      left: 16,
-      right: 16,
-      child: SlideTransition(
-        position: _slide,
-        child: FadeTransition(
-          opacity: _fade,
-          child: IgnorePointer(
-            ignoring: false,
-            child: GestureDetector(
-              onTap: _dismiss,
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
+    final maxWidth = MediaQuery.sizeOf(context).width - 48;
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: false,
+        child: Align(
+          alignment: Alignment.center,
+          child: FadeTransition(
+            opacity: _fade,
+            child: ScaleTransition(
+              scale: _scale,
+              child: GestureDetector(
+                onTap: _dismiss,
+                child: SizedBox(
+                  width: maxWidth.clamp(0, 420),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(18),
                     child: BackdropFilter(
@@ -184,6 +181,7 @@ class _HaloToastBannerState extends State<_HaloToastBanner>
                               Expanded(
                                 child: Text(
                                   widget.message,
+                                  textAlign: TextAlign.center,
                                   style: const TextStyle(
                                     color: Color(0xFF1C1C1E),
                                     fontSize: 14,

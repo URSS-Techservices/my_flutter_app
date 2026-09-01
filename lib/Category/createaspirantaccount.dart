@@ -1,42 +1,34 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
 
 import 'package:halo/core/halo_toast.dart';
+import 'package:halo/core/halo_theme.dart';
+import 'package:halo/features/auth/presentation/onboarding_ui.dart';
+import 'package:halo/features/auth/presentation/session_controller.dart';
+import 'package:halo/utils/search_utils.dart';
 
-// HALO THEME COLORS
-const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
-const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
-const Color kBgTop = Color(0xFF111111);
-const Color kBgBottom = Color(0xFF050505);
-
-class CreateAspirantAccount extends StatefulWidget {
+class CreateAspirantAccount extends ConsumerStatefulWidget {
   @override
-  _CreateAspirantAccountState createState() => _CreateAspirantAccountState();
+  ConsumerState<CreateAspirantAccount> createState() =>
+      _CreateAspirantAccountState();
 }
 
-class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
+class _CreateAspirantAccountState extends ConsumerState<CreateAspirantAccount> {
   // Step control
   int _currentStep = 0;
-
-  // Firebase instances
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // Form keys
   final _formKeyStep1 = GlobalKey<FormState>();
   final _formKeyStep2 = GlobalKey<FormState>();
 
-  // Controllers (step1)
+  // Controllers (step1) — no email/password: authentication is already done.
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _dobController = TextEditingController();
   final TextEditingController _locationController = TextEditingController();
 
@@ -74,16 +66,13 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
   bool _promotional = true;
 
   bool _isSubmitting = false;
-  bool _obscurePassword = true;
   bool _isFetchingLocation = false;
 
   @override
   void dispose() {
     _nameController.dispose();
     _usernameController.dispose();
-    _emailController.dispose();
     _phoneController.dispose();
-    _passwordController.dispose();
     _dobController.dispose();
     _locationController.dispose();
     _healthConcernsController.dispose();
@@ -100,29 +89,12 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
       initialDate: initial,
       firstDate: DateTime(1900),
       lastDate: DateTime.now(),
-      builder: (ctx, child) {
-        return Theme(
-          data: Theme.of(ctx).copyWith(
-            colorScheme: ColorScheme.dark(
-              primary: kPrimaryColor,
-              surface: const Color(0xFF1C1C1C),
-              onSurface: Colors.white,
-            ),
-          ),
-          child: child!,
-        );
-      },
+      builder: (ctx, child) => OnboardingUi.datePickerTheme(ctx, child),
     );
     if (picked != null) {
       _dobController.text = DateFormat('dd-MM-yyyy').format(picked);
       setState(() {});
     }
-  }
-
-  String? _passwordValidator(String? value) {
-    if (value == null || value.isEmpty) return 'Please enter a password';
-    if (value.length < 6) return 'Password must be at least 6 characters';
-    return null;
   }
 
   String? _phoneValidator(String? value) {
@@ -132,15 +104,6 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
     final digits = value.trim();
     if (!RegExp(r'^[0-9]+$').hasMatch(digits)) return 'Enter digits only';
     if (digits.length != 10) return 'Mobile number must be 10 digits';
-    return null;
-  }
-
-  String? _emailValidator(String? value) {
-    if (value == null || value.trim().isEmpty) return 'Please enter email';
-    final v = value.trim();
-    if (!RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(v)) {
-      return 'Please enter a valid email';
-    }
     return null;
   }
 
@@ -288,15 +251,16 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
     if (_currentStep > 0) setState(() => _currentStep -= 1);
   }
 
-  Future<bool> _onWillPop() async {
+  Future<void> _handleBack() async {
     if (_currentStep > 0) {
       setState(() => _currentStep -= 1);
-      return false;
+      return;
     }
-    return true;
+    await ref.read(authActionProvider.notifier).clearAccountType();
   }
 
-  // Final submit - uses FirebaseAuth + Firestore
+  /// Profile-only save. Auth credentials were collected earlier (or by Google /
+  /// Phone / Apple). `onboardingCompleted` flips only if this write succeeds.
   Future<void> _submit() async {
     if (!_termsAccepted) {
       HaloToast.show('Please accept terms & conditions');
@@ -313,43 +277,25 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
     try {
       final username = _usernameController.text.trim();
-      final usernameLower = username.toLowerCase();
-      final email = _emailController.text.trim();
-      final emailLower = email.toLowerCase();
-      final password = _passwordController.text.trim();
-
-      // 1) Check username uniqueness (case-insensitive)
-      final existing = await _firestore
-          .collection('users')
-          .where('username_lower', isEqualTo: usernameLower)
-          .limit(1)
-          .get();
-
-      if (existing.docs.isNotEmpty) {
+      final available = await ref
+          .read(onboardingControllerProvider.notifier)
+          .isUsernameAvailable(username);
+      if (!available) {
         HaloToast.show('Username already taken. Please choose another one.');
-        setState(() => _isSubmitting = false);
         return;
       }
 
-      // 2) Create FirebaseAuth user (email + password)
-      final cred = await _auth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      final uid = cred.user!.uid;
-
-      // 3) Save profile in Firestore (no password)
-      final payload = {
-        'uid': uid,
+      final fullName = _nameController.text.trim();
+      final payload = <String, dynamic>{
         'accountType': 'aspirant',
         'profileType': 'aspirant',
         'category': 'Aspirant',
         'username': username,
-        'username_lower': usernameLower,
-        'email': email,
-        'email_lower': emailLower,
-        'full_name': _nameController.text.trim(),
+        'username_lower': username.toLowerCase(),
+        'full_name': fullName,
+        'searchTerms': buildSearchTerms(username: username, fullName: fullName),
         'phone': _phoneController.text.trim(),
+        'mobile': _phoneController.text.trim(),
         'gender': _selectedGender,
         'date_of_birth': _dobController.text.trim(),
         'location': _locationController.text.trim(),
@@ -359,30 +305,21 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
         'health_concerns': _healthConcernsController.text.trim(),
         'terms_accepted': _termsAccepted,
         'promotional_emails': _promotional,
-        'timestamp': FieldValue.serverTimestamp(),
       };
 
-      await _firestore.collection('users').doc(uid).set(payload);
-
-      HaloToast.show('Aspirant account created successfully!');
-
-      // TODO: navigate to home screen
-      // Navigator.pushReplacement(...);
-
-    } on FirebaseAuthException catch (e) {
-      String message = 'Failed to create account';
-      if (e.code == 'email-already-in-use') {
-        message = 'This email is already registered.';
-      } else if (e.code == 'weak-password') {
-        message = 'Password is too weak.';
-      } else if (e.code == 'invalid-email') {
-        message = 'Invalid email format.';
+      final ok = await ref
+          .read(onboardingControllerProvider.notifier)
+          .completeOnboarding(payload);
+      if (!mounted) return;
+      if (ok) {
+        HaloToast.show('Profile saved. Welcome to HALO!');
+      } else {
+        HaloToast.show('Could not save your profile. Please try again.');
       }
-      HaloToast.show(message);
     } catch (e) {
-      HaloToast.show('Failed to create account: $e');
+      HaloToast.show('Failed to save profile: $e');
     } finally {
-      setState(() => _isSubmitting = false);
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -394,37 +331,12 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
     Widget? prefixIcon,
     Widget? suffixIcon,
   }) {
-    final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
-
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      labelStyle: textTheme.labelMedium?.copyWith(
-        color: Colors.grey.shade300,
-        fontWeight: FontWeight.w500,
-      ),
-      hintStyle: textTheme.bodySmall?.copyWith(
-        color: Colors.grey.shade500,
-      ),
-      filled: true,
-      fillColor: Colors.white.withOpacity(0.05),
+    return OnboardingUi.field(
+      context: context,
+      label: label,
+      hint: hint,
       prefixIcon: prefixIcon,
       suffixIcon: suffixIcon,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: BorderSide.none,
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(
-          color: kPrimaryColor,
-          width: 1.5,
-        ),
-      ),
-      errorMaxLines: 4,
-      contentPadding:
-      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
   }
 
@@ -442,7 +354,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           child: LinearProgressIndicator(
             value: progress,
             minHeight: 6,
-            backgroundColor: Colors.white.withOpacity(0.15),
+            backgroundColor: OnboardingUi.fieldBorder,
             valueColor:
             const AlwaysStoppedAnimation<Color>(kPrimaryColor),
           ),
@@ -450,7 +362,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
         const SizedBox(height: 6),
         Text(
           'Step ${_currentStep + 1} of $totalSteps',
-          style: textTheme.bodySmall?.copyWith(color: Colors.white70),
+          style: textTheme.bodySmall?.copyWith(color: OnboardingUi.muted),
         ),
       ],
     );
@@ -470,7 +382,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           Text(
             'Basic Details',
             style: textTheme.headlineSmall?.copyWith(
-              color: Colors.white,
+              color: OnboardingUi.text,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -479,10 +391,10 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           // Full Name
           TextFormField(
             controller: _nameController,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: OnboardingUi.text),
             decoration: _inputDecoration(
               label: 'Full Name',
-              prefixIcon: const Icon(Icons.person_outline, color: Colors.white70),
+              prefixIcon: const Icon(Icons.person_outline, color: OnboardingUi.muted),
             ),
             validator: (v) {
               if (v == null || v.trim().isEmpty) {
@@ -496,11 +408,11 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           // Username
           TextFormField(
             controller: _usernameController,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: OnboardingUi.text),
             decoration: _inputDecoration(
               label: 'Username',
               prefixIcon:
-              const Icon(Icons.alternate_email_rounded, color: Colors.white70),
+              const Icon(Icons.alternate_email_rounded, color: OnboardingUi.muted),
             ),
             validator: (v) {
               if (v == null || v.trim().isEmpty) {
@@ -517,62 +429,27 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           ),
           const SizedBox(height: 16),
 
-          // Email
-          TextFormField(
-            controller: _emailController,
-            style: const TextStyle(color: Colors.white),
-            decoration: _inputDecoration(
-              label: 'Email',
-              prefixIcon: const Icon(Icons.email_outlined, color: Colors.white70),
-            ),
-            keyboardType: TextInputType.emailAddress,
-            validator: _emailValidator,
-          ),
-          const SizedBox(height: 16),
-
           // Mobile
           TextFormField(
             controller: _phoneController,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: OnboardingUi.text),
             decoration: _inputDecoration(
               label: 'Mobile Number',
-              prefixIcon: const Icon(Icons.phone_outlined, color: Colors.white70),
+              prefixIcon: const Icon(Icons.phone_outlined, color: OnboardingUi.muted),
             ),
             keyboardType: TextInputType.phone,
             validator: _phoneValidator,
           ),
           const SizedBox(height: 16),
 
-          // Password
-          TextFormField(
-            controller: _passwordController,
-            style: const TextStyle(color: Colors.white),
-            decoration: _inputDecoration(
-              label: 'Password',
-              prefixIcon: const Icon(Icons.lock_outline_rounded,
-                  color: Colors.white70),
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                  color: Colors.white70,
-                ),
-                onPressed: () => setState(
-                    () => _obscurePassword = !_obscurePassword),
-              ),
-            ),
-            obscureText: _obscurePassword,
-            validator: _passwordValidator,
-          ),
-          const SizedBox(height: 16),
-
           // Gender
           DropdownButtonFormField<String>(
             value: _selectedGender,
-            dropdownColor: const Color(0xFF221E36),
+            dropdownColor: Colors.white,
             decoration: _inputDecoration(
               label: 'Gender',
               prefixIcon:
-              const Icon(Icons.wc_rounded, color: Colors.white70),
+              const Icon(Icons.wc_rounded, color: OnboardingUi.muted),
             ),
             items: ['Male', 'Female', 'Other']
                 .map(
@@ -593,12 +470,12 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           TextFormField(
             controller: _dobController,
             readOnly: true,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: OnboardingUi.text),
             decoration: _inputDecoration(
               label: 'Date of Birth',
-              prefixIcon: const Icon(Icons.cake_outlined, color: Colors.white70),
+              prefixIcon: const Icon(Icons.cake_outlined, color: OnboardingUi.muted),
               suffixIcon:
-              const Icon(Icons.calendar_today_rounded, color: Colors.white70),
+              const Icon(Icons.calendar_today_rounded, color: OnboardingUi.muted),
             ),
             onTap: _pickDateOfBirth,
             validator: (v) {
@@ -614,11 +491,11 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           TextFormField(
             controller: _locationController,
             readOnly: true,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: OnboardingUi.text),
             decoration: _inputDecoration(
               label: 'City / Location',
               prefixIcon:
-              const Icon(Icons.location_on_outlined, color: Colors.white70),
+              const Icon(Icons.location_on_outlined, color: OnboardingUi.muted),
               suffixIcon: _isFetchingLocation
                   ? const Padding(
                       padding: EdgeInsets.all(12),
@@ -629,7 +506,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
                       ),
                     )
                   : const Icon(Icons.my_location_rounded,
-                      color: Colors.white70),
+                      color: OnboardingUi.muted),
             ),
             onTap: _detectCurrentCity,
             validator: (v) {
@@ -674,7 +551,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           Text(
             'Fitness Profile',
             style: textTheme.headlineSmall?.copyWith(
-              color: Colors.white,
+              color: OnboardingUi.text,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -682,7 +559,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
           Text(
             'Fitness Goals',
-            style: textTheme.titleSmall?.copyWith(color: Colors.white70),
+            style: textTheme.titleSmall?.copyWith(color: OnboardingUi.muted),
           ),
           const SizedBox(height: 8),
 
@@ -695,16 +572,16 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
                 label: Text(
                   goal,
                   style: textTheme.bodySmall?.copyWith(
-                    color: selected ? Colors.black : Colors.white70,
+                    color: selected ? Colors.black : OnboardingUi.muted,
                   ),
                 ),
                 selected: selected,
                 selectedColor: kPrimaryColor,
-                backgroundColor: Colors.white.withOpacity(0.06),
+                backgroundColor: OnboardingUi.fieldFill,
                 side: BorderSide(
                   color: selected
-                      ? kPrimaryColor.withOpacity(0.9)
-                      : Colors.white.withOpacity(0.25),
+                      ? kPrimaryColor.withValues(alpha: 0.9)
+                      : OnboardingUi.fieldBorder,
                 ),
                 onSelected: (v) {
                   setState(() {
@@ -722,11 +599,11 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
           DropdownButtonFormField<String>(
             value: _selectedFitnessLevel,
-            dropdownColor: const Color(0xFF221E36),
+            dropdownColor: Colors.white,
             decoration: _inputDecoration(
               label: 'Current Fitness Level',
               prefixIcon:
-              const Icon(Icons.bar_chart_rounded, color: Colors.white70),
+              const Icon(Icons.bar_chart_rounded, color: OnboardingUi.muted),
             ),
             items: _fitnessLevelOptions
                 .map(
@@ -747,7 +624,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
           Text(
             'Preferred Workout Location(s)',
-            style: textTheme.titleSmall?.copyWith(color: Colors.white70),
+            style: textTheme.titleSmall?.copyWith(color: OnboardingUi.muted),
           ),
           const SizedBox(height: 8),
 
@@ -764,7 +641,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
                 : _selectedPreferredLocations
                 .map((loc) => Chip(
               label: Text(loc),
-              backgroundColor: Colors.white.withOpacity(0.08),
+              backgroundColor: OnboardingUi.fieldFill,
             ))
                 .toList(),
           ),
@@ -786,12 +663,12 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
 
           TextFormField(
             controller: _healthConcernsController,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: OnboardingUi.text),
             decoration: _inputDecoration(
               label: 'Health Concerns (if any)',
               hint: 'e.g. knee pain, back issues, recent surgery…',
               prefixIcon:
-              const Icon(Icons.healing_outlined, color: Colors.white70),
+              const Icon(Icons.healing_outlined, color: OnboardingUi.muted),
             ),
             maxLines: 3,
           ),
@@ -803,7 +680,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
               TextButton(
                 onPressed: _goToPrevious,
                 style: TextButton.styleFrom(
-                  foregroundColor: Colors.white70,
+                  foregroundColor: OnboardingUi.muted,
                 ),
                 child: const Text('Back'),
               ),
@@ -837,7 +714,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
         Text(
           'Final Step',
           style: textTheme.headlineSmall?.copyWith(
-            color: Colors.white,
+            color: OnboardingUi.text,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -848,7 +725,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           onChanged: (v) => setState(() => _termsAccepted = v ?? false),
           title: Text(
             'I accept the Terms & Conditions',
-            style: textTheme.bodyMedium?.copyWith(color: Colors.white70),
+            style: textTheme.bodyMedium?.copyWith(color: OnboardingUi.muted),
           ),
           activeColor: kPrimaryColor,
           checkColor: Colors.black,
@@ -861,7 +738,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
           onChanged: (v) => setState(() => _promotional = v),
           title: Text(
             'Receive promotional offers and fitness tips',
-            style: textTheme.bodyMedium?.copyWith(color: Colors.white70),
+            style: textTheme.bodyMedium?.copyWith(color: OnboardingUi.muted),
           ),
           activeColor: kPrimaryColor,
         ),
@@ -873,7 +750,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
             TextButton(
               onPressed: _goToPrevious,
               style: TextButton.styleFrom(
-                foregroundColor: Colors.white70,
+                foregroundColor: OnboardingUi.muted,
               ),
               child: const Text('Back'),
             ),
@@ -898,7 +775,7 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
                   AlwaysStoppedAnimation<Color>(Colors.white),
                 ),
               )
-                  : const Text('Create Account'),
+                  : const Text('Complete Profile'),
             ),
           ],
         ),
@@ -909,65 +786,59 @@ class _CreateAspirantAccountState extends State<CreateAspirantAccount> {
   @override
   Widget build(BuildContext context) {
     final stepTitle = ['Basic Details', 'Fitness Profile', 'Final Step']
-    [_currentStep];
+        [_currentStep];
     final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+        GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final padding = OnboardingUi.pagePadding(context);
 
-    return WillPopScope(
-      onWillPop: _onWillPop,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
       child: Scaffold(
-        extendBodyBehindAppBar: true,
+        backgroundColor: OnboardingUi.pageBg,
         appBar: AppBar(
-        title: Text(
-          'Aspirant · $stepTitle',
-          style: textTheme.titleMedium?.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
+          backgroundColor: OnboardingUi.pageBg,
+          elevation: 0,
+          centerTitle: true,
+          iconTheme: const IconThemeData(color: OnboardingUi.text),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+            onPressed: _handleBack,
           ),
-        ),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () async {
-            final allowPop = await _onWillPop();
-            if (allowPop && mounted) Navigator.of(context).pop();
-          },
-        ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [kBgTop, kBgBottom],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SafeArea(
-          top: false,
-          child: SingleChildScrollView(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-            child: Column(
-              children: [
-                const SizedBox(height: kToolbarHeight),
-                _buildProgressIndicator(),
-                const SizedBox(height: 16),
-                IndexedStack(
-                  index: _currentStep,
-                  children: [
-                    _buildStep1(),
-                    _buildStep2(),
-                    _buildStep3(),
-                  ],
-                ),
-              ],
+          title: Text(
+            'Aspirant · $stepTitle',
+            style: textTheme.titleMedium?.copyWith(
+              color: OnboardingUi.text,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
-      ),
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: OnboardingUi.maxWidth),
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(padding, 8, padding, 24),
+                child: Column(
+                  children: [
+                    _buildProgressIndicator(),
+                    const SizedBox(height: 16),
+                    IndexedStack(
+                      index: _currentStep,
+                      children: [
+                        _buildStep1(),
+                        _buildStep2(),
+                        _buildStep3(),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

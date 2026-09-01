@@ -1,33 +1,26 @@
-import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/utils/search_utils.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
 
 import 'package:halo/core/halo_toast.dart';
-// ---------- HALO THEME COLORS ----------
-const Color kPrimaryColor = Color(0xFFA58CE3); // Lavender
-const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep purple
-const Color kBgTop = Color(0xFF111111);
-const Color kBgBottom = Color(0xFF050505);
+import 'package:halo/core/halo_theme.dart';
+import 'package:halo/features/auth/presentation/onboarding_ui.dart';
+import 'package:halo/features/auth/presentation/session_controller.dart';
 
-class CreateWellnessAccount extends StatefulWidget {
+class CreateWellnessAccount extends ConsumerStatefulWidget {
   @override
-  _CreateWellnessAccount createState() => _CreateWellnessAccount();
+  ConsumerState<CreateWellnessAccount> createState() => _CreateWellnessAccount();
 }
 
-class _CreateWellnessAccount extends State<CreateWellnessAccount> {
+class _CreateWellnessAccount extends ConsumerState<CreateWellnessAccount> {
   final _formKey = GlobalKey<FormState>();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // ---------- Controllers ----------
 
@@ -35,10 +28,6 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _nameController = TextEditingController(); // Business Name
   final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController =
-  TextEditingController();
   final TextEditingController _location = TextEditingController();
   final TextEditingController _yearOfCommencement = TextEditingController();
 
@@ -61,9 +50,8 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
 
   int _currentStep = 0;
   String? selectedDate;
-  bool _obscurePassword = true;
-  bool _obscureConfirmPassword = true;
   bool _isFetchingLocation = false;
+  bool _isSubmitting = false;
 
   // ---------- Helpers ----------
 
@@ -73,18 +61,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
       initialDate: DateTime.now(),
       firstDate: DateTime(1900),
       lastDate: DateTime.now(),
-      builder: (ctx, child) {
-        return Theme(
-          data: Theme.of(ctx).copyWith(
-            colorScheme: ColorScheme.dark(
-              primary: kPrimaryColor,
-              surface: const Color(0xFF1C1C1C),
-              onSurface: Colors.white,
-            ),
-          ),
-          child: child!,
-        );
-      },
+      builder: (ctx, child) => OnboardingUi.datePickerTheme(ctx, child),
     );
     if (pickedDate != null) {
       String formattedDate = DateFormat('dd-MM-yyyy').format(pickedDate);
@@ -93,24 +70,6 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         selectedDate = formattedDate;
       });
     }
-  }
-
-  String? _validatePassword(String? value) {
-    if (value == null || value.isEmpty) {
-      return 'Please enter a password';
-    }
-    if (value.length < 6) {
-      return 'Password must be at least 6 characters';
-    }
-    return null;
-  }
-
-  Future<bool> _isUsernameUnique(String username) async {
-    final querySnapshot = await _firestore
-        .collection('users')
-        .where('username', isEqualTo: username)
-        .get();
-    return querySnapshot.docs.isEmpty;
   }
 
   Future<void> _detectCurrentCity() async {
@@ -265,61 +224,53 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
       return;
     }
 
-    // Check username uniqueness
-    bool isUnique = await _isUsernameUnique(_usernameController.text.trim());
-    if (!isUnique) {
-      HaloToast.show('Username already exists! Choose another one.');
-      return;
-    }
-
+    setState(() => _isSubmitting = true);
     try {
-      // Create User with Firebase Authentication
-      UserCredential userCredential =
-      await _auth.createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-
       final username = _usernameController.text.trim();
+      final available = await ref
+          .read(onboardingControllerProvider.notifier)
+          .isUsernameAvailable(username);
+      if (!available) {
+        HaloToast.show('Username already exists! Choose another one.');
+        return;
+      }
+
       final businessName = _nameController.text.trim();
-      // Store additional business details in Firestore
-      await _firestore.collection('users').doc(userCredential.user!.uid).set({
+      final ok = await ref
+          .read(onboardingControllerProvider.notifier)
+          .completeOnboarding({
         'category': 'Wellness',
         'accountType': 'wellness',
         'profileType': 'wellness',
         'username': username,
+        'username_lower': username.toLowerCase(),
         'business_name': businessName,
-        'searchTerms': buildSearchTerms(username: username, businessName: businessName),
+        'searchTerms':
+            buildSearchTerms(username: username, businessName: businessName),
         'phone': _phoneController.text.trim(),
-        'email': _emailController.text.trim(),
+        'mobile': _phoneController.text.trim(),
         'business_type': _selectedBusinessType,
         'location': _location.text.trim(),
         'year_of_commencement': _yearOfCommencement.text.trim(),
-
-        // Services & Operations
-        'facilities_services': _selectedFacilities, // List<String>
-        'certifications': _selectedFiles, // List<String> - file paths/names
+        'facilities_services': _selectedFacilities,
+        'certifications': _selectedFiles,
         'membership_plans': _membershipPlans.text.trim(),
         'working_hours': _workingHours.text.trim(),
-
-        // Extras
         'special_offers': _offers.text.trim(),
         'products_services_offered': _productsOffered.text.trim(),
-
-        // Settings
         'terms_accepted': _isFirstToggleOn,
         'promotional_emails': _isSecondToggleOn,
-        'timestamp': FieldValue.serverTimestamp(),
       });
-
-      HaloToast.show('Account Created Successfully!');
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => LoginPage()),
-      );
+      if (!mounted) return;
+      if (ok) {
+        HaloToast.show('Profile saved. Welcome to HALO!');
+      } else {
+        HaloToast.show('Could not save your profile. Please try again.');
+      }
     } catch (e) {
-      HaloToast.show('Registration failed: ${e.toString()}');
+      HaloToast.show('Could not save profile: $e');
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -336,43 +287,12 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     Widget? suffixIcon,
     bool readOnly = false,
   }) {
-    final textTheme = GoogleFonts.poppinsTextTheme(
-      Theme.of(context).textTheme,
-    );
-
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      labelStyle: textTheme.labelMedium?.copyWith(
-        color: Colors.grey.shade300,
-        fontWeight: FontWeight.w500,
-      ),
-      hintStyle: textTheme.bodySmall?.copyWith(
-        color: Colors.grey.shade500,
-      ),
-      filled: true,
-      fillColor: Colors.white.withOpacity(0.05),
-      prefixIcon: icon != null
-          ? Icon(
-        icon,
-        color: Colors.white70,
-      )
-          : null,
+    return OnboardingUi.field(
+      context: context,
+      label: label,
+      hint: hint,
+      icon: icon,
       suffixIcon: suffixIcon,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: BorderSide.none,
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(
-          color: kPrimaryColor,
-          width: 1.5,
-        ),
-      ),
-      errorMaxLines: 4,
-      contentPadding:
-      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
   }
 
@@ -394,16 +314,16 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
           label: Text(
             option,
             style: textTheme.bodySmall?.copyWith(
-              color: isSelected ? Colors.black : Colors.white70,
+              color: isSelected ? Colors.black : OnboardingUi.muted,
             ),
           ),
           selected: isSelected,
           selectedColor: kPrimaryColor,
-          backgroundColor: Colors.white.withOpacity(0.08),
+          backgroundColor: OnboardingUi.fieldFill,
           side: BorderSide(
             color: isSelected
-                ? kPrimaryColor.withOpacity(0.9)
-                : Colors.white.withOpacity(0.25),
+                ? kPrimaryColor.withValues(alpha: 0.9)
+                : OnboardingUi.fieldBorder,
           ),
           onSelected: (_) => onTap(option),
         );
@@ -431,19 +351,19 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     final headingStyle = GoogleFonts.poppins(
       fontSize: 18,
       fontWeight: FontWeight.w700,
-      color: Colors.white,
+      color: OnboardingUi.text,
     );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text("Create Account (Wellness)", style: headingStyle),
+        Text("Business Details", style: headingStyle),
         const SizedBox(height: 18),
 
         // Username
         TextFormField(
           controller: _usernameController,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Username',
             icon: Icons.person,
@@ -460,7 +380,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Business Name
         TextFormField(
           controller: _nameController,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Business Name*',
             icon: Icons.storefront,
@@ -481,7 +401,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         TextFormField(
           controller: _phoneController,
           keyboardType: TextInputType.phone,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Mobile Number*',
             icon: Icons.phone,
@@ -498,82 +418,9 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         ),
         const SizedBox(height: 16),
 
-        // Email (for Firebase login)
-        TextFormField(
-          controller: _emailController,
-          style: const TextStyle(color: Colors.white),
-          decoration: _inputDecoration(
-            label: 'Email',
-            icon: Icons.email,
-          ),
-          validator: (value) {
-            if (value == null || value.isEmpty) {
-              return 'Please enter your email';
-            }
-            if (!RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-                .hasMatch(value)) {
-              return 'Please enter a valid email';
-            }
-            return null;
-          },
-        ),
-        const SizedBox(height: 16),
-
-        // Password
-        TextFormField(
-          controller: _passwordController,
-          obscureText: _obscurePassword,
-          style: const TextStyle(color: Colors.white),
-          decoration: _inputDecoration(
-            label: 'Password*',
-            icon: Icons.lock_outline,
-            suffixIcon: IconButton(
-              icon: Icon(
-                _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                color: Colors.white70,
-              ),
-              onPressed: () => setState(
-                  () => _obscurePassword = !_obscurePassword),
-            ),
-          ),
-          validator: _validatePassword,
-        ),
-        const SizedBox(height: 16),
-
-        // Confirm Password
-        TextFormField(
-          controller: _confirmPasswordController,
-          obscureText: _obscureConfirmPassword,
-          style: const TextStyle(color: Colors.white),
-          decoration: _inputDecoration(
-            label: 'Confirm Password',
-            icon: Icons.lock,
-            suffixIcon: IconButton(
-              icon: Icon(
-                _obscureConfirmPassword
-                    ? Icons.visibility_off
-                    : Icons.visibility,
-                color: Colors.white70,
-              ),
-              onPressed: () => setState(() => _obscureConfirmPassword =
-                  !_obscureConfirmPassword),
-            ),
-          ),
-          validator: (value) {
-            if (value == null || value.isEmpty) {
-              return 'Please confirm your password';
-            }
-            if (value != _passwordController.text) {
-              return 'Passwords do not match';
-            }
-            return null;
-          },
-        ),
-        const SizedBox(height: 16),
-
         // Business Type
         DropdownButtonFormField<String>(
-          dropdownColor: const Color(0xFF1E1B2D),
+          dropdownColor: Colors.white,
           value: _selectedBusinessType,
           decoration: _inputDecoration(
             label: 'Business Type',
@@ -599,7 +446,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         TextFormField(
           controller: _location,
           readOnly: true,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Location (City)',
             icon: Icons.location_on,
@@ -613,7 +460,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
                     ),
                   )
                 : const Icon(Icons.my_location_rounded,
-                    color: Colors.white70),
+                    color: OnboardingUi.muted),
           ),
           onTap: _detectCurrentCity,
         ),
@@ -623,7 +470,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         TextFormField(
           controller: _yearOfCommencement,
           readOnly: true,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Year of Commencement (DD-MM-YYYY)',
             icon: Icons.calendar_today,
@@ -656,7 +503,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     final headingStyle = GoogleFonts.poppins(
       fontSize: 18,
       fontWeight: FontWeight.w700,
-      color: Colors.white,
+      color: OnboardingUi.text,
     );
 
     return Column(
@@ -669,7 +516,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
           'Facilities / Services',
           style: GoogleFonts.poppins(
             fontSize: 14,
-            color: Colors.white70,
+            color: OnboardingUi.muted,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -694,7 +541,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         TextFormField(
           controller: _certification,
           readOnly: true,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Upload Certifications (PDF/JPEG)',
             icon: Icons.workspace_premium,
@@ -702,7 +549,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
               onTap: _showFileSourceDialog,
               child: const Icon(
                 Icons.arrow_circle_up_outlined,
-                color: Colors.white70,
+                color: OnboardingUi.muted,
               ),
             ),
           ),
@@ -719,7 +566,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
                   filePath.split('/').last,
                   style: GoogleFonts.poppins(
                     fontSize: 13,
-                    color: Colors.white,
+                    color: OnboardingUi.text,
                   ),
                 ),
                 trailing: Row(
@@ -744,7 +591,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Membership Plans (optional)
         TextFormField(
           controller: _membershipPlans,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Membership Plans (optional)',
             icon: Icons.card_membership,
@@ -755,7 +602,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Working Hours
         TextFormField(
           controller: _workingHours,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Working Hours (e.g. 6 AM–10 PM, Mon–Sat)',
             icon: Icons.access_time,
@@ -771,7 +618,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     final headingStyle = GoogleFonts.poppins(
       fontSize: 18,
       fontWeight: FontWeight.w700,
-      color: Colors.white,
+      color: OnboardingUi.text,
     );
 
     return Column(
@@ -783,7 +630,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Special Offers / Discounts
         TextFormField(
           controller: _offers,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Special Offers / Discounts',
             icon: Icons.local_offer,
@@ -794,7 +641,7 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
         // Products / Services Offered
         TextFormField(
           controller: _productsOffered,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: OnboardingUi.text),
           decoration: _inputDecoration(
             label: 'Products / Services Offered',
             icon: Icons.local_mall_outlined,
@@ -810,12 +657,12 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     final headingStyle = GoogleFonts.poppins(
       fontSize: 18,
       fontWeight: FontWeight.w700,
-      color: Colors.white,
+      color: OnboardingUi.text,
     );
 
     final labelStyle = GoogleFonts.poppins(
       fontSize: 15,
-      color: Colors.white70,
+      color: OnboardingUi.muted,
     );
 
     return Column(
@@ -909,12 +756,12 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
     }
   }
 
-  Future<bool> _onWillPop() async {
+  Future<void> _handleBack() async {
     if (_currentStep > 0) {
       setState(() => _currentStep--);
-      return false;
+      return;
     }
-    return true;
+    await ref.read(authActionProvider.notifier).clearAccountType();
   }
 
   // ---------- BUILD ----------
@@ -923,158 +770,134 @@ class _CreateWellnessAccount extends State<CreateWellnessAccount> {
   Widget build(BuildContext context) {
     final progress = (_currentStep + 1) / 4;
     final textTheme =
-    GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+        GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme);
+    final padding = OnboardingUi.pagePadding(context);
 
-    return WillPopScope(
-      onWillPop: _onWillPop,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
       child: Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () async {
-            final allowPop = await _onWillPop();
-            if (allowPop && mounted) Navigator.of(context).pop();
-          },
-        ),
-        title: Text(
-          'Create Wellness Account',
-          style: textTheme.titleMedium?.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
+        backgroundColor: OnboardingUi.pageBg,
+        appBar: AppBar(
+          backgroundColor: OnboardingUi.pageBg,
+          elevation: 0,
+          centerTitle: true,
+          iconTheme: const IconThemeData(color: OnboardingUi.text),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+            onPressed: _handleBack,
+          ),
+          title: Text(
+            'Wellness profile',
+            style: textTheme.titleMedium?.copyWith(
+              color: OnboardingUi.text,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [kBgTop, kBgBottom],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Column(
-          children: [
-            const SizedBox(height: kToolbarHeight + 10),
-
-            // Progress bar
-            Padding(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(999),
-                child: LinearProgressIndicator(
-                  value: progress,
-                  minHeight: 6,
-                  backgroundColor: Colors.white.withOpacity(0.12),
-                  valueColor:
-                  const AlwaysStoppedAnimation<Color>(kPrimaryColor),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(top: 4.0, bottom: 4.0),
-              child: Text(
-                'Step ${_currentStep + 1} of 4',
-                style: textTheme.bodySmall?.copyWith(
-                  color: Colors.white70,
-                ),
-              ),
-            ),
-
-            // Form
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0, vertical: 8.0),
-                child: Form(
-                  key: _formKey,
-                  child: _getStepContent(),
-                ),
-              ),
-            ),
-
-            // Buttons
-            Padding(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-              child: Row(
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: OnboardingUi.maxWidth),
+              child: Column(
                 children: [
-                  if (_currentStep > 0)
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () {
-                          setState(() {
-                            _currentStep--;
-                          });
-                        },
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: kPrimaryColor),
-                          foregroundColor: kPrimaryColor,
-                          padding:
-                          const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: padding),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 6,
+                        backgroundColor: OnboardingUi.fieldBorder,
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                          kPrimaryColor,
                         ),
-                        child: const Text('Back'),
                       ),
                     ),
-                  if (_currentStep > 0) const SizedBox(width: 12),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8, bottom: 4),
+                    child: Text(
+                      'Step ${_currentStep + 1} of 4',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: OnboardingUi.muted,
+                      ),
+                    ),
+                  ),
                   Expanded(
-                    child: ElevatedButton(
-                      onPressed: _onPrimaryButtonPressed,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: kPrimaryColor,
-                        foregroundColor: Colors.white,
-                        padding:
-                        const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.fromLTRB(padding, 8, padding, 16),
+                      child: Form(
+                        key: _formKey,
+                        child: _getStepContent(),
                       ),
-                      child: Text(
-                        _getPrimaryButtonText(),
-                        style: textTheme.labelLarge?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(padding, 8, padding, 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _isSubmitting ? null : _handleBack,
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: kPrimaryColor),
+                              foregroundColor: kPrimaryColor,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: Text(
+                              _currentStep == 0 ? 'Change type' : 'Back',
+                            ),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: ElevatedButton(
+                            onPressed:
+                                _isSubmitting ? null : _onPrimaryButtonPressed,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: kPrimaryColor,
+                              foregroundColor: Colors.white,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: _isSubmitting
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
+                                  )
+                                : Text(
+                                    _getPrimaryButtonText(),
+                                    style: textTheme.labelLarge?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
-
-            // Login link
-            Padding(
-              padding: const EdgeInsets.only(bottom: 18.0),
-              child: GestureDetector(
-                onTap: () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => LoginPage(),
-                    ),
-                  );
-                },
-                child: Text(
-                  'Already have an account? Login',
-                  style: textTheme.bodySmall?.copyWith(
-                    color: kPrimaryColor,
-                    fontWeight: FontWeight.w600,
-                    decoration: TextDecoration.underline,
-                  ),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
-      ),
       ),
     );
   }
