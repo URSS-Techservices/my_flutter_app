@@ -549,30 +549,38 @@ class _OtpFieldState extends State<_OtpField> {
             }),
           ),
           Positioned.fill(
-            child: TextField(
-              controller: widget.controller,
-              focusNode: _focus,
-              autofocus: true,
-              enabled: widget.enabled,
-              keyboardType: TextInputType.number,
-              autofillHints: const [AutofillHints.oneTimeCode],
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(6),
-              ],
-              showCursor: false,
-              enableInteractiveSelection: false,
-              cursorColor: Colors.transparent,
-              style: const TextStyle(color: Colors.transparent, fontSize: 1),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                counterText: '',
-                contentPadding: EdgeInsets.zero,
+            child: Opacity(
+              opacity: 0,
+              child: TextField(
+                controller: widget.controller,
+                focusNode: _focus,
+                autofocus: true,
+                enabled: widget.enabled,
+                keyboardType: TextInputType.number,
+                autofillHints: const [
+                  AutofillHints.oneTimeCode,
+                ],
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(6),
+                ],
+                showCursor: false,
+                enableInteractiveSelection: false,
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                  fillColor: Colors.transparent,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                onChanged: (value) {
+                  setState(() {});
+                  if (value.length == 6) {
+                    widget.onCompleted(value);
+                  }
+                },
               ),
-              onChanged: (value) {
-                setState(() {});
-                if (value.length == 6) widget.onCompleted(value);
-              },
             ),
           ),
         ],

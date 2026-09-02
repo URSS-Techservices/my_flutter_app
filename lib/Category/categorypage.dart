@@ -7,9 +7,6 @@ import 'package:halo/features/auth/presentation/onboarding_ui.dart';
 import 'package:halo/features/auth/presentation/session_controller.dart';
 import 'package:halo/screens/profile/core/profile_type.dart';
 
-/// 3-category onboarding step. Does not create a Firebase account — the user
-/// is already authenticated. Picking a type writes `accountType` on
-/// `users/{uid}` and the gate then shows the matching profile form.
 class CategoryPage extends ConsumerStatefulWidget {
   const CategoryPage({super.key});
 
@@ -76,7 +73,7 @@ class _CategoryPageState extends ConsumerState<CategoryPage> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Pick the account that fits you. You can go back and change this before you finish your profile.',
+                        '',
                         textAlign: TextAlign.center,
                         style: textTheme.bodyMedium?.copyWith(
                           color: OnboardingUi.muted,
@@ -92,7 +89,7 @@ class _CategoryPageState extends ConsumerState<CategoryPage> {
                       _CategoryCard(
                         title: 'Wellness',
                         description:
-                            'Promote your gym, studio, or wellness business.',
+                            '',
                         imagePath: 'assets/images/Wellness.png',
                         onTap: busy ? null : () => _pick(ProfileKind.wellness),
                       ),
@@ -100,7 +97,7 @@ class _CategoryPageState extends ConsumerState<CategoryPage> {
                       _CategoryCard(
                         title: 'Aspirant',
                         description:
-                            'Find coaches, wellness spaces, and your fitness path.',
+                            '',
                         imagePath: 'assets/images/Aspirant.png',
                         onTap: busy ? null : () => _pick(ProfileKind.aspirant),
                       ),
@@ -108,7 +105,7 @@ class _CategoryPageState extends ConsumerState<CategoryPage> {
                       _CategoryCard(
                         title: 'Guru',
                         description:
-                            'Share expertise and manage bookings with clients.',
+                            '',
                         imagePath: 'assets/images/Guru.png',
                         onTap: busy ? null : () => _pick(ProfileKind.guru),
                       ),
