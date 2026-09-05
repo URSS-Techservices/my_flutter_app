@@ -52,4 +52,18 @@ class Session {
   /// Account type chosen but profile not finished → resume profile onboarding.
   bool get needsProfileOnboarding =>
       status == SessionStatus.onboardingRequired && accountType != null;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Session &&
+          status == other.status &&
+          uid == other.uid &&
+          email == other.email &&
+          accountType == other.accountType &&
+          onboardingCompleted == other.onboardingCompleted;
+
+  @override
+  int get hashCode =>
+      Object.hash(status, uid, email, accountType, onboardingCompleted);
 }
