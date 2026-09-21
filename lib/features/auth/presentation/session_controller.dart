@@ -96,9 +96,11 @@ class AuthActionController extends StateNotifier<AsyncValue<void>> {
     state = await AsyncValue.guard(() => _repo.signInWithApple());
   }
 
-  Future<void> signOut() async {
+  /// Returns true when sign-out succeeded.
+  Future<bool> signOut() async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() => _repo.signOut());
+    return !state.hasError;
   }
 }
 

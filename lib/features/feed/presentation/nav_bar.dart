@@ -25,24 +25,26 @@ class NavBar extends StatelessWidget {
       data: MediaQuery.of(context).copyWith(
         textScaler: MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.2),
       ),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(12, 0, 12, bottom > 0 ? 4 : 10),
-        child: Material(
-          color: Colors.white,
-          elevation: 12,
-          shadowColor: Colors.black.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(28),
-          child: SizedBox(
-            height: height,
-            child: Row(
-              children: [
-                _tab(Icons.home_rounded, 'Home', 0, compact),
-                _tab(Icons.search_rounded, 'Search', 1, compact),
-                _tab(Icons.explore_rounded, 'Explore', 2, compact),
-                _add(compact),
-                _tab(Icons.favorite_border_rounded, 'Activity', 4, compact),
-                _tab(Icons.person_outline_rounded, 'Profile', 5, compact),
-              ],
+      child: Builder(
+        builder: (context) => Padding(
+          padding: EdgeInsets.fromLTRB(12, 0, 12, bottom > 0 ? 4 : 10),
+          child: Material(
+            color: Colors.white,
+            elevation: 12,
+            shadowColor: Colors.black.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(28),
+            child: SizedBox(
+              height: height,
+              child: Row(
+                children: [
+                  _tab(Icons.home_rounded, 'Home', 0, compact),
+                  _tab(Icons.search_rounded, 'Search', 1, compact),
+                  _tab(Icons.explore_rounded, 'Explore', 2, compact),
+                  _add(compact),
+                  _tab(Icons.favorite_border_rounded, 'Activity', 4, compact),
+                  _tab(Icons.person_outline_rounded, 'Profile', 5, compact),
+                ],
+              ),
             ),
           ),
         ),

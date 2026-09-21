@@ -19,11 +19,11 @@ import 'package:halo/screens/profile/widgets/common/profile_post_image_url.dart'
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
+import 'package:halo/features/auth/presentation/logout.dart';
 
 
 // Local pages (paths adjust kar lena agar different ho)
 import '../editprofilepage.dart';
-import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/Bottom Pages/saved_posts_page.dart';
@@ -518,16 +518,7 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
   }
 
   Future<void> _signOut() async {
-    try {
-      await _auth.signOut();
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (ctx) => LoginPage()),
-      );
-    } catch (e) {
-      HaloToast.show('Logout failed');
-    }
+    await logout(context);
   }
 
   // ===================================================================
@@ -2590,15 +2581,12 @@ class _ProfilePageImprovedState extends State<ProfilePageImproved>
                           ),
                         );
                       } else if (value == 'Settings') {
-                        final result = await Navigator.push(
+                        await Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (ctx) => SettingsPage(),
                           ),
                         );
-                        if (result == 'logout') {
-                          await _signOut();
-                        }
                       } else if (value == 'Logout') {
                         await _signOut();
                       }

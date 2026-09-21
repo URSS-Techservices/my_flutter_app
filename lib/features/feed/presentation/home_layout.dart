@@ -80,8 +80,15 @@ String feedCount(int n) {
   return '$n';
 }
 
+final Map<int, String> _timeAgoCache = {};
+
 String feedTimeAgo(DateTime? dt) {
   if (dt == null) return '';
+  final key = dt.millisecondsSinceEpoch ~/ 60000;
+  return _timeAgoCache[key] ??= _computeTimeAgo(dt);
+}
+
+String _computeTimeAgo(DateTime dt) {
   final diff = DateTime.now().difference(dt);
   if (diff.inSeconds < 60) return 'Just now';
   if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';

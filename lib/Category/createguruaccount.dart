@@ -1,4 +1,5 @@
 import 'package:halo/utils/search_utils.dart';
+import 'package:halo/features/search/domain/interest_tags.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -257,6 +258,8 @@ class _CreateGuruAccount extends ConsumerState<CreateGuruAccount> {
         'location': _location.text.trim(),
         'profession': _selectedProfessionType,
         'areas_of_specialization': _selectedSpecializations,
+        'interestTags':
+            buildInterestTags([_selectedSpecializations, _selectedProfessionType]),
         'experience_level': _experienceLevel,
         'languages_spoken': _selectedLanguages,
         'hourly_fees': _hourlyfees.text.trim(),
@@ -503,7 +506,7 @@ class _CreateGuruAccount extends ConsumerState<CreateGuruAccount> {
       'Other',
     ];
 
-    final specializationOptions = [
+    final specializationOptions = [ // these option is comin in profile section
       'Weight Loss',
       'Muscle Gain',
       'Functional Training',

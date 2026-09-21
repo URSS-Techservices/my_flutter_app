@@ -85,10 +85,5 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/images/bio.png
-    - assets/images/Profile.png
-    - assets/images/Halo.png
-    - assets/images/Aspirant.png
-    - assets/images/Guru.png
-    - assets/images/Wellness.png
+    - assets/images/
     - assets/svg_icons/

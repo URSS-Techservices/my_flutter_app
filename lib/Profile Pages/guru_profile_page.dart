@@ -14,13 +14,13 @@ import 'package:permission_handler/permission_handler.dart';
 
 // local pages
 import '../../editprofilepage.dart';
-import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:halo/utils/search_utils.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:halo/chat/chat_screen.dart';
 import 'package:halo/chat/chat_service.dart';
+import 'package:halo/features/auth/presentation/logout.dart';
 import 'package:halo/services/follow_service.dart';
 import 'package:halo/widgets/profile_image_interactions.dart';
 import 'package:halo/screens/profile/widgets/guru/guru_identity_block.dart';
@@ -978,16 +978,7 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
   }
 
   Future<void> _signOut() async {
-    try {
-      await _auth.signOut();
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (ctx) => LoginPage()),
-      );
-    } catch (e) {
-      HaloToast.show('Logout failed');
-    }
+    await logout(context);
   }
 
   // ===================================================================
@@ -1283,15 +1274,12 @@ class _GuruProfilePageState extends State<_GuruProfilePageStateful>
                             }
                           }
                         } else if (value == 'Settings') {
-                          final result = await Navigator.push(
+                          await Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (ctx) => SettingsPage(),
                             ),
                           );
-                          if (result == 'logout') {
-                            await _signOut();
-                          }
                         } else if (value == 'Logout') {
                           await _signOut();
                         }

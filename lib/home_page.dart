@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'interest_selection_page.dart';
 import 'package:halo/chat/chat_list_page.dart';
+import 'package:halo/features/auth/presentation/logout.dart';
 
 
 class HomePage extends StatelessWidget {
@@ -27,8 +28,7 @@ class HomePage extends StatelessWidget {
           IconButton(
             icon: Icon(Icons.logout),
             onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              Navigator.pop(context); // Go back to login page
+              await logout(context);
             },
           )
         ],

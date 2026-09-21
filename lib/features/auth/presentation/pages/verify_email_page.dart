@@ -5,9 +5,6 @@ import 'package:halo/core/halo_theme.dart';
 import 'package:halo/core/halo_toast.dart';
 import 'package:halo/features/auth/presentation/session_controller.dart';
 
-/// Shown by the gate whenever the signed-in email/password user has not
-/// verified their address yet. No Firebase here — everything routes through
-/// [authActionProvider]. Verification is mandatory before onboarding.
 class VerifyEmailPage extends ConsumerWidget {
   const VerifyEmailPage({super.key});
 

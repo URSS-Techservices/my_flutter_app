@@ -370,19 +370,30 @@ class FeedController extends StateNotifier<FeedState> {
     int? commentCount,
     int? shareCount,
   }) {
-    state = state.copyWith(
-      posts: [
-        for (final p in state.posts)
-          if (p.id == postId)
-            p.copyWith(
-              likeCount: likeCount,
-              commentCount: commentCount,
-              shareCount: shareCount,
-            )
-          else
-            p,
-      ],
-    );
+    final patched = [
+      for (final p in state.posts)
+        if (p.id == postId)
+          p.copyWith(
+            likeCount: likeCount,
+            commentCount: commentCount,
+            shareCount: shareCount,
+          )
+        else
+          p,
+    ];
+    final old = state.posts;
+    if (identical(patched, old)) return;
+    var same = patched.length == old.length;
+    if (same) {
+      for (var i = 0; i < patched.length; i++) {
+        if (!identical(patched[i], old[i])) {
+          same = false;
+          break;
+        }
+      }
+    }
+    if (same) return;
+    state = state.copyWith(posts: patched);
   }
 
   Future<void> _fetch({required bool refresh}) async {

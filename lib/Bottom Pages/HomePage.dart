@@ -18,6 +18,7 @@ import 'package:halo/Profile%20Pages/aspirant_profile_page.dart' as aspirant;
 import 'package:halo/Profile%20Pages/guru_profile_page.dart' as guru;
 import 'package:halo/Profile%20Pages/wellness_profile_page.dart' as wellness;
 import 'package:halo/chat/chat_list_page.dart';
+import 'package:halo/features/auth/presentation/logout.dart';
 import 'package:halo/features/feed/presentation/home_page.dart' as feed;
 import 'package:halo/features/feed/presentation/nav_bar.dart';
 
@@ -136,7 +137,7 @@ class _HomePageState extends State<HomePage> {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
-              await FirebaseAuth.instance.signOut();
+              await logout(this.context);
             },
             child: const Text('Log out', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
           ),

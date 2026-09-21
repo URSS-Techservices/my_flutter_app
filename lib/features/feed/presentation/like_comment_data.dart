@@ -43,53 +43,55 @@ class _LikeCommentDataState extends ConsumerState<LikeCommentData> {
       data: MediaQuery.of(context).copyWith(
         textScaler: MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.3),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 2, 8, 0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                InstantHeartButton(
-                  liked: like.liked,
-                  size: icon,
-                  onTap: () => _like(uid),
-                ),
-                _count(
-                  like.count,
-                  onTap: like.count > 0 ? () => showPostLikers(context, post.id) : null,
-                ),
-                _btn(
-                  icon: Icons.chat_bubble_outline_rounded,
-                  count: comments,
-                  size: icon,
-                  onTap: () => showPostComments(context, post),
-                ),
-                _btn(
-                  icon: Icons.send_outlined,
-                  count: shares,
-                  size: icon,
-                  onTap: () => _share(),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: () => _save(uid),
-                  padding: const EdgeInsets.all(6),
-                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                  icon: Icon(
-                    saved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+      child: Builder(
+        builder: (context) => Padding(
+          padding: const EdgeInsets.fromLTRB(8, 2, 8, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  InstantHeartButton(
+                    liked: like.liked,
                     size: icon,
-                    color: const Color(0xFF262626),
+                    onTap: () => _like(uid),
                   ),
-                ),
-              ],
-            ),
-            if (like.count > 0)
-              _LikedByLine(
-                count: like.count,
-                onTap: () => showPostLikers(context, post.id),
+                  _count(
+                    like.count,
+                    onTap: like.count > 0 ? () => showPostLikers(context, post.id) : null,
+                  ),
+                  _btn(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    count: comments,
+                    size: icon,
+                    onTap: () => showPostComments(context, post),
+                  ),
+                  _btn(
+                    icon: Icons.send_outlined,
+                    count: shares,
+                    size: icon,
+                    onTap: () => _share(),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => _save(uid),
+                    padding: const EdgeInsets.all(6),
+                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                    icon: Icon(
+                      saved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                      size: icon,
+                      color: const Color(0xFF262626),
+                    ),
+                  ),
+                ],
               ),
-          ],
+              if (like.count > 0)
+                _LikedByLine(
+                  count: like.count,
+                  onTap: () => showPostLikers(context, post.id),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -317,6 +319,7 @@ class _CommentsSheetState extends ConsumerState<_CommentsSheet> {
                     itemCount: list.length,
                     itemBuilder: (_, i) {
                       return _CommentRow(
+                        key: ValueKey(list[i].id),
                         postId: widget.post.id,
                         comment: list[i],
                       );
@@ -365,7 +368,7 @@ class _CommentRow extends ConsumerWidget {
   final String postId;
   final CommentData comment;
 
-  const _CommentRow({required this.postId, required this.comment});
+  const _CommentRow({super.key, required this.postId, required this.comment});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

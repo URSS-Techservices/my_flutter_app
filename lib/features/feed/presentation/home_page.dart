@@ -150,7 +150,6 @@ class _HomePageState extends ConsumerState<HomePage> {
                           ),
                         ),
                       ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 12)),
                   ],
                 ),
               ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:halo/features/search/domain/interest_tags.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -300,6 +301,7 @@ class _CreateAspirantAccountState extends ConsumerState<CreateAspirantAccount> {
         'date_of_birth': _dobController.text.trim(),
         'location': _locationController.text.trim(),
         'fitness_goals': _selectedFitnessGoals,
+        'interestTags': buildInterestTags([_selectedFitnessGoals]),
         'fitness_level': _selectedFitnessLevel,
         'preferred_locations': _selectedPreferredLocations,
         'health_concerns': _healthConcernsController.text.trim(),

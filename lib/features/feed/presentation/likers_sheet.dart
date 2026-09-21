@@ -90,7 +90,7 @@ class _LikersSheet extends ConsumerWidget {
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (_, i) {
                     final person = list[i];
-                    return _LikerTile(person: person);
+                    return _LikerTile(key: ValueKey(person.userId), person: person);
                   },
                 );
               },
@@ -105,7 +105,7 @@ class _LikersSheet extends ConsumerWidget {
 class _LikerTile extends StatelessWidget {
   final LikerData person;
 
-  const _LikerTile({required this.person});
+  const _LikerTile({super.key, required this.person});
 
   @override
   Widget build(BuildContext context) {

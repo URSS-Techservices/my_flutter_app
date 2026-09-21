@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:halo/features/auth/presentation/logout.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -1020,6 +1021,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _showLogoutConfirmation() {
+    final pageContext = context;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -1052,10 +1054,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             onPressed: () async {
               Navigator.pop(context); // close dialog
-              await _auth.signOut(); // ensure Firebase user is signed out
-              if (context.mounted) {
-                Navigator.pop(context, 'logout');
-              }
+              if (pageContext.mounted) await logout(pageContext);
             },
             child: Text(
               'Logout',

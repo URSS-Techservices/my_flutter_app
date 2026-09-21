@@ -11,6 +11,7 @@ class FittedPostImage extends ConsumerStatefulWidget {
   final String url;
   final String thumbUrl;
   final int cacheWidth;
+  final double? storedAspectRatio;
 
   const FittedPostImage({
     super.key,
@@ -19,6 +20,7 @@ class FittedPostImage extends ConsumerStatefulWidget {
     required this.url,
     this.thumbUrl = '',
     required this.cacheWidth,
+    this.storedAspectRatio,
   });
 
   @override
@@ -59,6 +61,17 @@ class _FittedPostImageState extends ConsumerState<FittedPostImage> {
 
   void _probe() {
     if (!mounted || _probed || widget.url.isEmpty) return;
+    if (widget.storedAspectRatio != null) {
+      _probed = true;
+      reportMediaAspect(
+        ref,
+        isMounted: () => mounted,
+        postId: widget.postId,
+        index: widget.index,
+        aspect: widget.storedAspectRatio!,
+      );
+      return;
+    }
     _probed = true;
     final stream = CachedNetworkImageProvider(widget.url)
         .resolve(const ImageConfiguration());

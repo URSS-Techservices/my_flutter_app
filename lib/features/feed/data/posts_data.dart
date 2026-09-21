@@ -541,7 +541,7 @@ class PostsData implements FeedRepository {
     if (postId.isEmpty) return Stream.value(PostCounts.zero);
     final postRef = _firestore.collection('posts').doc(postId);
     late final StreamController<PostCounts> out;
-    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? postSub;
+   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? postSub;
     StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? likeSub;
     StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? commentSub;
     var postReady = false;

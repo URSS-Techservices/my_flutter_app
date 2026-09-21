@@ -143,6 +143,7 @@ class _MediaPage extends StatelessWidget {
       url: media.url,
       thumbUrl: media.thumbUrl,
       cacheWidth: cacheWidth,
+      storedAspectRatio: media.aspectRatio,
     );
   }
 }

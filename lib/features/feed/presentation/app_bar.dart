@@ -7,6 +7,12 @@ import 'package:halo/features/feed/presentation/home_layout.dart';
 
 /// Reusable Halo top bar. Use on home or any other screen.
 class AppBarUi extends ConsumerWidget implements PreferredSizeWidget {
+  static final _titleStyle = GoogleFonts.pacifico(
+    fontSize: 28,
+    color: kSecondaryColor,
+    height: 1.1,
+  );
+
   final String title;
   final VoidCallback? onMenu;
   final VoidCallback? onBell;
@@ -48,44 +54,42 @@ class AppBarUi extends ConsumerWidget implements PreferredSizeWidget {
         data: MediaQuery.of(context).copyWith(
           textScaler: MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.25),
         ),
-        child: SizedBox(
-        height: 56 * scale.clamp(1.0, 1.25),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Row(
-              children: [
-                if (onMenu != null)
-                  _icon(Icons.menu_rounded, onMenu!, iconSize)
-                else
-                  const SizedBox(width: 8),
-                Expanded(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      style: GoogleFonts.pacifico(
-                        fontSize: 28,
-                        color: kSecondaryColor,
-                        height: 1.1,
+        child: Builder(
+          builder: (context) => SizedBox(
+            height: 56 * scale.clamp(1.0, 1.25),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  if (onMenu != null)
+                    _icon(Icons.menu_rounded, onMenu!, iconSize)
+                  else
+                    const SizedBox(width: 8),
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                      style: _titleStyle,
                       ),
                     ),
                   ),
-                ),
-                if (extraActions != null) ...extraActions!,
-                if (showBell && onBell != null)
-                  _icon(Icons.notifications_none_rounded, onBell!, iconSize, dot: unread),
-                if (showChat && onChat != null)
-                  _icon(Icons.chat_bubble_outline_rounded, onChat!, iconSize),
-                if (showPhoto && onPhoto != null) ...[
-                  const SizedBox(width: 4),
-                  GestureDetector(
-                    onTap: onPhoto,
-                    child: FeedAvatar(url: photo, radius: 16),
-                  ),
-                  const SizedBox(width: 6),
+                  if (extraActions != null) ...extraActions!,
+                  if (showBell && onBell != null)
+                    _icon(Icons.notifications_none_rounded, onBell!, iconSize, dot: unread),
+                  if (showChat && onChat != null)
+                    _icon(Icons.chat_bubble_outline_rounded, onChat!, iconSize),
+                  if (showPhoto && onPhoto != null) ...[
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      onTap: onPhoto,
+                      child: FeedAvatar(url: photo, radius: 16),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

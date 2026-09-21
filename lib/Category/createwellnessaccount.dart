@@ -1,4 +1,5 @@
 import 'package:halo/utils/search_utils.dart';
+import 'package:halo/features/search/domain/interest_tags.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -253,6 +254,8 @@ class _CreateWellnessAccount extends ConsumerState<CreateWellnessAccount> {
         'location': _location.text.trim(),
         'year_of_commencement': _yearOfCommencement.text.trim(),
         'facilities_services': _selectedFacilities,
+        'interestTags':
+            buildInterestTags([_selectedFacilities, _selectedBusinessType]),
         'certifications': _selectedFiles,
         'membership_plans': _membershipPlans.text.trim(),
         'working_hours': _workingHours.text.trim(),

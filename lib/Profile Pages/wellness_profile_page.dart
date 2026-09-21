@@ -17,7 +17,6 @@ import '../Sections/Wellness Section/wellness_analytics_section.dart';
 
 // -------------------- EXISTING PAGES --------------------
 import '../../editprofilepage.dart';
-import 'package:halo/features/auth/presentation/pages/login_page.dart';
 import 'package:halo/Bottom Pages/PrivacySettingsPage.dart';
 import 'package:halo/Bottom Pages/SettingsPage.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -864,19 +863,7 @@ class _WellnessProfilePageState extends State<WellnessProfilePage>
                           MaterialPageRoute(
                             builder: (_) => SettingsPage(),
                           ),
-                        ).then((result) async {
-                          if (result == 'logout') {
-                            await _auth.signOut();
-                            if (!mounted) return;
-
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => LoginPage(),
-                              ),
-                            );
-                          }
-                        });
+                        );
                       }
                     },
                     itemBuilder: (context) => const [

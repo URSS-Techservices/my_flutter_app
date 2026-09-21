@@ -240,13 +240,25 @@ class FirebaseAuthRepository implements AuthRepository {
 
   @override
   Future<void> signOut() async {
-    try {
-      await _googleSignIn.signOut();
-    } catch (_) {
-      // Google sign-out is best-effort. Firebase sign-out below is what actually
-      // clears the session for our OnboardingGate.
-    }
+    // Firebase first: it is local and instant, and it is what flips the session
+    // so OnboardingGate shows the login page right away.
     await _auth.signOut();
+    // Google must also forget the account, otherwise the next "Sign in with
+    // Google" silently reopens the same profile. disconnect() talks to the
+    // network, so it runs in the background and never delays the UI.
+    _forgetGoogleAccount();
+  }
+
+  Future<void> _forgetGoogleAccount() async {
+    try {
+      await _googleSignIn.disconnect();
+    } catch (_) {
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {
+        // Best effort only; the Firebase session is already cleared.
+      }
+    }
   }
 
   @override
