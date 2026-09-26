@@ -8,6 +8,8 @@ import 'package:halo/features/feed/presentation/media_aspect_data.dart';
 import 'package:halo/features/feed/presentation/post_image.dart';
 import 'package:halo/features/feed/presentation/post_media_chrome.dart';
 import 'package:halo/features/feed/presentation/post_video.dart';
+import 'package:halo/features/feed/presentation/reel_viewer_page.dart';
+import 'package:halo/services/feed_reel_prefetch.dart';
 
 class PostPhoto extends ConsumerStatefulWidget {
   final PostData post;
@@ -32,6 +34,27 @@ class _PostPhotoState extends ConsumerState<PostPhoto> {
   void dispose() {
     _pc.dispose();
     super.dispose();
+  }
+
+  void _prefetchOnTouch() {
+    final items = widget.post.media;
+    if (items.isEmpty || !items.first.isVideo) return;
+    FeedReelPrefetch.instance.start(
+      postId: widget.post.id,
+      videoUrl: items.first.url,
+      fallbackUrl: items.first.fallbackUrl,
+    );
+  }
+
+  void _openFullscreen(BuildContext context) {
+    final ids = ref.read(feedPostIdsProvider);
+    final index = ids.indexOf(widget.post.id);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReelViewerPage(postIds: ids, initialIndex: index < 0 ? 0 : index),
+      ),
+    );
   }
 
   void _doubleTap() {
@@ -63,6 +86,8 @@ class _PostPhotoState extends ConsumerState<PostPhoto> {
     final muted = ref.watch(feedMutedProvider);
 
     return GestureDetector(
+      onTapDown: (_) => _prefetchOnTouch(),
+      onTap: () => _openFullscreen(context),
       onDoubleTap: widget.onDoubleLike == null ? null : _doubleTap,
       child: AnimatedSize(
         duration: const Duration(milliseconds: 180),
@@ -131,6 +156,7 @@ class _MediaPage extends StatelessWidget {
         postId: postId,
         index: index,
         videoUrl: media.url,
+        fallbackUrl: media.fallbackUrl,
         thumbUrl: media.thumbUrl,
         cacheWidth: cacheWidth,
         muted: muted,

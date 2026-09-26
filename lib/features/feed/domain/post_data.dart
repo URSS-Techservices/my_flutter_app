@@ -8,12 +8,16 @@ class PostMedia {
   final String thumbUrl;
   /// Width / height. Null when the post did not store dimensions.
   final double? aspectRatio;
+  /// Single-bitrate MP4 to retry if [url] (HLS master) fails to play.
+  /// Empty when there's nothing else to fall back to.
+  final String fallbackUrl;
 
   const PostMedia({
     required this.isVideo,
     required this.url,
     required this.thumbUrl,
     this.aspectRatio,
+    this.fallbackUrl = '',
   });
 }
 

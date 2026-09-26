@@ -7,7 +7,6 @@ import 'package:halo/features/feed/domain/post_data.dart';
 import 'package:halo/models/story_model.dart';
 import 'package:halo/services/feed_service.dart';
 import 'package:halo/services/follow_service.dart';
-import 'package:halo/services/reel_player_lifecycle.dart';
 import 'package:halo/services/save_service.dart';
 import 'package:halo/services/story_service.dart';
 import 'package:halo/services/video_playback_resolver.dart';
@@ -222,12 +221,13 @@ class PostsData implements FeedRepository {
         final m = Map<String, dynamic>.from(item);
         final type = (m['type'] ?? 'image').toString();
         if (type == 'video') {
-          final video = _videoUrl(d, m);
+          final video = _videoUrls(d, m);
           var thumb = _thumb(m, d);
-          if (thumb.isEmpty) thumb = MediaUrl.poster(video);
+          if (thumb.isEmpty) thumb = MediaUrl.poster(video.url);
           items.add(PostMedia(
             isVideo: true,
-            url: video,
+            url: video.url,
+            fallbackUrl: video.fallback,
             thumbUrl: thumb.isNotEmpty ? MediaUrl.thumb(thumb) : '',
             aspectRatio: _aspect(m, d),
           ));
@@ -272,14 +272,15 @@ class PostsData implements FeedRepository {
       ];
     }
 
-    final video = _videoUrl(d, const {});
-    if (video.isNotEmpty) {
+    final video = _videoUrls(d, const {});
+    if (video.url.isNotEmpty) {
       var thumb = _thumb(const {}, d);
-      if (thumb.isEmpty) thumb = MediaUrl.poster(video);
+      if (thumb.isEmpty) thumb = MediaUrl.poster(video.url);
       return [
         PostMedia(
           isVideo: true,
-          url: video,
+          url: video.url,
+          fallbackUrl: video.fallback,
           thumbUrl: thumb.isNotEmpty ? MediaUrl.thumb(thumb) : '',
           aspectRatio: _aspect(const {}, d),
         ),
@@ -288,26 +289,41 @@ class PostsData implements FeedRepository {
     return const [];
   }
 
-  String _videoUrl(Map<String, dynamic> d, Map<String, dynamic> m) {
+  /// A flat, single-bitrate MP4 is the primary URL whenever one has been
+  /// processed. It starts playing after **one** HTTP round trip — HLS needs
+  /// master playlist + variant playlist + first segment (three) — and unlike
+  /// HLS it can be disk-cached client-side, so a re-watched post plays
+  /// instantly from local cache on the next view. We don't have a CDN in
+  /// front of Storage, so adaptive bitrate matters less here than raw start
+  /// speed and cacheability. HLS (adaptive bitrate) becomes [fallback] —
+  /// used only for the rare case no processed MP4 exists yet, or if the MP4
+  /// itself fails to play.
+  ({String url, String fallback}) _videoUrls(
+    Map<String, dynamic> d,
+    Map<String, dynamic> m,
+  ) {
     final resolved = resolveVideoPlayback(postData: d, mediaItem: m);
-    if (ReelPlatformPolicy.isAndroid) {
-      final mp4 = pickProcessedMp4(m, d)?.trim() ?? '';
-      if (mp4.isNotEmpty &&
-          (resolved.primaryUrl.contains('.m3u8') ||
-              resolved.status == ReelStatus.readyHls)) {
-        return mp4;
-      }
-      if (resolved.fallbackUrl.isNotEmpty &&
-          resolved.primaryUrl.contains('.m3u8')) {
-        return resolved.fallbackUrl;
-      }
+    final mp4 = pickProcessedMp4(m, d)?.trim() ?? '';
+    if (mp4.isNotEmpty) {
+      final hls = resolved.primaryUrl.contains('.m3u8') ? resolved.primaryUrl.trim() : '';
+      final fallback = hls.isNotEmpty ? hls : resolved.fallbackUrl.trim();
+      return (url: mp4, fallback: fallback == mp4 ? '' : fallback);
     }
-    return resolved.primaryUrl.trim();
+    final primary = resolved.primaryUrl.trim();
+    var fallback = resolved.fallbackUrl.trim();
+    if (fallback.isEmpty || fallback == primary) fallback = '';
+    return (url: primary, fallback: fallback);
   }
 
   double? _aspect(Map<String, dynamic> m, Map<String, dynamic> d) {
-    final w = _num(m['width'] ?? m['originalWidth'] ?? d['width'] ?? d['originalWidth']);
-    final h = _num(m['height'] ?? m['originalHeight'] ?? d['height'] ?? d['originalHeight']);
+    final w = _num(
+      m['width'] ?? m['sourceWidth'] ?? m['intrinsicWidth'] ?? m['originalWidth'] ??
+      d['width'] ?? d['sourceWidth'] ?? d['originalWidth'],
+    );
+    final h = _num(
+      m['height'] ?? m['sourceHeight'] ?? m['intrinsicHeight'] ?? m['originalHeight'] ??
+      d['height'] ?? d['sourceHeight'] ?? d['originalHeight'],
+    );
     if (w != null && h != null && w > 0 && h > 0) {
       return w / h;
     }

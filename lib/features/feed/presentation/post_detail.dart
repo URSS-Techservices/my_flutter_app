@@ -75,7 +75,7 @@ class PostDetail extends ConsumerWidget {
                 if (!isMe && post.userId.isNotEmpty)
                   FollowButton(userId: post.userId),
                 IconButton(
-                  onPressed: () => _more(context, ref, uid, isMe),
+                  onPressed: () => showPostQuickActions(context, ref, post),
                   icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF262626)),
                   visualDensity: VisualDensity.compact,
                 ),
@@ -116,82 +116,78 @@ class PostDetail extends ConsumerWidget {
       ),
     );
   }
+}
 
-  Future<void> _message(BuildContext context, String uid) async {
-    if (uid.isEmpty || post.userId.isEmpty) return;
-    try {
-      final chatId = await ChatService().getOrCreateChatId(uid, post.userId);
-      if (!context.mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            chatId: chatId,
-            currentUserId: uid,
-            otherUserId: post.userId,
-          ),
-        ),
-      );
-    } catch (_) {
-      HaloToast.show('Could not open chat');
-    }
-  }
-
-  void _more(
-    BuildContext context,
-    WidgetRef ref,
-    String uid,
-    bool isMe,
-  ) {
-    final following = ref.read(followOptimisticProvider)[post.userId] ??
-        ref.read(followingProvider(post.userId)).valueOrNull ??
-        false;
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            if (!isMe)
-              ListTile(
-                leading: const Icon(Icons.chat_bubble_outline_rounded),
-                title: const Text('Message'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _message(context, uid);
-                },
-              ),
-            if (!isMe)
-              ListTile(
-                leading: Icon(following ? Icons.person_remove_outlined : Icons.person_add_outlined),
-                title: Text(following ? 'Unfollow' : 'Follow'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  toggleFollow(ref, otherId: post.userId, shouldFollow: !following);
-                },
-              ),
-            ListTile(
-              leading: const Icon(Icons.close_rounded),
-              title: const Text('Close'),
-              onTap: () => Navigator.pop(ctx),
-            ),
-          ],
-        ),
+Future<void> _openChatWith(BuildContext context, String uid, String otherUserId) async {
+  if (uid.isEmpty || otherUserId.isEmpty) return;
+  try {
+    final chatId = await ChatService().getOrCreateChatId(uid, otherUserId);
+    if (!context.mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(chatId: chatId, currentUserId: uid, otherUserId: otherUserId),
       ),
     );
+  } catch (_) {
+    HaloToast.show('Could not open chat');
   }
+}
+
+/// Long-press / "..." quick-actions sheet: Message, Follow/Unfollow, Close.
+/// Shared by the feed's [PostDetail] and the fullscreen reel viewer so the
+/// behavior stays identical wherever a post is shown.
+void showPostQuickActions(BuildContext context, WidgetRef ref, PostData post) {
+  final uid = ref.read(currentUidProvider);
+  final isMe = uid.isNotEmpty && uid == post.userId;
+  final following = ref.read(followOptimisticProvider)[post.userId] ??
+      ref.read(followingProvider(post.userId)).valueOrNull ??
+      false;
+  showModalBottomSheet(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          if (!isMe)
+            ListTile(
+              leading: const Icon(Icons.chat_bubble_outline_rounded),
+              title: const Text('Message'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openChatWith(context, uid, post.userId);
+              },
+            ),
+          if (!isMe)
+            ListTile(
+              leading: Icon(following ? Icons.person_remove_outlined : Icons.person_add_outlined),
+              title: Text(following ? 'Unfollow' : 'Follow'),
+              onTap: () {
+                Navigator.pop(ctx);
+                toggleFollow(ref, otherId: post.userId, shouldFollow: !following);
+              },
+            ),
+          ListTile(
+            leading: const Icon(Icons.close_rounded),
+            title: const Text('Close'),
+            onTap: () => Navigator.pop(ctx),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 Future<void> toggleFollow(

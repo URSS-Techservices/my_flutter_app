@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
@@ -22,12 +23,18 @@ class UploadService {
     return ref.getDownloadURL();
   }
 
+  /// [maxWidth] caps the highest-resolution tier (Balanced/Data Saver
+  /// profiles); `null` keeps the original High Quality tiering.
+  /// [onProgress] reports aggregate upload fraction (0..1) across all tiers.
   Future<Map<String, dynamic>> uploadAdaptivePostImage({
     required File imageFile,
     required String postId,
     required int index,
+    int? maxWidth,
+    void Function(double progress)? onProgress,
   }) async {
-    final hash = await _sha256OfFile(imageFile);
+    final fileHash = await _sha256OfFile(imageFile);
+    final hash = maxWidth == null ? fileHash : '${fileHash}_mw$maxWidth';
     final hashDoc = _firestore.collection('media_hashes').doc(hash);
     final hashSnap = await hashDoc.get();
     if (hashSnap.exists) {
@@ -38,6 +45,7 @@ class UploadService {
               .toString()
               .trim()
               .isNotEmpty)) {
+        onProgress?.call(1);
         return {
           ...cachedMedia,
           'hash': hash,
@@ -45,7 +53,7 @@ class UploadService {
       }
     }
 
-    final generated = await _imageService.buildAdaptiveSet(imageFile);
+    final generated = await _imageService.buildAdaptiveSet(imageFile, maxWidth: maxWidth);
 
     final suffix = index == 0 ? '' : '_$index';
     final uid = FirebaseAuth.instance.currentUser!.uid;
@@ -55,7 +63,7 @@ class UploadService {
       cacheControl: 'public,max-age=31536000,immutable',
     );
 
-    final tasks = <Future<void>>[];
+    final tasks = <UploadTask>[];
     final refs = <String, Reference>{};
 
     if (generated.hasThumb) {
@@ -74,7 +82,26 @@ class UploadService {
       refs['full'] = fullRef;
     }
 
+    List<StreamSubscription<TaskSnapshot>>? subs;
+    if (onProgress != null && tasks.isNotEmpty) {
+      final totals = List<int>.filled(tasks.length, 0);
+      final sent = List<int>.filled(tasks.length, 0);
+      subs = [
+        for (var i = 0; i < tasks.length; i++)
+          tasks[i].snapshotEvents.listen((snap) {
+            totals[i] = snap.totalBytes;
+            sent[i] = snap.bytesTransferred;
+            final totalSum = totals.fold<int>(0, (a, b) => a + b);
+            final sentSum = sent.fold<int>(0, (a, b) => a + b);
+            if (totalSum > 0) onProgress(sentSum / totalSum);
+          }),
+      ];
+    }
+
     await Future.wait(tasks);
+    for (final s in subs ?? const <StreamSubscription<TaskSnapshot>>[]) {
+      await s.cancel();
+    }
     final resolved = <String, String>{};
     for (final entry in refs.entries) {
       resolved[entry.key] = await entry.value.getDownloadURL();
@@ -102,6 +129,8 @@ class UploadService {
     return result;
   }
 
+  /// [onProgress] reports upload fraction (0..1) for the (dominant) video
+  /// file; the thumbnail upload is small enough to ignore for progress.
   Future<Map<String, dynamic>> uploadVideoWithThumbnail({
     required File videoFile,
     required String postId,
@@ -109,6 +138,7 @@ class UploadService {
     Uint8List? thumbnailBytes,
     int? trimStartMs,
     int? trimEndMs,
+    void Function(double progress)? onProgress,
   }) async {
     final suffix = index == 0 ? '' : '_$index';
     final uid = FirebaseAuth.instance.currentUser!.uid;
@@ -128,7 +158,7 @@ class UploadService {
       throw VideoUploadRejectedException(rejection);
     }
 
-    await videoRef.putFile(
+    final videoTask = videoRef.putFile(
       videoFile,
       SettableMetadata(
         contentType: 'video/mp4',
@@ -139,6 +169,16 @@ class UploadService {
         },
       ),
     );
+    StreamSubscription<TaskSnapshot>? sub;
+    if (onProgress != null) {
+      sub = videoTask.snapshotEvents.listen((snap) {
+        if (snap.totalBytes > 0) {
+          onProgress(snap.bytesTransferred / snap.totalBytes);
+        }
+      });
+    }
+    await videoTask;
+    await sub?.cancel();
     final videoUrl = await videoRef.getDownloadURL();
     debugPrint('[UPLOAD_COMPLETE] postId=$postId index=$index');
 

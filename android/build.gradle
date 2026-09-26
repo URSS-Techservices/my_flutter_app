@@ -18,6 +18,9 @@ allprojects {
         google()
         mavenCentral()
         maven { url 'https://arthenica.github.io/ffmpeg-kit/android' }
+        // light_compressor's native dependency (com.github.AbedElazizShe:LightCompressor)
+        // is published on JitPack, not Maven Central.
+        maven { url 'https://jitpack.io' }
         jcenter() // Required for Spotify SDK (legacy)
     }
 }
@@ -52,6 +55,29 @@ subprojects { subproject ->
             }
             if (androidExt.namespace == null || androidExt.namespace.toString().trim().isEmpty()) {
                 androidExt.namespace = "auto.namespace.${subproject.name.replace('-', '_')}"
+            }
+        }
+    }
+}
+
+// light_compressor doesn't pin a Java/Kotlin compile target itself and picks
+// up mismatched defaults (Javac 1.8 vs Kotlin 21) under this project's newer
+// Kotlin/AGP toolchain. AGP sets its own Javac sourceCompatibility default
+// inside its own afterEvaluate hook, which runs after a plain subprojects{}
+// configureEach and silently overwrites it — gradle.projectsEvaluated fires
+// after every project's afterEvaluate has already run, so this always wins.
+// Scoped to just this module so it doesn't touch other plugins (e.g.
+// cloud_functions) that already set their own target.
+gradle.projectsEvaluated {
+    def lightCompressor = rootProject.findProject(":light_compressor")
+    if (lightCompressor != null) {
+        lightCompressor.tasks.withType(JavaCompile).configureEach {
+            sourceCompatibility = "11"
+            targetCompatibility = "11"
+        }
+        lightCompressor.tasks.matching { it.name.contains("Kotlin") }.configureEach { kotlinTask ->
+            if (kotlinTask.hasProperty("kotlinOptions")) {
+                kotlinTask.kotlinOptions.jvmTarget = "11"
             }
         }
     }

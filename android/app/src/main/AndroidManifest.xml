@@ -8,6 +8,8 @@
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- CameraController is created with enableAudio: true for video capture. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- ExoPlayer / better_player network reachability checks (Phase 8). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

@@ -27,11 +27,19 @@ class AdaptiveImageSet {
 class ImageService {
   static const int _quality = 93;
 
-  Future<AdaptiveImageSet> buildAdaptiveSet(File imageFile) async {
+  /// [maxWidth] optionally caps the highest-resolution tier generated (used
+  /// by the Balanced/Data Saver quality profiles). `null` preserves the
+  /// original fixed 300/720/1080 tiering.
+  Future<AdaptiveImageSet> buildAdaptiveSet(File imageFile, {int? maxWidth}) async {
     final source = imageFile.path;
     final size = await _readImageSize(imageFile);
     final originalWidth = size.$1;
     final originalHeight = size.$2;
+
+    int cap(int width) {
+      if (maxWidth == null) return width;
+      return width < maxWidth ? width : maxWidth;
+    }
 
     Uint8List? thumb;
     Uint8List? medium;
@@ -40,42 +48,44 @@ class ImageService {
     if (originalWidth < 720) {
       medium = await _compressToWidth(
         source,
-        targetWidth: originalWidth,
+        targetWidth: cap(originalWidth),
         originalWidth: originalWidth,
         originalHeight: originalHeight,
       );
     } else if (originalWidth < 1080) {
       thumb = await _compressToWidth(
         source,
-        targetWidth: 300,
+        targetWidth: cap(300),
         originalWidth: originalWidth,
         originalHeight: originalHeight,
       );
       medium = await _compressToWidth(
         source,
-        targetWidth: 720,
+        targetWidth: cap(720),
         originalWidth: originalWidth,
         originalHeight: originalHeight,
       );
     } else {
       thumb = await _compressToWidth(
         source,
-        targetWidth: 300,
+        targetWidth: cap(300),
         originalWidth: originalWidth,
         originalHeight: originalHeight,
       );
       medium = await _compressToWidth(
         source,
-        targetWidth: 720,
+        targetWidth: cap(720),
         originalWidth: originalWidth,
         originalHeight: originalHeight,
       );
-      full = await _compressToWidth(
-        source,
-        targetWidth: 1080,
-        originalWidth: originalWidth,
-        originalHeight: originalHeight,
-      );
+      if (maxWidth == null || maxWidth >= 1080) {
+        full = await _compressToWidth(
+          source,
+          targetWidth: 1080,
+          originalWidth: originalWidth,
+          originalHeight: originalHeight,
+        );
+      }
     }
 
     return AdaptiveImageSet(
