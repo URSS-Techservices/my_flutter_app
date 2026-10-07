@@ -1,0 +1,96 @@
+name: halo
+description: "A new Flutter project."
+
+publish_to: 'none'
+
+version: 1.0.0+13
+
+environment:
+  sdk: ^3.5.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  intl: ^0.20.0
+  image_picker: ^1.2.0
+  file_picker: 10.3.8
+  open_filex: ^4.5.0
+  video_player: ^2.5.0
+  fluttertoast: ^8.2.8
+  google_fonts: ^6.3.1
+  cupertino_icons: ^1.0.8
+
+  firebase_core: ^3.13.0
+  firebase_auth: ^5.5.2
+  cloud_firestore: ^5.6.5
+  firebase_storage: ^12.4.5
+  firebase_messaging: ^15.2.5
+  cloud_functions: ^5.3.4
+  firebase_app_check: ^0.3.2+8
+  google_sign_in: 6.2.1
+
+  # Others
+  cached_network_image: ^3.3.1
+  permission_handler: ^12.0.1
+  shared_preferences: ^2.3.2
+  cloudinary_public: ^0.23.1
+  http: ^1.2.2
+  camera: ^0.10.5+9
+  path_provider: ^2.1.4
+  url_launcher: ^6.3.1
+  location: ^6.0.2
+  geocoding: ^3.0.0
+  story_view: ^0.16.0
+  share_plus: ^7.2.1
+  visibility_detector: ^0.4.0+2
+  flutter_riverpod: ^2.6.1
+  video_thumbnail: ^0.5.3
+  flutter_image_compress: ^2.4.0
+  crypto: ^3.0.7
+  flutter_cache_manager: ^3.4.1
+  flutter_staggered_grid_view: ^0.7.0
+  media_info: ^0.12.0+2
+  flutter_svg: ^2.3.0
+  light_compressor: ^1.2.2
+  # 12.4.7 is the newest release that compiles on Flutter 3.41.
+  pro_image_editor: 12.4.7
+  pro_video_editor: '>=2.2.4 <2.3.0'
+
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.13.1
+
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  # Padded variants of assets/images/Halo.png. The adaptive foreground has to
+  # stay inside Android's 66/108 safe zone or the launcher crops and enlarges
+  # it, and it must be transparent for adaptive_icon_background to show.
+  image_path: "assets/images/icon_ios.png"
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: "assets/images/icon_foreground.png"
+  remove_alpha_ios: true
+
+dependency_overrides:
+  web: ^1.1.1
+  google_sign_in_ios: 5.7.1
+  # share_plus 7 / media_info pin mime ^1 but only call lookupMimeType,
+  # which is unchanged in mime 2 (required by pro_video_editor).
+  mime: ^2.0.0
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  config:
+    enable-swift-package-manager: false
+
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/svg_icons/

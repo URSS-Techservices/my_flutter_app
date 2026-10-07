@@ -1,0 +1,72 @@
+# =========================
+# Flutter & Dart
+# =========================
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+.metadata
+
+# =========================
+# Android
+# =========================
+android/key.properties
+android/app/*.keystore
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# =========================
+# Firebase / GCP secrets
+# =========================
+halo_backend/serviceAccountKey.json
+functions/.env
+
+# =========================
+# iOS
+# =========================
+**/ios/Flutter/.last_build_id
+
+# =========================
+# IDEs & Editors
+# =========================
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.atom/
+
+# =========================
+# OS / Misc
+# =========================
+.DS_Store
+*.log
+*.class
+*.pyc
+*.swp
+.history
+.svn/
+buildlog/
+migrate_working_dir/
+
+# =========================
+# Obfuscation & Symbols
+# =========================
+app.*.symbols
+app.*.map.json
+
+*.keystore
+*.jks
+
+# =========================
+# Backend (Node)
+# =========================
+node_modules/
+halo_backend/.env
+*.keystore
+*.jks

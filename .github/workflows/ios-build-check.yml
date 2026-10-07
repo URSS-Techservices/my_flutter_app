@@ -1,0 +1,32 @@
+name: iOS build check
+
+# Catches "this doesn't even compile for iOS" (plugin/version conflicts,
+# missing Podfile config, etc.) on every push — without needing a Mac
+# locally. This does NOT run on a simulator or test UI/playback behavior,
+# it only verifies the app builds.
+on:
+  push:
+    branches: [main, sahyog]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.6'
+          channel: stable
+
+      - run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        run: pod install
+        working-directory: ios
+
+      - name: Build iOS (no code signing)
+        run: flutter build ios --release --no-codesign
