@@ -11,16 +11,18 @@ import 'package:halo/screens/profile/pages/dynamic_profile_page.dart';
 
 /// "Recent Activity" — the 3 newest posts and follows. "Show more" expands
 /// the list in place, no new page.
-class AspirantActivity extends ConsumerStatefulWidget {
-  const AspirantActivity({super.key, required this.profileUserId});
+class ProfileActivitySection extends ConsumerStatefulWidget {
+  const ProfileActivitySection({super.key, required this.profileUserId});
 
   final String profileUserId;
 
   @override
-  ConsumerState<AspirantActivity> createState() => _AspirantActivityState();
+  ConsumerState<ProfileActivitySection> createState() =>
+      _ProfileActivitySectionState();
 }
 
-class _AspirantActivityState extends ConsumerState<AspirantActivity> {
+class _ProfileActivitySectionState
+    extends ConsumerState<ProfileActivitySection> {
   static const _shown = 3;
   bool _expanded = false;
 
@@ -90,9 +92,9 @@ class ProfileActivityList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final owner = ref.watch(aspirantProfileProvider(profileUserId).select(
+    final owner = ref.watch(profileProvider(profileUserId).select(
       (async) {
-        final b = async.valueOrNull?.basics;
+        final b = async.valueOrNull;
         return (name: b?.name ?? '', photo: b?.profilePhoto ?? '');
       },
     ));
@@ -223,15 +225,15 @@ class _RoundImage extends StatelessWidget {
         height: size,
         child: url.isEmpty
             ? const ColoredBox(
-                color: ProfileStyle.primaryLight,
-                child: Icon(Icons.person, color: ProfileStyle.primaryDark),
+                color: ProfileStyle.surface,
+                child: Icon(Icons.person, color: ProfileStyle.mutedText),
               )
             : CachedNetworkImage(
                 imageUrl: url,
                 fit: BoxFit.cover,
                 memCacheWidth: (size * dpr).round(),
                 errorWidget: (_, __, ___) =>
-                    const ColoredBox(color: ProfileStyle.primaryLight),
+                    const ColoredBox(color: ProfileStyle.surface),
               ),
       ),
     );

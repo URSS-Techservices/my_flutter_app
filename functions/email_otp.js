@@ -180,3 +180,13 @@ exports.verifyLoginOtp = onCall(publicCallable, async (request) => {
   const token = await admin.auth().createCustomToken(uid);
   return { token };
 });
+
+/**
+ * Username / mobile → email for password login. Runs on the server so the
+ * Firestore rules never have to let signed-out visitors read the `users`
+ * collection (which holds every email and phone number).
+ */
+exports.resolveLoginEmail = onCall(publicCallable, async (request) => {
+  const { email } = await findAuthUser(request.data && request.data.identifier);
+  return { email };
+});

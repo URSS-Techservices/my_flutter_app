@@ -24,7 +24,7 @@ class ProfileSocialLinks extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final data = ref.watch(aspirantProfileProvider(profileUserId).select(
+    final data = ref.watch(profileProvider(profileUserId).select(
       (async) {
         final p = async.valueOrNull;
         // A string key, so this only rebuilds when the links really change.
@@ -57,7 +57,7 @@ class ProfileSocialLinks extends ConsumerWidget {
       if (!isOwnProfile) return const SizedBox.shrink();
       cards.add(_SocialCard(
         icon: const Icon(Icons.add_circle_outline,
-            color: ProfileStyle.primaryDark, size: 30),
+            color: ProfileStyle.action, size: 30),
         title: 'Add social links',
         subtitle: 'Instagram, YouTube…',
         onTap: onAddLinks,
@@ -173,7 +173,7 @@ class _WebsiteIcon extends StatelessWidget {
       width: 30,
       height: 30,
       decoration: BoxDecoration(
-        color: ProfileStyle.primary,
+        color: ProfileStyle.action,
         borderRadius: BorderRadius.circular(8),
       ),
       child: const Icon(Icons.link, size: 18, color: Colors.white),

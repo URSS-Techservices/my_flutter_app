@@ -730,6 +730,20 @@ class PostsData implements FeedRepository {
   }
 
   @override
+  Future<void> deletePost({
+    required String userId,
+    required String postId,
+  }) async {
+    if (userId.isEmpty || postId.isEmpty) return;
+    final batch = _firestore.batch()
+      ..delete(_firestore.collection('posts').doc(postId))
+      ..update(_firestore.collection('users').doc(userId), {
+        'postsCount': FieldValue.increment(-1),
+      });
+    await batch.commit();
+  }
+
+  @override
   Future<PostData?> loadPost(String postId) async {
     if (postId.isEmpty) return null;
     final snap = await _firestore.collection('posts').doc(postId).get();

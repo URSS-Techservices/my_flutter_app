@@ -363,34 +363,29 @@ class FirebaseAuthRepository implements AuthRepository {
     );
   }
 
+  /// Username / mobile → email, looked up by the `resolveLoginEmail` Cloud
+  /// Function. Signed-out users can't read the `users` collection directly
+  /// (it holds everyone's email and phone), so this runs on the server.
   Future<String> _resolveEmail(String identifier) async {
-    var snap = await _firestore
-        .collection('users')
-        .where('username', isEqualTo: identifier)
-        .limit(1)
-        .get();
-    if (snap.docs.isEmpty) {
-      snap = await _firestore
-          .collection('users')
-          .where('mobile', isEqualTo: identifier)
-          .limit(1)
-          .get();
-    }
-    if (snap.docs.isEmpty) {
+    try {
+      final result = await _functions
+          .httpsCallable('resolveLoginEmail')
+          .call({'identifier': identifier});
+      final data = result.data;
+      final email = data is Map ? data['email']?.toString() : null;
+      if (email == null || email.isEmpty) {
+        throw FirebaseAuthException(
+          code: 'invalid-credential',
+          message: 'Account has no email on file.',
+        );
+      }
+      return email;
+    } on FirebaseFunctionsException catch (e) {
       throw FirebaseAuthException(
-        code: 'user-not-found',
-        message: 'User not found.',
+        code: e.code == 'not-found' ? 'user-not-found' : e.code,
+        message: e.message ?? 'User not found.',
       );
     }
-    final data = snap.docs.first.data();
-    final email = data['email'];
-    if (email is! String || email.isEmpty) {
-      throw FirebaseAuthException(
-        code: 'invalid-credential',
-        message: 'Account has no email on file.',
-      );
-    }
-    return email;
   }
 
   @override

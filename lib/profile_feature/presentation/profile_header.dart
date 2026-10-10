@@ -7,6 +7,13 @@ import 'package:halo/profile_feature/presentation/profile_style.dart';
 
 enum ProfileMenuAction { settings, logout }
 
+/// Shown under the name when the user has not set a tagline.
+String _defaultTagline(String accountType) => switch (accountType) {
+      'guru' => 'Certified Trainer',
+      'wellness' => 'Wellness Center',
+      _ => 'Fitness Enthusiast',
+    };
+
 /// Cover, avatar with online dot, name, username, tagline and the
 /// Edit Profile button (own profile only). Tapping the photo or cover opens
 /// it full screen; changing them happens only in Edit Profile.
@@ -30,13 +37,15 @@ class ProfileHeader extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final header = ref.watch(aspirantProfileProvider(profileUserId).select(
+    final header = ref.watch(profileProvider(profileUserId).select(
       (async) {
-        final b = async.valueOrNull?.basics;
+        final b = async.valueOrNull;
         return (
           name: b?.name ?? '',
           username: b?.username ?? '',
-          tagline: b?.tagline ?? '',
+          tagline: (b?.tagline ?? '').isNotEmpty
+              ? b!.tagline
+              : _defaultTagline(b?.accountType ?? ''),
           photo: b?.profilePhoto ?? '',
           cover: b?.coverPhoto ?? '',
         );
@@ -213,10 +222,10 @@ class _Avatar extends StatelessWidget {
                 children: [
                   if (url.isEmpty)
                     const ColoredBox(
-                      color: ProfileStyle.primaryLight,
+                      color: ProfileStyle.surface,
                       child: Center(
                         child: Icon(Icons.person,
-                            size: 48, color: ProfileStyle.primaryDark),
+                            size: 48, color: ProfileStyle.mutedText),
                       ),
                     )
                   else
@@ -304,7 +313,7 @@ class _Identity extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                tagline.isEmpty ? 'Fitness Enthusiast' : tagline,
+                tagline,
                 style: ProfileStyle.body,
                 maxLines: 2,
               ),

@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:halo/profile_feature/domain/aspirant_fitness_stats.dart';
 import 'package:halo/profile_feature/domain/aspirant_profile.dart';
+import 'package:halo/profile_feature/domain/guru_profile.dart';
+import 'package:halo/profile_feature/domain/profile_basics.dart';
 import 'package:halo/profile_feature/domain/profile_counts.dart';
 import 'package:halo/utils/search_utils.dart';
 
@@ -17,6 +19,18 @@ class ProfileRepository {
   DocumentReference<Map<String, dynamic>> _user(String id) =>
       _firestore.collection('users').doc(id);
 
+  /// Fields every account type shows (header, stats, bio, links).
+  ///
+  /// [watchProfile] and [watchAspirant] listen to the same document;
+  /// Firestore shares one connection between them.
+  Stream<ProfileBasics?> watchProfile(String userId) {
+    return _user(userId).snapshots().map((doc) {
+      final data = doc.data();
+      if (data == null) return null;
+      return ProfileBasics.fromMap(doc.id, data);
+    });
+  }
+
   Stream<AspirantProfile?> watchAspirant(String userId) {
     return _user(userId).snapshots().map((doc) {
       final data = doc.data();
@@ -24,6 +38,58 @@ class ProfileRepository {
       return AspirantProfile.fromMap(doc.id, data);
     });
   }
+
+  /// Booking settings and up to 10 upcoming / completed sessions, for the
+  /// guru booking screen. Falls back to lists stored on the user doc
+  /// (older data) when the `sessions` subcollection is empty.
+  Future<GuruBooking> loadGuruBooking(String guruId) async {
+    final userRef = _user(guruId);
+    final sessions = userRef.collection('sessions');
+    final results = await Future.wait([
+      userRef.get(),
+      sessions.where('status', isEqualTo: 'upcoming').limit(10).get(),
+      sessions.where('status', isEqualTo: 'completed').limit(10).get(),
+    ]);
+    final data = (results[0] as DocumentSnapshot<Map<String, dynamic>>).data() ??
+        const <String, dynamic>{};
+    final upcoming = results[1] as QuerySnapshot<Map<String, dynamic>>;
+    final past = results[2] as QuerySnapshot<Map<String, dynamic>>;
+
+    List<Map<String, dynamic>> sessionsOr(
+      QuerySnapshot<Map<String, dynamic>> snap,
+      Object? fallback,
+    ) {
+      if (snap.docs.isEmpty) {
+        return fallback is List
+            ? fallback.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+            : const [];
+      }
+      return snap.docs.map((doc) {
+        final d = doc.data();
+        final date = d['sessionDate'];
+        return <String, dynamic>{
+          'id': doc.id,
+          'title': d['title'] ?? 'Session',
+          'time': date is Timestamp
+              ? _formatSessionTime(date.toDate())
+              : (d['time'] ?? date ?? '').toString(),
+          'studentName': d['studentName'] ?? '',
+          'type': d['type'] ?? 'offline',
+        };
+      }).toList();
+    }
+
+    final settings = data['bookingSettings'];
+    return GuruBooking(
+      settings: settings is Map ? Map<String, dynamic>.from(settings) : const {},
+      upcomingSessions: sessionsOr(upcoming, data['upcomingSessions']),
+      pastSessions: sessionsOr(past, data['pastSessions']),
+    );
+  }
+
+  /// Same format the old guru page used: d/m/yyyy h:mm.
+  static String _formatSessionTime(DateTime d) =>
+      '${d.day}/${d.month}/${d.year} ${d.hour}:${d.minute.toString().padLeft(2, '0')}';
 
   /// Counts the real posts / followers / following documents, so the numbers
   /// stay right even if a stored counter drifted. Each count is one cheap
@@ -72,8 +138,9 @@ class ProfileRepository {
     return snap.ref.getDownloadURL();
   }
 
-  /// Saves the whole Edit Profile form in one write.
-  Future<void> saveAspirant({
+  /// Saves the whole Edit Profile form in one write. [fitnessStats] is only
+  /// passed for aspirants.
+  Future<void> saveProfile({
     required String userId,
     required String name,
     required String username,
@@ -81,7 +148,7 @@ class ProfileRepository {
     required String location,
     required String website,
     required Map<String, String> socialLinks,
-    required AspirantFitnessStats fitnessStats,
+    AspirantFitnessStats? fitnessStats,
     String? profilePhotoUrl,
     String? coverPhotoUrl,
   }) {
@@ -95,7 +162,7 @@ class ProfileRepository {
       'city': location,
       'website': website,
       'socialLinks': socialLinks,
-      ...fitnessStats.toUpdate(),
+      if (fitnessStats != null) ...fitnessStats.toUpdate(),
       if (profilePhotoUrl != null) 'profilePhoto': profilePhotoUrl,
       if (coverPhotoUrl != null) 'coverPhoto': coverPhotoUrl,
     });

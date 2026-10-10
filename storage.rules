@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// Halo — Cloud Storage security rules.
+//
+//   * Each user uploads only into their own folder: users/{uid}/…
+//   * Only images and videos, with size limits.
+//   * Files are read through their download URLs (which carry a token);
+//     listing or reading by path needs sign-in.
+//   * Processed videos are written by Cloud Functions only.
+//   * Staff roles come from the same custom claim as Firestore.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isMe(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isStaff() {
+      return signedIn() && request.auth.token.get('role', '') in ['admin', 'moderator'];
+    }
+
+    function isVideo() {
+      return request.resource.contentType.matches('video/.*');
+    }
+
+    // Videos up to 500 MB; anything else (photos, and older uploads that
+    // don't set a file type) up to 20 MB.
+    function mediaOk() {
+      return request.resource.size < 500 * 1024 * 1024
+        && (isVideo() || request.resource.size < 20 * 1024 * 1024);
+    }
+
+    // Everything a user uploads: posts, stories, profile photo, products,
+    // events, gallery …
+    match /users/{uid}/{allPaths=**} {
+      allow read: if signedIn();
+      allow create, update: if isMe(uid) && mediaOk();
+      allow delete: if isMe(uid) || isStaff();
+    }
+
+    // Older profile photo location.
+    match /profile_pics/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && fileName == request.auth.uid + '.jpg'
+        && request.resource.size < 20 * 1024 * 1024;
+      allow delete: if signedIn() && fileName == request.auth.uid + '.jpg';
+    }
+
+    // Older profile pages upload posts here (being replaced by users/{uid}/posts).
+    match /posts/{fileName} {
+      allow read: if signedIn();
+      allow create: if signedIn() && mediaOk();
+      allow delete: if isStaff();
+    }
+
+    // Transcoded video ladder — written only by Cloud Functions.
+    match /videos/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+  }
+}

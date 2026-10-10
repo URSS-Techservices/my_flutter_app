@@ -18,6 +18,15 @@ abstract final class ProfileStyle {
   static const primaryDark = HaloTheme.secondary;
   static const primaryLight = Color(0xFFEDE7F6);
 
+  /// Filled action buttons (Follow, selected chip) and accent icons/text on
+  /// grey buttons. Lighter than [primaryDark] but still readable with white
+  /// text.
+  static const action = Color(0xFF8B6FD6);
+
+  /// Neutral grey fill for secondary buttons, chips, icon circles and
+  /// empty avatars. The accent is kept for the one main action per area.
+  static const surface = Color(0xFFF3F4F6);
+
   /// Text links: See All, Show more, Edit Links, Add Social Link.
   static const link = Color(0xFF1877F2);
 

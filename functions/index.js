@@ -2235,6 +2235,9 @@ exports.migrateLegacyVideos = onCall(
 const emailOtp = require('./email_otp');
 exports.sendLoginOtp = emailOtp.sendLoginOtp;
 exports.verifyLoginOtp = emailOtp.verifyLoginOtp;
+exports.resolveLoginEmail = emailOtp.resolveLoginEmail;
 
 // Keeps users/{uid}.interestTags (used by category search) in sync.
 exports.syncInterestTags = require('./interest_tags').syncInterestTags;
+exports.onPostDeleted = require('./post_cleanup').onPostDeleted;
+exports.setUserRole = require('./admin_roles').setUserRole;

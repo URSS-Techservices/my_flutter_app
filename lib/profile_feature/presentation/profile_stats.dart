@@ -22,9 +22,9 @@ class ProfileStats extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Stored counters show instantly; real counts replace them once loaded.
-    final stored = ref.watch(aspirantProfileProvider(profileUserId).select(
+    final stored = ref.watch(profileProvider(profileUserId).select(
       (async) {
-        final b = async.valueOrNull?.basics;
+        final b = async.valueOrNull;
         return (
           following: b?.followingCount ?? 0,
           followers: b?.followersCount ?? 0,

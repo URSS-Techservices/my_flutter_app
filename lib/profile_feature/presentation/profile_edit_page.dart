@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:halo/core/halo_toast.dart';
 import 'package:halo/profile_feature/domain/aspirant_fitness_stats.dart';
-import 'package:halo/profile_feature/domain/aspirant_profile.dart';
+import 'package:halo/profile_feature/domain/profile_basics.dart';
 import 'package:halo/profile_feature/domain/social_link.dart';
 import 'package:halo/profile_feature/presentation/profile_edit_parts.dart';
 import 'package:halo/profile_feature/presentation/profile_social_links.dart';
@@ -12,26 +12,31 @@ import 'package:halo/profile_feature/presentation/profile_providers.dart';
 import 'package:halo/profile_feature/presentation/profile_style.dart';
 import 'package:image_picker/image_picker.dart';
 
-/// Edit Profile for aspirants: photos, basic info, social links and
-/// fitness stats, saved together with the Save button.
-class AspirantEditPage extends ConsumerStatefulWidget {
-  const AspirantEditPage({
+/// Edit Profile for every account type: photos, basic info and social
+/// links, saved together with the Save button. Aspirants also get the
+/// Fitness Stats section (pass [fitnessStats]).
+class ProfileEditPage extends ConsumerStatefulWidget {
+  const ProfileEditPage({
     super.key,
-    required this.profile,
+    required this.basics,
+    this.fitnessStats,
     this.focusSocialLinks = false,
   });
 
-  /// The profile as it was when the user tapped Edit Profile.
-  final AspirantProfile profile;
+  /// The profile as it was when the user tapped Edit.
+  final ProfileBasics basics;
+
+  /// Aspirants only; null hides the Fitness Stats section.
+  final AspirantFitnessStats? fitnessStats;
 
   /// Open already scrolled to Social Links (from "+ Add social links").
   final bool focusSocialLinks;
 
   @override
-  ConsumerState<AspirantEditPage> createState() => _AspirantEditPageState();
+  ConsumerState<ProfileEditPage> createState() => _ProfileEditPageState();
 }
 
-class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
+class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
   static const _bioLimit = 200;
   static final _usernamePattern = RegExp(r'^[a-zA-Z0-9._]{3,30}$');
 
@@ -60,20 +65,19 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
   @override
   void initState() {
     super.initState();
-    final p = widget.profile;
-    final b = p.basics;
-    final s = p.fitnessStats;
+    final b = widget.basics;
+    final s = widget.fitnessStats ?? AspirantFitnessStats.empty;
     _name = TextEditingController(text: b.name);
     _username = TextEditingController(text: b.username);
     _bio = TextEditingController(text: b.bio);
     _location = TextEditingController(text: b.location);
-    _website = TextEditingController(text: p.website);
+    _website = TextEditingController(text: b.website);
     _workouts = TextEditingController(text: _num(s.workouts));
     _calories = TextEditingController(text: _num(s.calories));
     _hours = TextEditingController(text: _num(s.hours));
     _streak = TextEditingController(text: _num(s.dayStreak));
     for (final platform in SocialPlatform.values) {
-      final link = p.socialLinks[platform.key];
+      final link = b.socialLinks[platform.key];
       if (link != null) {
         _links[platform] = platform.toStored(link);
       }
@@ -256,7 +260,7 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
     if (_saving || !(_formKey.currentState?.validate() ?? false)) return;
 
     final myId = ref.read(myUserIdProvider);
-    final userId = widget.profile.basics.id;
+    final userId = widget.basics.id;
     if (myId != userId) {
       HaloToast.show('You can only edit your own profile');
       return;
@@ -267,7 +271,7 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
     try {
       final username = _username.text.trim();
       if (username.toLowerCase() !=
-              widget.profile.basics.username.toLowerCase() &&
+              widget.basics.username.toLowerCase() &&
           !await repo.isUsernameFree(username, myId: myId!)) {
         HaloToast.show('That username is taken');
         return;
@@ -286,7 +290,7 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
       ]);
 
       // Keep links for platforms this screen does not manage (e.g. telegram).
-      final links = Map<String, String>.of(widget.profile.socialLinks)
+      final links = Map<String, String>.of(widget.basics.socialLinks)
         ..removeWhere(
             (key, _) => SocialPlatform.values.any((p) => p.key == key));
       for (final entry in _links.entries) {
@@ -294,7 +298,7 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
       }
 
       final website = _website.text.trim();
-      await repo.saveAspirant(
+      await repo.saveProfile(
         userId: userId,
         name: _name.text.trim(),
         username: username,
@@ -302,12 +306,14 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
         location: _location.text.trim(),
         website: website.isEmpty ? '' : _withScheme(website),
         socialLinks: links,
-        fitnessStats: AspirantFitnessStats(
-          workouts: int.tryParse(_workouts.text) ?? 0,
-          calories: int.tryParse(_calories.text) ?? 0,
-          hours: int.tryParse(_hours.text) ?? 0,
-          dayStreak: int.tryParse(_streak.text) ?? 0,
-        ),
+        fitnessStats: widget.fitnessStats == null
+            ? null
+            : AspirantFitnessStats(
+                workouts: int.tryParse(_workouts.text) ?? 0,
+                calories: int.tryParse(_calories.text) ?? 0,
+                hours: int.tryParse(_hours.text) ?? 0,
+                dayStreak: int.tryParse(_streak.text) ?? 0,
+              ),
         profilePhotoUrl: uploads[0],
         coverPhotoUrl: uploads[1],
       );
@@ -352,7 +358,7 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
 
   @override
   Widget build(BuildContext context) {
-    final b = widget.profile.basics;
+    final b = widget.basics;
 
     return PopScope(
       canPop: !_changed,
@@ -468,31 +474,33 @@ class _AspirantEditPageState extends ConsumerState<AspirantEditPage> {
                       ),
                     ),
                   ),
-                const EditSectionTitle('Fitness Stats'),
-                EditStatRow(
-                  icon: Icons.fitness_center,
-                  color: ProfileStyle.primary,
-                  label: 'Total Workouts',
-                  controller: _workouts,
-                ),
-                EditStatRow(
-                  icon: Icons.local_fire_department,
-                  color: const Color(0xFFEF4444),
-                  label: 'Total Calories',
-                  controller: _calories,
-                ),
-                EditStatRow(
-                  icon: Icons.schedule,
-                  color: const Color(0xFF22C55E),
-                  label: 'Total Hours',
-                  controller: _hours,
-                ),
-                EditStatRow(
-                  icon: Icons.emoji_events,
-                  color: const Color(0xFFF59E0B),
-                  label: 'Day Streak',
-                  controller: _streak,
-                ),
+                if (widget.fitnessStats != null) ...[
+                  const EditSectionTitle('Fitness Stats'),
+                  EditStatRow(
+                    icon: Icons.fitness_center,
+                    color: ProfileStyle.primary,
+                    label: 'Total Workouts',
+                    controller: _workouts,
+                  ),
+                  EditStatRow(
+                    icon: Icons.local_fire_department,
+                    color: const Color(0xFFEF4444),
+                    label: 'Total Calories',
+                    controller: _calories,
+                  ),
+                  EditStatRow(
+                    icon: Icons.schedule,
+                    color: const Color(0xFF22C55E),
+                    label: 'Total Hours',
+                    controller: _hours,
+                  ),
+                  EditStatRow(
+                    icon: Icons.emoji_events,
+                    color: const Color(0xFFF59E0B),
+                    label: 'Day Streak',
+                    controller: _streak,
+                  ),
+                ],
               ],
             ),
           ),

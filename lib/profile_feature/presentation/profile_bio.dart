@@ -14,9 +14,9 @@ class ProfileBio extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final bio = ref.watch(aspirantProfileProvider(profileUserId).select(
+    final bio = ref.watch(profileProvider(profileUserId).select(
       (async) {
-        final b = async.valueOrNull?.basics;
+        final b = async.valueOrNull;
         return (
           text: b?.bio ?? '',
           location: b?.location ?? '',

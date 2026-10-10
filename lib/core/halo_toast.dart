@@ -2,11 +2,14 @@ import 'dart:ui';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:halo/core/halo_theme.dart';
+import 'package:flutter/services.dart';
 
 enum HaloToastKind { auto, info, success, error }
 
-/// iOS-style floating banner. Use [HaloToast.show] instead of SnackBar.
+/// iOS-style notice: a small frosted capsule that slides down from the top,
+/// like the system "Copied" / AirDrop banners. It never covers the screen,
+/// replaces any notice already showing, and can be swiped up or tapped
+/// away. Use [HaloToast.show] instead of SnackBar.
 class HaloToast {
   HaloToast._();
 
@@ -18,12 +21,13 @@ class HaloToast {
   static void show(
     String message, {
     HaloToastKind kind = HaloToastKind.auto,
-    Duration duration = const Duration(seconds: 3),
+    Duration duration = const Duration(milliseconds: 2200),
   }) {
     final overlay = navigatorKey.currentState?.overlay;
     if (overlay == null || message.trim().isEmpty) return;
 
     _entry?.remove();
+    HapticFeedback.lightImpact();
     late final OverlayEntry entry;
     entry = OverlayEntry(
       builder: (_) => _HaloToastBanner(
@@ -83,16 +87,21 @@ class _HaloToastBannerState extends State<_HaloToastBanner>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 280),
-    reverseDuration: const Duration(milliseconds: 200),
+    duration: const Duration(milliseconds: 380),
+    reverseDuration: const Duration(milliseconds: 220),
   );
   late final Animation<double> _fade = CurvedAnimation(
     parent: _controller,
     curve: Curves.easeOut,
   );
-  late final Animation<double> _scale = Tween<double>(begin: 0.94, end: 1).animate(
-    CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
-  );
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, -1.2),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutBack,
+    reverseCurve: Curves.easeIn,
+  ));
 
   @override
   void initState() {
@@ -121,7 +130,7 @@ class _HaloToastBannerState extends State<_HaloToastBanner>
         return const Color(0xFFFF3B30);
       case HaloToastKind.info:
       case HaloToastKind.auto:
-        return kPrimaryColor;
+        return const Color(0xFF8E8E93);
     }
   }
 
@@ -139,60 +148,68 @@ class _HaloToastBannerState extends State<_HaloToastBanner>
 
   @override
   Widget build(BuildContext context) {
-    final maxWidth = MediaQuery.sizeOf(context).width - 48;
-    return Positioned.fill(
-      child: IgnorePointer(
-        ignoring: false,
-        child: Align(
-          alignment: Alignment.center,
+    final media = MediaQuery.of(context);
+    return Positioned(
+      top: media.padding.top + 8,
+      left: 16,
+      right: 16,
+      child: Center(
+        child: SlideTransition(
+          position: _slide,
           child: FadeTransition(
             opacity: _fade,
-            child: ScaleTransition(
-              scale: _scale,
-              child: GestureDetector(
-                onTap: _dismiss,
-                child: SizedBox(
-                  width: maxWidth.clamp(0, 420),
+            child: GestureDetector(
+              onTap: _dismiss,
+              onVerticalDragEnd: (d) {
+                if ((d.primaryVelocity ?? 0) < 0) _dismiss();
+              },
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(100),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.10),
+                        blurRadius: 20,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
+                    borderRadius: BorderRadius.circular(100),
                     child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                      child: DecoratedBox(
+                      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(14, 10, 18, 10),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.88),
-                          borderRadius: BorderRadius.circular(18),
+                          color: Colors.white.withValues(alpha: 0.82),
+                          borderRadius: BorderRadius.circular(100),
                           border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.7),
+                            color: Colors.black.withValues(alpha: 0.05),
                           ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.14),
-                              blurRadius: 24,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
                         ),
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
-                          child: Row(
-                            children: [
-                              Icon(_icon, color: _accent, size: 22),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  widget.message,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Color(0xFF1C1C1E),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.25,
-                                    decoration: TextDecoration.none,
-                                  ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(_icon, color: _accent, size: 18),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                widget.message,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Color(0xFF1C1C1E),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.25,
+                                  letterSpacing: -0.2,
+                                  decoration: TextDecoration.none,
                                 ),
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

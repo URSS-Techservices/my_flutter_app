@@ -155,7 +155,7 @@ class _PersonTile extends StatelessWidget {
     return ListTile(
       leading: CircleAvatar(
         radius: 22,
-        backgroundColor: ProfileStyle.primaryLight,
+        backgroundColor: ProfileStyle.surface,
         backgroundImage: person.photoUrl.isEmpty
             ? null
             : CachedNetworkImageProvider(
@@ -163,7 +163,7 @@ class _PersonTile extends StatelessWidget {
                 maxWidth: (44 * dpr).round(),
               ),
         child: person.photoUrl.isEmpty
-            ? const Icon(Icons.person, color: ProfileStyle.primaryDark)
+            ? const Icon(Icons.person, color: ProfileStyle.mutedText)
             : null,
       ),
       title: Text(person.displayName, style: ProfileStyle.body),

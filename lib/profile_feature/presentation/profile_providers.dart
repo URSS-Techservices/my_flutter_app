@@ -12,6 +12,8 @@ import 'package:halo/profile_feature/data/follow_repository.dart';
 import 'package:halo/profile_feature/data/profile_repository.dart';
 import 'package:halo/profile_feature/data/suggestion_repository.dart';
 import 'package:halo/profile_feature/domain/aspirant_profile.dart';
+import 'package:halo/profile_feature/domain/guru_profile.dart';
+import 'package:halo/profile_feature/domain/profile_basics.dart';
 import 'package:halo/profile_feature/domain/profile_activity.dart';
 import 'package:halo/profile_feature/domain/profile_counts.dart';
 import 'package:halo/profile_feature/domain/profile_person.dart';
@@ -55,14 +57,30 @@ extension CacheFor on Ref<Object?> {
   }
 }
 
-/// One live listener per profile, kept for [profileCacheTime] after the page
-/// is left. Widgets should `select` only the fields they show, so a change
-/// to one field (e.g. follower count) does not rebuild the whole page.
+/// Shared fields of any profile (aspirant, guru, wellness): what the
+/// header, stats, bio and social links show. One live listener per
+/// profile, kept for [profileCacheTime] after the page is left. Widgets
+/// should `select` only the fields they show, so a change to one field
+/// (e.g. follower count) does not rebuild the whole page.
+final profileProvider =
+    StreamProvider.autoDispose.family<ProfileBasics?, String>((ref, userId) {
+  ref.cacheFor(profileCacheTime);
+  return ref.watch(profileRepositoryProvider).watchProfile(userId);
+});
+
+/// Aspirant-only fields (fitness stats). Same document as
+/// [profileProvider]; Firestore shares the connection.
 final aspirantProfileProvider =
     StreamProvider.autoDispose.family<AspirantProfile?, String>((ref, userId) {
   ref.cacheFor(profileCacheTime);
   return ref.watch(profileRepositoryProvider).watchAspirant(userId);
 });
+
+/// Booking settings and sessions for the guru booking screen.
+final guruBookingProvider =
+    FutureProvider.autoDispose.family<GuruBooking, String>(
+  (ref, guruId) => ref.watch(profileRepositoryProvider).loadGuruBooking(guruId),
+);
 
 /// Whether the signed-in user follows [theirId]. Updates instantly on tap
 /// and rolls back if the write fails.
@@ -134,6 +152,21 @@ class ProfilePostsNotifier
   @override
   Future<ProfilePostsState> build(String userId) async {
     ref.cacheFor(profileCacheTime);
+    // A post deleted anywhere disappears from the grid at once.
+    ref.listen(deletedPostsProvider, (_, deleted) {
+      final current = state.valueOrNull;
+      if (current == null) return;
+      final kept = [
+        for (final p in current.posts)
+          if (!deleted.contains(p.id)) p,
+      ];
+      if (kept.length == current.posts.length) return;
+      state = AsyncData(ProfilePostsState(
+        posts: kept,
+        hasMore: current.hasMore,
+        loadingMore: current.loadingMore,
+      ));
+    });
     final first = await ref
         .watch(feedRepositoryProvider)
         .loadUserPosts(userId, limit: pageSize);
@@ -185,6 +218,8 @@ final profileActivityProvider =
     FutureProvider.autoDispose.family<List<ProfileActivity>, String>(
   (ref, userId) async {
     ref.cacheFor(profileCacheTime);
+    // Reload when a post is deleted so it leaves Recent Activity too.
+    ref.watch(deletedPostsProvider.select((s) => s.length));
     final results = await Future.wait([
       ref.watch(feedRepositoryProvider).loadUserPosts(userId, limit: 5),
       ref.watch(followRepositoryProvider).recentFollows(userId, limit: 5),
@@ -203,8 +238,8 @@ final profileActivityProvider =
 final profileCountsProvider =
     FutureProvider.autoDispose.family<ProfileCounts, String>((ref, userId) {
   ref.cacheFor(profileCacheTime);
-  ref.watch(aspirantProfileProvider(userId).select((async) {
-    final b = async.valueOrNull?.basics;
+  ref.watch(profileProvider(userId).select((async) {
+    final b = async.valueOrNull;
     return (b?.followersCount, b?.followingCount, b?.postsCount);
   }));
   return ref.watch(profileRepositoryProvider).countAll(userId);
@@ -236,10 +271,10 @@ final suggestionsProvider = FutureProvider.autoDispose.family<
   if (myId == null) return const [];
   // Only interests and city matter; other changes to my profile (e.g.
   // last seen) must not reload suggestions.
-  final me = await ref.watch(aspirantProfileProvider(myId).selectAsync(
+  final me = await ref.watch(profileProvider(myId).selectAsync(
     (p) => (
       interests: p?.interests.join('\u0001') ?? '',
-      city: p?.basics.location ?? '',
+      city: p?.location ?? '',
     ),
   ));
   return ref.watch(suggestionRepositoryProvider).suggest(
@@ -262,8 +297,8 @@ final activityStatusProvider =
   final myId = ref.watch(myUserIdProvider);
   if (myId == null || myId == userId) return ActivityStatus.hidden;
 
-  final their = ref.watch(aspirantProfileProvider(userId).select((async) {
-    final b = async.valueOrNull?.basics;
+  final their = ref.watch(profileProvider(userId).select((async) {
+    final b = async.valueOrNull;
     return (
       online: b?.isOnline ?? false,
       lastSeen: b?.lastSeen,
@@ -272,8 +307,8 @@ final activityStatusProvider =
   }));
   if (!their.shares) return ActivityStatus.hidden;
 
-  final iShare = ref.watch(aspirantProfileProvider(myId)
-      .select((async) => async.valueOrNull?.basics.showActivityStatus ?? true));
+  final iShare = ref.watch(profileProvider(myId)
+      .select((async) => async.valueOrNull?.showActivityStatus ?? true));
   if (!iShare) return ActivityStatus.hidden;
 
   final iFollow =

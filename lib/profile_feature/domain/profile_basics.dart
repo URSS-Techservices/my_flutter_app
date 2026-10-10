@@ -22,6 +22,13 @@ class ProfileBasics {
   final int followingCount;
   final int postsCount;
   final DateTime? joinedAt;
+  final List<String> interests;
+  final String website;
+
+  /// Platform key (see `SocialPlatform.key`) → saved handle or link. May
+  /// also hold keys the old pages saved (e.g. telegram); those are kept
+  /// when saving.
+  final Map<String, String> socialLinks;
 
   const ProfileBasics({
     required this.id,
@@ -40,9 +47,14 @@ class ProfileBasics {
     required this.followingCount,
     required this.postsCount,
     required this.joinedAt,
+    required this.interests,
+    required this.website,
+    required this.socialLinks,
   });
 
   factory ProfileBasics.fromMap(String id, Map<String, dynamic> map) {
+    final interests = map['interests'];
+    final links = map['socialLinks'];
     return ProfileBasics(
       id: id,
       accountType: _text(map['accountType']).toLowerCase(),
@@ -60,6 +72,16 @@ class ProfileBasics {
       followingCount: _int(map['followingCount']),
       postsCount: _int(map['postsCount']),
       joinedAt: _date(map['createdAt']),
+      interests: interests is List
+          ? interests.map((e) => e.toString()).toList()
+          : const [],
+      website: _text(map['website']),
+      socialLinks: links is Map
+          ? {
+              for (final e in links.entries)
+                if (_text(e.value).isNotEmpty) e.key.toString(): _text(e.value),
+            }
+          : const {},
     );
   }
 }

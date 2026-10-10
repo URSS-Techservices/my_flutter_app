@@ -304,4 +304,9 @@ abstract class FeedRepository {
     required String postId,
     required String text,
   });
+
+  /// Deletes the user's own post and lowers their `postsCount`, in one
+  /// batch. Media, likes, comments and saves are cleaned up by the
+  /// `onPostDeleted` Cloud Function.
+  Future<void> deletePost({required String userId, required String postId});
 }

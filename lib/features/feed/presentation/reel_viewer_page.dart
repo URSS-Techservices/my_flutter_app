@@ -14,6 +14,7 @@ import 'package:halo/features/feed/presentation/feed_data.dart';
 import 'package:halo/features/feed/presentation/heart_button.dart';
 import 'package:halo/features/feed/presentation/home_layout.dart';
 import 'package:halo/features/feed/presentation/like_comment_data.dart' show showPostComments;
+import 'package:halo/features/feed/presentation/post_delete.dart';
 import 'package:halo/features/feed/presentation/post_detail.dart' show showPostQuickActions, toggleFollow;
 import 'package:halo/screens/profile/pages/dynamic_profile_page.dart';
 import 'package:halo/services/app_video_focus.dart';
@@ -97,8 +98,37 @@ class _ReelViewerPageState extends ConsumerState<ReelViewerPage> {
               onPressed: () => Navigator.pop(context),
             ),
           ),
+          Positioned(
+            top: MediaQuery.paddingOf(context).top + 4,
+            right: 4,
+            child: _OwnPostMenuButton(postId: widget.postIds[_current]),
+          ),
         ],
       ),
+    );
+  }
+}
+
+/// ••• on your own post: opens the iOS action sheet with Delete. After a
+/// delete the viewer closes, like Instagram. Hidden on other people's posts.
+class _OwnPostMenuButton extends ConsumerWidget {
+  final String postId;
+  const _OwnPostMenuButton({required this.postId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final post = ref.watch(feedPostProvider(postId));
+    final uid = ref.watch(currentUidProvider);
+    if (post == null || uid.isEmpty || uid != post.userId) {
+      return const SizedBox.shrink();
+    }
+    return IconButton(
+      tooltip: 'More',
+      icon: const Icon(Icons.more_horiz_rounded, color: Colors.white),
+      onPressed: () async {
+        final deleted = await showOwnPostMenu(context, ref, post);
+        if (deleted && context.mounted) Navigator.pop(context);
+      },
     );
   }
 }

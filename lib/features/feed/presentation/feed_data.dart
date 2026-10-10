@@ -171,11 +171,18 @@ final feedPostIdsProvider = Provider<List<String>>((ref) {
 });
 
 /// Fetched on demand for posts that aren't in the loaded feed.
+/// Ids of posts deleted in this session. Profile grids and counts watch it
+/// so a deleted post disappears everywhere without a full reload.
+final deletedPostsProvider = StateProvider<Set<String>>((ref) => const {});
+
 final remotePostProvider = FutureProvider.autoDispose.family<PostData?, String>((ref, id) {
   return ref.watch(feedRepositoryProvider).loadPost(id);
 });
 
 final feedPostProvider = Provider.autoDispose.family<PostData?, String>((ref, id) {
+  if (ref.watch(deletedPostsProvider.select((s) => s.contains(id)))) {
+    return null;
+  }
   final cached = ref.watch(feedControllerProvider.select((s) {
     for (final p in s.posts) {
       if (p.id == id) return p;
@@ -370,6 +377,14 @@ class FeedController extends StateNotifier<FeedState> {
   }
 
   Future<void> retry() => loadInitial();
+
+  /// Drops a deleted post from the loaded feed.
+  void removePost(String postId) {
+    if (!state.posts.any((p) => p.id == postId)) return;
+    state = state.copyWith(
+      posts: [for (final p in state.posts) if (p.id != postId) p],
+    );
+  }
 
   void patchCounts(
     String postId, {

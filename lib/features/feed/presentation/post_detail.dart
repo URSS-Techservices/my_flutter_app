@@ -9,6 +9,7 @@ import 'package:halo/features/feed/domain/post_data.dart';
 import 'package:halo/features/feed/presentation/feed_data.dart';
 import 'package:halo/features/feed/presentation/home_layout.dart';
 import 'package:halo/features/feed/presentation/like_comment_data.dart';
+import 'package:halo/features/feed/presentation/post_delete.dart';
 import 'package:halo/features/feed/presentation/post_photo.dart';
 import 'package:halo/screens/profile/pages/dynamic_profile_page.dart';
 
@@ -177,6 +178,17 @@ void showPostQuickActions(BuildContext context, WidgetRef ref, PostData post) {
               onTap: () {
                 Navigator.pop(ctx);
                 toggleFollow(ref, otherId: post.userId, shouldFollow: !following);
+              },
+            ),
+          if (isMe)
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded,
+                  color: Color(0xFFFF3B30)),
+              title: const Text('Delete',
+                  style: TextStyle(color: Color(0xFFFF3B30))),
+              onTap: () {
+                Navigator.pop(ctx);
+                confirmAndDeletePost(context, ref, post);
               },
             ),
           ListTile(
