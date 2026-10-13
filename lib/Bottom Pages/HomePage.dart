@@ -3,10 +3,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import 'package:halo/Bottom%20Pages/AddPostPage.dart';
 import 'package:halo/Bottom%20Pages/NotificationPage.dart';
@@ -20,6 +18,7 @@ import 'package:halo/Profile%20Pages/wellness_profile_page.dart' as wellness;
 import 'package:halo/chat/chat_list_page.dart';
 import 'package:halo/profile_feature/presentation/profile_switch.dart';
 import 'package:halo/features/auth/presentation/logout.dart';
+import 'package:halo/features/drawer/presentation/app_drawer.dart';
 import 'package:halo/features/feed/presentation/home_page.dart' as feed;
 import 'package:halo/features/feed/presentation/nav_bar.dart';
 
@@ -72,7 +71,7 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _searchPage = const SearchPage();
     _explorePage = const ExplorePage();
-    _notifPage = NotificationPage();
+    _notifPage = NotificationPage(onBack: _backFromNotifications);
     _profilePage = _ProfileTab(onBack: () => setState(() => _navIndex = 0));
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptLocation());
   }
@@ -109,42 +108,26 @@ class _HomePageState extends State<HomePage> {
     await prefs.setBool('location_prompt_shown', true);
   }
 
-  void _onDrawer(_DrawerAction a) {
-    switch (a) {
-      case _DrawerAction.home:
-        setState(() => _navIndex = 0);
-      case _DrawerAction.explore:
-        setState(() => _navIndex = 2);
-      case _DrawerAction.saved:
-        Navigator.push(context, MaterialPageRoute(builder: (_) => SavedPostsPage()));
-      case _DrawerAction.settings:
-        Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsPage()));
-      case _DrawerAction.logout:
-        _confirmLogout();
-      case _DrawerAction.share:
-        launchUrl(Uri.parse('https://halo.app'), mode: LaunchMode.externalApplication);
-    }
+  /// Notifications opened from the drawer: back returns to the drawer.
+  bool _notifFromDrawer = false;
+
+  /// Opens a page from the drawer; back from it shows the drawer again.
+  Future<void> _pushFromDrawer(Widget page) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    if (mounted) _scaffoldKey.currentState?.openDrawer();
   }
 
-  void _confirmLogout() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Log out?', style: TextStyle(fontWeight: FontWeight.w700)),
-        content: const Text('Are you sure you want to log out?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await logout(this.context);
-            },
-            child: const Text('Log out', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
+  void _openNotifications({required bool fromDrawer}) {
+    _notifFromDrawer = fromDrawer;
+    setState(() => _navIndex = 4);
+  }
+
+  void _backFromNotifications() {
+    setState(() => _navIndex = 0);
+    if (_notifFromDrawer) {
+      _notifFromDrawer = false;
+      _scaffoldKey.currentState?.openDrawer();
+    }
   }
 
   void _openChat() {
@@ -161,14 +144,22 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: Colors.white,
-      drawer: _Drawer(onSelect: _onDrawer),
+      drawer: AppDrawer(
+        onExplore: () => setState(() => _navIndex = 2),
+        onSaved: () => _pushFromDrawer(const SavedPostsPage()),
+        onNotifications: () => _openNotifications(fromDrawer: true),
+        onSettings: () => _pushFromDrawer(SettingsPage()),
+        onHelp: () => _pushFromDrawer(HelpCenterPage()),
+        onLogout: () => logout(context),
+        onProfile: () => setState(() => _navIndex = 5),
+      ),
       body: IndexedStack(
         index: _navIndex == 3 ? 0 : _navIndex.clamp(0, 5),
         children: [
           SafeArea(
             child: feed.HomePage(
               onMenu: () => _scaffoldKey.currentState?.openDrawer(),
-              onBell: () => setState(() => _navIndex = 4),
+              onBell: () => _openNotifications(fromDrawer: false),
               onChat: _openChat,
               onPhoto: () => setState(() => _navIndex = 5),
             ),
@@ -183,6 +174,7 @@ class _HomePageState extends State<HomePage> {
       bottomNavigationBar: NavBar(
         index: _navIndex == 3 ? 0 : _navIndex,
         onSelect: (i) {
+          _notifFromDrawer = false;
           if (i == 0 && _navIndex == 0) {
             return;
           }
@@ -257,97 +249,5 @@ class _ProfileTabState extends State<_ProfileTab> {
     if (_type == 'wellness') return wellness.WellnessProfilePage(profileUserId: _uid);
     if (_type == 'guru') return guru.GuruProfilePage(profileUserId: _uid);
     return aspirant.ProfilePage(profileUserId: _uid);
-  }
-}
-
-enum _DrawerAction { home, explore, saved, settings, logout, share }
-
-class _Drawer extends StatelessWidget {
-  final void Function(_DrawerAction) onSelect;
-  const _Drawer({required this.onSelect});
-
-  static const List<List<dynamic>> _items = [
-    [Icons.home_filled, 'Home', _DrawerAction.home],
-    [Icons.explore_outlined, 'Explore', _DrawerAction.explore],
-    [Icons.bookmark_border, 'Saved Posts', _DrawerAction.saved],
-    [Icons.settings_outlined, 'Settings', _DrawerAction.settings],
-    [Icons.share_rounded, 'Share App', _DrawerAction.share],
-    [Icons.logout_rounded, 'Log Out', _DrawerAction.logout],
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Drawer(
-      child: SafeArea(
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFFF3EDFF), Color(0xFFE5E0FF)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
-                child: Row(
-                  children: [
-                    Text(
-                      'MENU',
-                      style: GoogleFonts.poppins(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: kSecondaryColor,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.black54),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  children: _items.map((item) {
-                    final icon = item[0] as IconData;
-                    final label = item[1] as String;
-                    final action = item[2] as _DrawerAction;
-                    return ListTile(
-                      leading: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(icon, color: kSecondaryColor, size: 20),
-                      ),
-                      title: Text(
-                        label,
-                        style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500),
-                      ),
-                      onTap: () {
-                        Navigator.pop(context);
-                        onSelect(action);
-                      },
-                    );
-                  }).toList(),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                child: Text(
-                  'Version 1.0',
-                  style: GoogleFonts.poppins(fontSize: 11, color: Colors.black38),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

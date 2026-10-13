@@ -8,7 +8,11 @@ const Color kSecondaryColor = Color(0xFF5B3FA3); // Deep Purple
 const Color kBackgroundColor = Color(0xFFF4F1FB); // Light lavender-gray;
 
 class NotificationPage extends StatefulWidget {
-  const NotificationPage({Key? key}) : super(key: key);
+  const NotificationPage({Key? key, this.onBack}) : super(key: key);
+
+  /// Set when shown as a tab of the home screen: back switches tabs
+  /// instead of popping the home screen itself (which left a blank app).
+  final VoidCallback? onBack;
 
   @override
   State<NotificationPage> createState() => _NotificationPageState();
@@ -129,7 +133,13 @@ class _NotificationPageState extends State<NotificationPage> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            if (widget.onBack != null) {
+              widget.onBack!();
+            } else {
+              Navigator.maybePop(context);
+            }
+          },
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
