@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:halo/core/halo_toast.dart';
 import 'package:halo/profile_feature/domain/social_link.dart';
 import 'package:halo/profile_feature/presentation/profile_social_links.dart';
 import 'package:halo/profile_feature/presentation/profile_style.dart';
@@ -266,6 +267,55 @@ InputDecoration editFieldDecoration({String? hint, IconData? icon}) {
 }
 
 /// Saved social link in Edit Profile. Tap to edit, swipe left to remove.
+/// A row for something that cannot be edited yet: icon, label and a
+/// "Coming Soon" tag. Tapping says so.
+class EditComingSoonRow extends StatelessWidget {
+  const EditComingSoonRow({super.key, required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: ProfileStyle.sideGap),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: const BoxDecoration(
+          color: ProfileStyle.surface,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, size: 20, color: ProfileStyle.action),
+      ),
+      title: Text(label, style: ProfileStyle.body),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: ProfileStyle.surface,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              'Coming Soon',
+              style: ProfileStyle.small.copyWith(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          const Icon(Icons.chevron_right, color: ProfileStyle.mutedText),
+        ],
+      ),
+      onTap: () => HaloToast.show('Editing $label is coming soon'),
+    );
+  }
+}
+
 class SocialEditRow extends StatelessWidget {
   const SocialEditRow({
     super.key,

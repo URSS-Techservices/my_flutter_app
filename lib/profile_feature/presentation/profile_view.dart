@@ -27,8 +27,9 @@ typedef OpenProfileEdit = Future<void> Function(
 /// section is its own sliver and watches only the fields it needs, and data
 /// is cached so reopening a profile shows it instantly.
 ///
-/// Order: header · stats · bio · buttons · Suggested for you · Recent
-/// Activity · Posts · Social Links · [typeSections].
+/// Order: header · stats · bio · buttons · [afterBioSections] · Suggested
+/// for you · [afterSuggestionsSections] · Recent Activity · Posts ·
+/// [afterPostsSections] · Social Links · [typeSections].
 class ProfileView extends ConsumerStatefulWidget {
   const ProfileView({
     super.key,
@@ -36,6 +37,10 @@ class ProfileView extends ConsumerStatefulWidget {
     required this.onEditProfile,
     this.onBack,
     this.visitorActions = const [],
+    this.showSuggestions = true,
+    this.afterBioSections = const [],
+    this.afterSuggestionsSections = const [],
+    this.afterPostsSections = const [],
     this.typeSections = const [],
   });
 
@@ -48,6 +53,16 @@ class ProfileView extends ConsumerStatefulWidget {
   /// Extra buttons after Message, only on someone else's profile
   /// (e.g. Book, Review for gurus).
   final List<ProfileAction> visitorActions;
+
+  /// "Suggested for you" (off on wellness pages).
+  final bool showSuggestions;
+
+  /// Account-type sections placed between the shared ones (e.g. the
+  /// wellness "Featured Gurus", "Services & Availability"). Each is a box
+  /// widget; it is wrapped in a sliver here.
+  final List<Widget> afterBioSections;
+  final List<Widget> afterSuggestionsSections;
+  final List<Widget> afterPostsSections;
 
   /// Account-type sections shown at the end of the page (e.g. guru
   /// "Coming Soon" cards).
@@ -117,9 +132,14 @@ class _ProfileViewState extends ConsumerState<ProfileView> {
                   extraActions: widget.visitorActions,
                 ),
               ),
-            SliverToBoxAdapter(
-              child: ProfileSuggestions(profileUserId: _id),
-            ),
+            for (final section in widget.afterBioSections)
+              SliverToBoxAdapter(child: section),
+            if (widget.showSuggestions)
+              SliverToBoxAdapter(
+                child: ProfileSuggestions(profileUserId: _id),
+              ),
+            for (final section in widget.afterSuggestionsSections)
+              SliverToBoxAdapter(child: section),
             SliverToBoxAdapter(
               child: ProfileActivitySection(profileUserId: _id),
             ),
@@ -138,6 +158,8 @@ class _ProfileViewState extends ConsumerState<ProfileView> {
               isOwnProfile: isOwnProfile,
               expanded: _postsExpanded,
             ),
+            for (final section in widget.afterPostsSections)
+              SliverToBoxAdapter(child: section),
             SliverToBoxAdapter(
               child: ProfileSocialLinks(
                 profileUserId: _id,

@@ -1,0 +1,272 @@
+rules_version = '2';
+
+// Halo — Firestore security rules.
+//   * Nothing is readable or writable without signing in.
+//   * People change only their own data; cross-user writes (likes, follows,
+//     counters, story views) may touch only those fields, counters by ±1.
+//   * Staff roles come from Firebase Auth custom claims (request.auth.token.role),
+//     set only by server code (functions/admin_roles.js).
+//       admin     — full access (except private chats).
+//       moderator — interns: moderate posts, comments, reels, stories, reviews,
+//                   feedback and reports. No chats, earnings, config or roles.
+//   * Anything not listed is denied.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ───────── helpers ─────────
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function isMe(uid) { return signedIn() && me() == uid; }
+    function role() { return signedIn() ? request.auth.token.get('role', '') : ''; }
+    function isAdmin() { return role() == 'admin'; }
+    function isStaff() { return role() in ['admin', 'moderator']; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function onlyChanges(keys) { return incoming().diff(existing()).affectedKeys().hasOnly(keys); }
+    function keeps(keys) { return !incoming().diff(existing()).affectedKeys().hasAny(keys); }
+
+    // Counter may move by at most 1 (a new counter may start at any value >= 0).
+    function stepOk(field) {
+      return !(field in incoming())
+        || (incoming()[field] is number
+            && (!(field in existing())
+                ? incoming()[field] >= 0
+                : math.abs(incoming()[field] - existing()[field]) <= 1));
+    }
+
+    function staffOnlyUserFields() {
+      return ['role', 'isVerified', 'verified', 'isSuspended', 'suspended',
+              'suspendedReason', 'isBanned', 'banned', 'certified', 'isCertified'];
+    }
+    function moderationFields() {
+      return ['hidden', 'moderationStatus', 'moderationReason', 'moderatedBy', 'moderatedAt'];
+    }
+
+    // ───────── users ─────────
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if isMe(uid) && !incoming().keys().hasAny(staffOnlyUserFields());
+      allow update: if
+        (isMe(uid) && keeps(staffOnlyUserFields()))
+        || (signedIn() && onlyChanges(['followersCount']) && stepOk('followersCount'))
+        || (signedIn() && onlyChanges(['followersList']))
+        || (signedIn() && !isMe(uid) && onlyChanges(['rating', 'reviewCount'])
+            && incoming().rating is number
+            && incoming().rating >= 0 && incoming().rating <= 5)
+        || (role() == 'moderator' && onlyChanges(staffOnlyUserFields().removeAll(['role'])))
+        || isAdmin();
+      allow delete: if isMe(uid) || isAdmin();
+
+      match /followers/{followerId} {
+        allow read: if signedIn();
+        allow create, update: if isMe(followerId);
+        allow delete: if isMe(followerId) || isMe(uid) || isStaff();
+      }
+      match /following/{targetId} {
+        allow read: if signedIn();
+        allow create, update, delete: if isMe(uid) || isAdmin();
+      }
+      match /notifications/{notificationId} {
+        allow read, update, delete: if isMe(uid);
+        allow create: if signedIn()
+          && (incoming().get('fromUserId', me()) == me()
+              || incoming().get('senderId', me()) == me());
+      }
+      match /blockedUsers/{otherId} { allow read, write: if isMe(uid); }
+      match /chatSettings/{chatId}  { allow read, write: if isMe(uid); }
+      match /earnings/{docId} {
+        allow read, write: if isMe(uid);
+        allow read: if isAdmin();
+      }
+
+      match /awards/{docId}          { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /classes/{docId}         { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /events/{docId}          { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /membershipPlans/{docId} { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /products/{docId}        { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /services/{docId}        { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /sessions/{docId}        { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /specialOffers/{docId}   { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /staff/{docId}           { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /students/{docId}        { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /successStories/{docId}  { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+      match /videoTutorials/{docId}  { allow read: if signedIn(); allow write: if isMe(uid); allow delete: if isStaff(); }
+    }
+
+    // ───────── posts ─────────
+    function postPublicFields() {
+      return ['likeCount', 'likesCount', 'commentCount', 'commentsCount',
+              'shareCount', 'sharesCount', 'savesCount',
+              'legacyRawFallback', 'requestedTranscodeAt', 'processed'];
+    }
+    function postCountersOk() {
+      return stepOk('likeCount') && stepOk('likesCount')
+        && stepOk('commentCount') && stepOk('commentsCount')
+        && stepOk('shareCount') && stepOk('sharesCount')
+        && stepOk('savesCount');
+    }
+    function ownerKeepsDoc() {
+      return isMe(existing().get('userId', ''))
+        && incoming().get('userId', '') == existing().get('userId', '');
+    }
+
+    match /posts/{postId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && incoming().userId == me();
+      allow update: if ownerKeepsDoc()
+        || (signedIn() && onlyChanges(postPublicFields()) && postCountersOk())
+        || (isStaff() && onlyChanges(moderationFields()))
+        || isAdmin();
+      allow delete: if isMe(existing().get('userId', '')) || isStaff();
+
+      match /likes/{likerId} {
+        allow read: if signedIn();
+        allow create, update, delete: if isMe(likerId);
+      }
+      match /comments/{commentId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && incoming().userId == me();
+        allow update: if ownerKeepsDoc()
+          || (signedIn() && onlyChanges(['likeCount', 'likesCount'])
+              && stepOk('likeCount') && stepOk('likesCount'))
+          || (isStaff() && onlyChanges(moderationFields()));
+        allow delete: if isMe(existing().get('userId', ''))
+          || isMe(get(/databases/$(database)/documents/posts/$(postId)).data.userId)
+          || isStaff();
+
+        match /likes/{likerId} {
+          allow read: if signedIn();
+          allow create, update, delete: if isMe(likerId);
+        }
+      }
+    }
+
+    // ───────── reels ─────────
+    match /reels/{reelId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && incoming().userId == me();
+      allow update: if ownerKeepsDoc()
+        || (signedIn() && onlyChanges(postPublicFields()) && postCountersOk())
+        || (isStaff() && onlyChanges(moderationFields()))
+        || isAdmin();
+      allow delete: if isMe(existing().get('userId', '')) || isStaff();
+
+      match /likes/{likerId} {
+        allow read: if signedIn();
+        allow create, update, delete: if isMe(likerId);
+      }
+    }
+
+    // ───────── stories ─────────
+    match /stories/{storyId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && incoming().userId == me();
+      allow update: if ownerKeepsDoc()
+        || (signedIn() && onlyChanges(['viewers'])
+            && incoming().viewers.toSet()
+                 .difference(existing().get('viewers', []).toSet())
+                 .hasOnly([me()]))
+        || isAdmin();
+      allow delete: if isMe(existing().get('userId', '')) || isStaff();
+    }
+
+    // ───────── chats (members only, staff cannot read) ─────────
+    function isChatMember(chatId) {
+      return signedIn() && me() in
+        get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+    }
+
+    match /chats/{chatId} {
+      allow read, update, delete: if signedIn() && me() in existing().members;
+      allow create: if signedIn() && me() in incoming().members;
+
+      match /messages/{messageId} {
+        allow read, update: if isChatMember(chatId);
+        allow create: if isChatMember(chatId) && incoming().senderId == me();
+        allow delete: if isChatMember(chatId) && existing().senderId == me();
+      }
+    }
+
+    // ───────── bookings & reviews ─────────
+    function isProvider(data) {
+      return signedIn() && (data.get('wellnessId', '') == me() || data.get('guruId', '') == me());
+    }
+
+    match /booking_requests/{bookingId} {
+      allow read: if isMe(existing().userId) || isProvider(existing()) || isStaff();
+      allow create: if signedIn() && incoming().userId == me() && incoming().status == 'pending';
+      allow update: if
+        (isProvider(existing()) && onlyChanges(['status', 'updatedAt']))
+        || (isMe(existing().userId) && onlyChanges(['status', 'updatedAt'])
+            && incoming().status == 'cancelled')
+        || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && incoming().userId == me()
+        && incoming().rating is number
+        && incoming().rating >= 1 && incoming().rating <= 5;
+      allow update: if ownerKeepsDoc() || (isStaff() && onlyChanges(moderationFields()));
+      allow delete: if isMe(existing().get('userId', '')) || isStaff();
+    }
+
+    match /product_interests/{docId} {
+      allow read: if isMe(existing().userId) || isMe(existing().wellnessId) || isStaff();
+      allow create: if signedIn() && incoming().userId == me();
+      allow delete: if isMe(existing().userId);
+    }
+    match /service_interests/{docId} {
+      allow read: if isMe(existing().userId) || isMe(existing().wellnessId) || isStaff();
+      allow create: if signedIn() && incoming().userId == me();
+      allow delete: if isMe(existing().userId);
+    }
+
+    // ───────── older screens / server-written ─────────
+    match /follows/{docId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && incoming().followerId == me();
+      allow delete: if isMe(existing().followerId) || isStaff();
+    }
+    match /relationships/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /user_interests/{docId} {
+      allow read: if isMe(existing().userId) || isMe(docId) || isAdmin();
+      allow write: if false;
+    }
+    match /media_hashes/{hash} {
+      allow read, create, update: if signedIn();
+      allow delete: if isAdmin();
+    }
+
+    // ───────── support & moderation ─────────
+    match /feedback/{docId} {
+      allow create: if signedIn() && incoming().userId == me();
+      allow read: if isMe(existing().userId) || isStaff();
+      allow update: if isStaff() && onlyChanges(['status', 'staffNote', 'handledBy', 'handledAt']);
+      allow delete: if isAdmin();
+    }
+    match /reports/{reportId} {
+      allow create: if signedIn() && incoming().reporterId == me();
+      allow read: if isMe(existing().reporterId) || isStaff();
+      allow update: if isStaff() && onlyChanges(['status', 'staffNote', 'handledBy', 'handledAt']);
+      allow delete: if isAdmin();
+    }
+    match /staff_roles/{uid} {
+      allow read: if isMe(uid) || isStaff();
+      allow write: if false;
+    }
+
+    // ───────── app configuration (admins only) ─────────
+    match /appConfig/{docId}         { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /search_config/{docId}     { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /search_banners/{docId}    { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /search_categories/{docId} { allow read: if signedIn(); allow write: if isAdmin(); }
+
+    match /loginOtps/{docId} { allow read, write: if false; }
+  }
+}

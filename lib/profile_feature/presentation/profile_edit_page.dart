@@ -14,13 +14,15 @@ import 'package:image_picker/image_picker.dart';
 
 /// Edit Profile for every account type: photos, basic info and social
 /// links, saved together with the Save button. Aspirants also get the
-/// Fitness Stats section (pass [fitnessStats]).
+/// Fitness Stats section (pass [fitnessStats]); wellness pages get the
+/// Business rows ([showBusinessSections]).
 class ProfileEditPage extends ConsumerStatefulWidget {
   const ProfileEditPage({
     super.key,
     required this.basics,
     this.fitnessStats,
     this.focusSocialLinks = false,
+    this.showBusinessSections = false,
   });
 
   /// The profile as it was when the user tapped Edit.
@@ -31,6 +33,10 @@ class ProfileEditPage extends ConsumerStatefulWidget {
 
   /// Open already scrolled to Social Links (from "+ Add social links").
   final bool focusSocialLinks;
+
+  /// Wellness: Popular Products, Specialities and Services & Availability
+  /// rows (editing them is coming soon).
+  final bool showBusinessSections;
 
   @override
   ConsumerState<ProfileEditPage> createState() => _ProfileEditPageState();
@@ -474,6 +480,21 @@ class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
                       ),
                     ),
                   ),
+                if (widget.showBusinessSections) ...[
+                  const EditSectionTitle('Business'),
+                  const EditComingSoonRow(
+                    icon: Icons.shopping_bag_outlined,
+                    label: 'Popular Products',
+                  ),
+                  const EditComingSoonRow(
+                    icon: Icons.track_changes_rounded,
+                    label: 'Specialities',
+                  ),
+                  const EditComingSoonRow(
+                    icon: Icons.schedule_outlined,
+                    label: 'Services & Availability',
+                  ),
+                ],
                 if (widget.fitnessStats != null) ...[
                   const EditSectionTitle('Fitness Stats'),
                   EditStatRow(

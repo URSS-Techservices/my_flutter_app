@@ -22,15 +22,25 @@ import 'package:halo/services/feed_reel_prefetch.dart';
 import 'package:halo/services/video_decoder_budget.dart';
 import 'package:halo/services/video_dispose_serial.dart';
 
-/// Instagram/TikTok-style fullscreen viewer: opened by tapping a post's
-/// media in the feed. Swipe vertically to move to the next/previous post;
+/// Fullscreen viewer: opened by tapping a post's media in the feed. Media
+/// is shown whole, like the phone's gallery: never cropped, black around
+/// it, pinch or double-tap to zoom photos, swipe sideways between a post's
+/// photos. Swipe vertically to move to the next/previous post;
 /// video autoplays for whichever page is current, exactly one decoder alive
 /// at a time via [VideoDecoderBudget]'s 'feed_reel_viewer' lease.
 class ReelViewerPage extends ConsumerStatefulWidget {
   final List<String> postIds;
   final int initialIndex;
 
-  const ReelViewerPage({super.key, required this.postIds, required this.initialIndex});
+  /// Which photo of the first post to open on (the one tapped in the feed).
+  final int initialMediaIndex;
+
+  const ReelViewerPage({
+    super.key,
+    required this.postIds,
+    required this.initialIndex,
+    this.initialMediaIndex = 0,
+  });
 
   @override
   ConsumerState<ReelViewerPage> createState() => _ReelViewerPageState();
@@ -45,6 +55,9 @@ class _ReelViewerPageState extends ConsumerState<ReelViewerPage> {
 
   late final PageController _pc = PageController(initialPage: widget.initialIndex);
   late int _current = widget.initialIndex;
+
+  /// While a photo is zoomed in, swiping moves the photo, not the post.
+  bool _zoomed = false;
 
   /// Consumed once, for the very first page only: whatever [FeedReelPrefetch]
   /// already started buffering the moment the user's finger touched the
@@ -75,8 +88,12 @@ class _ReelViewerPageState extends ConsumerState<ReelViewerPage> {
           PageView.builder(
             controller: _pc,
             scrollDirection: Axis.vertical,
+            physics: _zoomed ? const NeverScrollableScrollPhysics() : null,
             itemCount: widget.postIds.length,
-            onPageChanged: (i) => setState(() => _current = i),
+            onPageChanged: (i) => setState(() {
+              _current = i;
+              _zoomed = false;
+            }),
             itemBuilder: (context, i) {
               final distance = i - _current;
               return _ReelPage(
@@ -87,6 +104,11 @@ class _ReelViewerPageState extends ConsumerState<ReelViewerPage> {
                 // texture — the rest keep buffering silently in the background.
                 mountTexture: i == _current || i == _current + 1,
                 adopted: i == widget.initialIndex ? _initialAdopted : null,
+                initialMediaIndex:
+                    i == widget.initialIndex ? widget.initialMediaIndex : 0,
+                onZoomChanged: (z) {
+                  if (z != _zoomed) setState(() => _zoomed = z);
+                },
               );
             },
           ),
@@ -139,13 +161,17 @@ class _ReelPage extends ConsumerWidget {
   final bool shouldPreload;
   final bool mountTexture;
   final VideoPlayerController? adopted;
+  final int initialMediaIndex;
+  final ValueChanged<bool> onZoomChanged;
 
   const _ReelPage({
     required this.postId,
     required this.isCurrent,
     required this.shouldPreload,
     required this.mountTexture,
+    required this.onZoomChanged,
     this.adopted,
+    this.initialMediaIndex = 0,
   });
 
   @override
@@ -174,7 +200,14 @@ class _ReelPage extends ConsumerWidget {
               adopted: adopted,
             )
           else
-            _ReelImage(media: media),
+            _ReelPhotos(
+              photos: [
+                for (final m in post.media)
+                  if (!m.isVideo) m,
+              ],
+              initialIndex: initialMediaIndex,
+              onZoomChanged: onZoomChanged,
+            ),
           const Positioned.fill(
             child: IgnorePointer(
               child: DecoratedBox(
@@ -209,18 +242,182 @@ class _ReelPage extends ConsumerWidget {
   }
 }
 
-class _ReelImage extends StatelessWidget {
-  final PostMedia media;
-  const _ReelImage({required this.media});
+/// A post's photos, gallery style: each shown whole on black, swipe
+/// sideways between them, pinch or double-tap to zoom. Reports zoom so the
+/// viewer stops changing posts while a photo is zoomed.
+class _ReelPhotos extends StatefulWidget {
+  final List<PostMedia> photos;
+  final int initialIndex;
+  final ValueChanged<bool> onZoomChanged;
+
+  const _ReelPhotos({
+    required this.photos,
+    required this.initialIndex,
+    required this.onZoomChanged,
+  });
+
+  @override
+  State<_ReelPhotos> createState() => _ReelPhotosState();
+}
+
+class _ReelPhotosState extends State<_ReelPhotos> {
+  late final PageController _pc = PageController(
+    initialPage: widget.initialIndex.clamp(0, widget.photos.isEmpty ? 0 : widget.photos.length - 1),
+  );
+  late int _page = _pc.initialPage;
+  bool _zoomed = false;
+
+  @override
+  void dispose() {
+    _pc.dispose();
+    super.dispose();
+  }
+
+  void _setZoomed(bool z) {
+    if (z == _zoomed) return;
+    setState(() => _zoomed = z);
+    widget.onZoomChanged(z);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final photos = widget.photos;
+    if (photos.isEmpty) return const ColoredBox(color: Colors.black);
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        PageView.builder(
+          controller: _pc,
+          physics: _zoomed ? const NeverScrollableScrollPhysics() : null,
+          itemCount: photos.length,
+          onPageChanged: (i) => setState(() => _page = i),
+          itemBuilder: (_, i) => _ZoomablePhoto(
+            media: photos[i],
+            onZoomChanged: _setZoomed,
+          ),
+        ),
+        if (photos.length > 1)
+          Positioned(
+            top: MediaQuery.paddingOf(context).top + 14,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '${_page + 1}/${photos.length}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// One photo shown whole (BoxFit.contain). Pinch to zoom up to 4x;
+/// double-tap zooms to 2.5x where you tapped, or back out.
+class _ZoomablePhoto extends StatefulWidget {
+  final PostMedia media;
+  final ValueChanged<bool> onZoomChanged;
+
+  const _ZoomablePhoto({required this.media, required this.onZoomChanged});
+
+  @override
+  State<_ZoomablePhoto> createState() => _ZoomablePhotoState();
+}
+
+class _ZoomablePhotoState extends State<_ZoomablePhoto>
+    with SingleTickerProviderStateMixin {
+  final _tc = TransformationController();
+  late final AnimationController _anim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
+  Animation<Matrix4>? _tween;
+  Offset _tapAt = Offset.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _anim.addListener(() {
+      final t = _tween;
+      if (t != null) _tc.value = t.value;
+    });
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    _tc.dispose();
+    super.dispose();
+  }
+
+  bool get _isZoomed => _tc.value.getMaxScaleOnAxis() > 1.01;
+
+  void _animateTo(Matrix4 end) {
+    _tween = Matrix4Tween(begin: _tc.value, end: end)
+        .animate(CurvedAnimation(parent: _anim, curve: Curves.easeOut));
+    _anim.forward(from: 0);
+    widget.onZoomChanged(end.getMaxScaleOnAxis() > 1.01);
+  }
+
+  void _onDoubleTap() {
+    if (_isZoomed) {
+      _animateTo(Matrix4.identity());
+      return;
+    }
+    const scale = 2.5;
+    final p = _tapAt;
+    _animateTo(Matrix4.identity()
+      ..translateByDouble(-p.dx * (scale - 1), -p.dy * (scale - 1), 0, 1)
+      ..scaleByDouble(scale, scale, 1, 1));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = widget.media;
     if (media.url.isEmpty) return const ColoredBox(color: Colors.black);
-    return CachedNetworkImage(
-      imageUrl: media.url,
-      fit: BoxFit.cover,
-      placeholder: (_, __) => const ColoredBox(color: Colors.black),
-      errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black),
+
+    return GestureDetector(
+      onDoubleTapDown: (d) => _tapAt = d.localPosition,
+      onDoubleTap: _onDoubleTap,
+      child: InteractiveViewer(
+        transformationController: _tc,
+        minScale: 1,
+        maxScale: 4,
+        onInteractionEnd: (_) => widget.onZoomChanged(_isZoomed),
+        child: SizedBox.expand(
+          child: CachedNetworkImage(
+            imageUrl: media.url,
+            fit: BoxFit.contain,
+            placeholder: (_, __) => media.thumbUrl.isEmpty
+                ? const ColoredBox(color: Colors.black)
+                : CachedNetworkImage(
+                    imageUrl: media.thumbUrl,
+                    fit: BoxFit.contain,
+                    errorWidget: (_, __, ___) =>
+                        const ColoredBox(color: Colors.black),
+                  ),
+            errorWidget: (_, __, ___) => const Center(
+              child: Icon(Icons.broken_image_outlined,
+                  color: Colors.white38, size: 40),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -472,15 +669,16 @@ class _ReelVideoState extends ConsumerState<_ReelVideo> {
           if (widget.media.thumbUrl.isNotEmpty)
             CachedNetworkImage(
               imageUrl: widget.media.thumbUrl,
-              fit: BoxFit.cover,
+              fit: BoxFit.contain,
               placeholder: (_, __) => const ColoredBox(color: Colors.black),
               errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black),
             )
           else
             const ColoredBox(color: Colors.black),
           if (showTexture)
+            // Whole video, like the gallery: no cropping, black around it.
             FittedBox(
-              fit: BoxFit.cover,
+              fit: BoxFit.contain,
               child: SizedBox(width: c.value.size.width, height: c.value.size.height, child: VideoPlayer(c)),
             ),
           // Thin top progress bar — same indicator Explore's reel viewer uses

@@ -11,12 +11,16 @@ import 'package:halo/presence_feature/presentation/presence_providers.dart';
 import 'package:halo/profile_feature/data/follow_repository.dart';
 import 'package:halo/profile_feature/data/profile_repository.dart';
 import 'package:halo/profile_feature/data/suggestion_repository.dart';
+import 'package:halo/profile_feature/data/wellness_repository.dart';
 import 'package:halo/profile_feature/domain/aspirant_profile.dart';
 import 'package:halo/profile_feature/domain/guru_profile.dart';
 import 'package:halo/profile_feature/domain/profile_basics.dart';
 import 'package:halo/profile_feature/domain/profile_activity.dart';
 import 'package:halo/profile_feature/domain/profile_counts.dart';
 import 'package:halo/profile_feature/domain/profile_person.dart';
+import 'package:halo/profile_feature/domain/wellness_booking.dart';
+import 'package:halo/profile_feature/domain/wellness_product.dart';
+import 'package:halo/profile_feature/domain/wellness_profile.dart';
 import 'package:halo/services/follow_service.dart';
 
 final profileRepositoryProvider = Provider<ProfileRepository>(
@@ -81,6 +85,62 @@ final guruBookingProvider =
     FutureProvider.autoDispose.family<GuruBooking, String>(
   (ref, guruId) => ref.watch(profileRepositoryProvider).loadGuruBooking(guruId),
 );
+
+/// The signed-in user's booking requests to one wellness centre (live).
+final myWellnessBookingsProvider =
+    StreamProvider.autoDispose.family<List<WellnessBooking>, String>(
+  (ref, wellnessId) {
+    final myId = ref.watch(myUserIdProvider);
+    if (myId == null) return Stream.value(const []);
+    return ref
+        .watch(profileRepositoryProvider)
+        .watchMyWellnessBookings(wellnessId: wellnessId, myId: myId);
+  },
+);
+
+final wellnessRepositoryProvider = Provider<WellnessRepository>(
+  (ref) => WellnessRepository(FirebaseFirestore.instance),
+);
+
+/// Wellness-only fields (services, hours, featured gurus). Same document as
+/// [profileProvider]; Firestore shares the connection.
+final wellnessProfileProvider =
+    StreamProvider.autoDispose.family<WellnessProfile?, String>((ref, id) {
+  ref.cacheFor(profileCacheTime);
+  return ref.watch(wellnessRepositoryProvider).watchWellness(id);
+});
+
+/// The featured gurus' names and photos. Reloads only when the list of
+/// ids changes, not on every change to the wellness document.
+final featuredGurusProvider = FutureProvider.autoDispose
+    .family<List<ProfilePerson>, String>((ref, wellnessId) async {
+  ref.cacheFor(profileCacheTime);
+  final ids = await ref.watch(wellnessProfileProvider(wellnessId).selectAsync(
+    (w) => (w?.featuredGuruIds ?? const <String>[]).join(','),
+  ));
+  if (ids.isEmpty) return const [];
+  return ref.watch(wellnessRepositoryProvider).loadPeople(ids.split(','));
+});
+
+/// A wellness centre's products for "Popular Products".
+final wellnessProductsProvider = FutureProvider.autoDispose
+    .family<List<WellnessProduct>, String>((ref, wellnessId) {
+  ref.cacheFor(profileCacheTime);
+  return ref.watch(wellnessRepositoryProvider).loadProducts(wellnessId);
+});
+
+/// Gurus who follow [wellnessId] (newest first): the only people the
+/// owner can pick for "Featured Gurus".
+final guruFollowersProvider = FutureProvider.autoDispose
+    .family<List<ProfilePerson>, String>((ref, wellnessId) async {
+  final followers = await ref
+      .watch(followRepositoryProvider)
+      .listPeople(userId: wellnessId, followers: true, limit: 300);
+  return [
+    for (final p in followers)
+      if (p.accountType == 'guru') p,
+  ];
+});
 
 /// Whether the signed-in user follows [theirId]. Updates instantly on tap
 /// and rolls back if the write fails.

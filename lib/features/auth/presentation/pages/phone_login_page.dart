@@ -412,8 +412,10 @@ class _NumberStep extends StatelessWidget {
                     color: Colors.black87,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 1.1,
+
                   ),
                   decoration: InputDecoration(
+                    fillColor: Colors.white,
                     hintText: '98765 43210',
                     hintStyle: textTheme.titleMedium?.copyWith(
                       color: Colors.black26,

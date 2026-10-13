@@ -52,7 +52,11 @@ class _PostPhotoState extends ConsumerState<PostPhoto> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ReelViewerPage(postIds: ids, initialIndex: index < 0 ? 0 : index),
+        builder: (_) => ReelViewerPage(
+          postIds: ids,
+          initialIndex: index < 0 ? 0 : index,
+          initialMediaIndex: _page,
+        ),
       ),
     );
   }

@@ -7,6 +7,7 @@ import 'package:halo/profile_feature/domain/aspirant_profile.dart';
 import 'package:halo/profile_feature/domain/guru_profile.dart';
 import 'package:halo/profile_feature/domain/profile_basics.dart';
 import 'package:halo/profile_feature/domain/profile_counts.dart';
+import 'package:halo/profile_feature/domain/wellness_booking.dart';
 import 'package:halo/utils/search_utils.dart';
 
 /// The only place the profile feature reads or writes `users/{id}`.
@@ -90,6 +91,60 @@ class ProfileRepository {
   /// Same format the old guru page used: d/m/yyyy h:mm.
   static String _formatSessionTime(DateTime d) =>
       '${d.day}/${d.month}/${d.year} ${d.hour}:${d.minute.toString().padLeft(2, '0')}';
+
+  /// My own booking requests to [wellnessId], newest first. Only my
+  /// requests: other people's bookings are private (and the rules deny
+  /// them). Two equality filters need no composite index; sorted here.
+  Stream<List<WellnessBooking>> watchMyWellnessBookings({
+    required String wellnessId,
+    required String myId,
+  }) {
+    return _firestore
+        .collection('booking_requests')
+        .where('wellnessId', isEqualTo: wellnessId)
+        .where('userId', isEqualTo: myId)
+        .limit(20)
+        .snapshots()
+        .map((snap) {
+      final list = [
+        for (final d in snap.docs) WellnessBooking.fromMap(d.id, d.data()),
+      ];
+      final old = DateTime(2000);
+      list.sort((a, b) => (b.createdAt ?? DateTime.now())
+          .compareTo(a.createdAt ?? old));
+      return list;
+    });
+  }
+
+  /// Same fields the old wellness booking form wrote, so the owner's
+  /// screen (Accept / Reject) shows new requests unchanged.
+  Future<void> requestWellnessBooking({
+    required String wellnessId,
+    required String myId,
+    required String service,
+    required String preferredDate,
+    required String preferredTime,
+    required String note,
+  }) {
+    return _firestore.collection('booking_requests').add({
+      'wellnessId': wellnessId,
+      'userId': myId,
+      'service': service,
+      'preferredDate': preferredDate,
+      'preferredTime': preferredTime,
+      'note': note,
+      'status': 'pending',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Visitors may only cancel their own pending request.
+  Future<void> cancelWellnessBooking(String bookingId) {
+    return _firestore.collection('booking_requests').doc(bookingId).update({
+      'status': 'cancelled',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
 
   /// Counts the real posts / followers / following documents, so the numbers
   /// stay right even if a stored counter drifted. Each count is one cheap

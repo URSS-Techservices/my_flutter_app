@@ -145,3 +145,152 @@ class _Card extends StatelessWidget {
     );
   }
 }
+
+/// One sample tile in a [ProfileComingSoonPreview].
+class ProfilePreviewTile {
+  const ProfilePreviewTile(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
+}
+
+/// A titled section that is not built yet but still looks filled: a row of
+/// sample category tiles with a "Coming Soon" tag. Tiles show categories
+/// only (no fake products or prices). Tapping shows a "coming soon" message.
+class ProfileComingSoonPreview extends StatelessWidget {
+  const ProfileComingSoonPreview({
+    super.key,
+    required this.title,
+    required this.tiles,
+  });
+
+  final String title;
+  final List<ProfilePreviewTile> tiles;
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.of(context).size.width;
+    // About 3.5 tiles on screen, so it is clear the row scrolls.
+    final tileWidth = (screen * 0.26).clamp(92.0, 132.0);
+
+    void tap() => HaloToast.show('$title is coming soon');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              ProfileStyle.sideGap, 20, ProfileStyle.sideGap, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(title,
+                    style: ProfileStyle.name.copyWith(fontSize: 18)),
+              ),
+              const _ComingSoonPill(),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: tileWidth + 34,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding:
+                const EdgeInsets.symmetric(horizontal: ProfileStyle.sideGap),
+            itemCount: tiles.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (_, i) => _PreviewTile(
+              tile: tiles[i],
+              size: tileWidth,
+              onTap: tap,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ComingSoonPill extends StatelessWidget {
+  const _ComingSoonPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: ProfileStyle.surface,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.lock_outline,
+              size: 12, color: ProfileStyle.mutedText),
+          const SizedBox(width: 4),
+          Text(
+            'Coming Soon',
+            style: ProfileStyle.small.copyWith(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: ProfileStyle.mutedText,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PreviewTile extends StatelessWidget {
+  const _PreviewTile({
+    required this.tile,
+    required this.size,
+    required this.onTap,
+  });
+
+  final ProfilePreviewTile tile;
+  final double size;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: '${tile.label}, coming soon',
+      child: GestureDetector(
+        onTap: onTap,
+        child: SizedBox(
+          width: size,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: size,
+                height: size,
+                decoration: BoxDecoration(
+                  color: ProfileStyle.primaryLight.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: ProfileStyle.divider),
+                ),
+                child: Icon(tile.icon,
+                    size: size * 0.36, color: ProfileStyle.action),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                tile.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: ProfileStyle.small.copyWith(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: ProfileStyle.text,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
