@@ -21,7 +21,11 @@ import 'package:halo/features/create_post/presentation/widgets/upload_progress.d
 import 'package:halo/features/create_post/services/media_picker_service.dart';
 
 class AddPostPage extends ConsumerStatefulWidget {
-  const AddPostPage({super.key});
+  const AddPostPage({super.key, this.onClose});
+
+  /// Set when shown as a home tab (bottom nav stays visible): the back
+  /// arrow and a successful post call this instead of popping the route.
+  final VoidCallback? onClose;
 
   @override
   ConsumerState<AddPostPage> createState() => _AddPostPageState();
@@ -40,12 +44,15 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
   }
 
   Future<void> _processAndAdd(MediaAsset asset, {String? replacingId}) async {
-    final error = await ref.read(addPostControllerProvider.notifier).processAndAddAsset(
-      asset,
-      replacingId: replacingId,
-      resolveQuality: (a, originalBytes) =>
-          showMediaQualitySelector(context, isVideo: a.isVideo, originalBytes: originalBytes),
-    );
+    final error =
+        await ref.read(addPostControllerProvider.notifier).processAndAddAsset(
+              asset,
+              replacingId: replacingId,
+              resolveQuality: (a, originalBytes) => showMediaQualitySelector(
+                  context,
+                  isVideo: a.isVideo,
+                  originalBytes: originalBytes),
+            );
     if (error != null && mounted) HaloToast.show(error);
   }
 
@@ -78,7 +85,8 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
   void _insertMention(String username) {
     final text = _captionController.text;
     final cursor = _captionController.selection.baseOffset;
-    final safeCursor = cursor < 0 || cursor > text.length ? text.length : cursor;
+    final safeCursor =
+        cursor < 0 || cursor > text.length ? text.length : cursor;
     final before = text.substring(0, safeCursor);
     final at = before.lastIndexOf('@');
     if (at == -1) return;
@@ -105,7 +113,11 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
         _captionController.clear();
         _locationController.clear();
         ref.read(addPostControllerProvider.notifier).resetSubmitStatus();
-        if (Navigator.canPop(context)) Navigator.pop(context);
+        if (widget.onClose != null) {
+          widget.onClose!();
+        } else if (Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
       } else if (status is PostSubmitFailure) {
         HaloToast.show(status.message);
       }
@@ -121,12 +133,22 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
           centerTitle: true,
           title: Text(
             'Create Post',
-            style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+            style: GoogleFonts.poppins(
+                fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
           ),
           iconTheme: const IconThemeData(color: Colors.white),
+          leading: widget.onClose == null
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  onPressed: widget.onClose,
+                ),
           flexibleSpace: Container(
             decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [kSecondaryColor, kPrimaryColor], begin: Alignment.topLeft, end: Alignment.bottomRight),
+              gradient: LinearGradient(
+                  colors: [kSecondaryColor, kPrimaryColor],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight),
             ),
           ),
         ),
@@ -140,17 +162,23 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
           ),
           child: SafeArea(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 18.0),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 18.0),
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 520),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 20),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.98),
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: [
-                        BoxShadow(blurRadius: 32, spreadRadius: -10, offset: const Offset(0, 18), color: Colors.black.withValues(alpha: 0.10)),
+                        BoxShadow(
+                            blurRadius: 32,
+                            spreadRadius: -10,
+                            offset: const Offset(0, 18),
+                            color: Colors.black.withValues(alpha: 0.10)),
                       ],
                     ),
                     child: Column(
@@ -158,7 +186,8 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
                       children: [
                         LocationField(controller: _locationController),
                         const SizedBox(height: 24),
-                        _sectionHeader(Icons.photo_library_rounded, 'Add Media'),
+                        _sectionHeader(
+                            Icons.photo_library_rounded, 'Add Media'),
                         const SizedBox(height: 12),
                         MediaPickerActions(
                           onGallery: _pickGallery,
@@ -178,7 +207,8 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
                         PostButton(
                           onPressed: () => ref
                               .read(addPostControllerProvider.notifier)
-                              .submit(extractMentions(_captionController.text.trim())),
+                              .submit(extractMentions(
+                                  _captionController.text.trim())),
                         ),
                       ],
                     ),
@@ -197,7 +227,11 @@ class _AddPostPageState extends ConsumerState<AddPostPage> {
       children: [
         Icon(icon, color: kSecondaryColor, size: 20),
         const SizedBox(width: 8),
-        Text(label, style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: Colors.black, letterSpacing: 0.5)),
+        Text(label,
+            style: GoogleFonts.poppins(
+                fontWeight: FontWeight.w700,
+                color: Colors.black,
+                letterSpacing: 0.5)),
       ],
     );
   }

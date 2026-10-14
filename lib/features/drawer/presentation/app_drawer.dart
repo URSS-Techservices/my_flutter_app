@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'package:halo/core/halo_theme.dart';
 import 'package:halo/core/halo_toast.dart';
 import 'package:halo/features/drawer/data/feedback_repository.dart';
 import 'package:halo/profile_feature/presentation/profile_providers.dart';
@@ -30,7 +31,7 @@ abstract final class _C {
   static const muted = Color(0xFF8E8E8E);
   static const separator = Color(0xFFE5E5EA);
   static const red = Color(0xFFFF3B30);
-  static const accent = Color(0xFF8B6FD6);
+  static const accent = HaloTheme.primary;
 }
 
 /// Sizes worked out from the screen, so the drawer fits small phones and
@@ -126,26 +127,22 @@ class AppDrawer extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _Group(size: size, children: [
-                  row(Icons.explore_rounded, const Color(0xFF007AFF), 'Explore',
+                  row(Icons.explore_rounded, _C.accent, 'Explore',
                       go(onExplore)),
-                  row(Icons.bookmark_rounded, const Color(0xFFFF9500),
-                      'Saved Posts', go(onSaved)),
-                  row(Icons.notifications_rounded, const Color(0xFFFF3B30),
-                      'Notifications', go(onNotifications)),
+                  row(Icons.bookmark_rounded, _C.accent, 'Saved Posts',
+                      go(onSaved)),
+                  row(Icons.notifications_rounded, _C.accent, 'Notifications',
+                      go(onNotifications)),
                 ]),
                 const SizedBox(height: 16),
                 _Group(size: size, children: [
-                  row(Icons.settings_rounded, const Color(0xFF8E8E93),
-                      'Settings', go(onSettings)),
-                  row(Icons.help_rounded, const Color(0xFF5AC8FA), 'Help',
-                      go(onHelp)),
-                  row(
-                      Icons.star_rounded,
-                      const Color(0xFFFFB800),
-                      'Rate & Feedback',
+                  row(Icons.settings_rounded, _C.accent, 'Settings',
+                      go(onSettings)),
+                  row(Icons.help_rounded, _C.accent, 'Help', go(onHelp)),
+                  row(Icons.star_rounded, _C.accent, 'Rate & Feedback',
                       () => _showFeedbackSheet(context, ref)),
-                  row(Icons.ios_share_rounded, const Color(0xFF5856D6),
-                      'Share App', () => _shareApp(context)),
+                  row(Icons.ios_share_rounded, _C.accent, 'Share App',
+                      () => _shareApp(context)),
                 ]),
                 const SizedBox(height: 16),
                 _Group(size: size, children: [
@@ -260,47 +257,58 @@ class _DrawerHeader extends ConsumerWidget {
             errorWidget: (_, __, ___) => const ColoredBox(color: _C.card),
           );
 
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              height: coverH + r,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    height: coverH,
+    // Cover and photo pop up over the drawer; the name opens my profile.
+    void preview(String url, {required bool wide}) {
+      if (url.isEmpty) return;
+      HapticFeedback.selectionClick();
+      // Just right of the round photo (3px white ring on each side).
+      _showPhotoPopup(context, url,
+          wide: wide, left: size.side + r * 2 + 6 + 12);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: coverH + r,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: coverH,
+                  child: GestureDetector(
+                    onTap: () => preview(me?.coverPhoto ?? '', wide: true),
                     child: cover,
                   ),
-                  // Soft shade under the status bar so its icons stay readable.
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    height: top + 24,
-                    child: const IgnorePointer(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Color(0x40000000), Color(0x00000000)],
-                          ),
+                ),
+                // Soft shade under the status bar so its icons stay readable.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: top + 24,
+                  child: const IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0x40000000), Color(0x00000000)],
                         ),
                       ),
                     ),
                   ),
-                  Positioned(
-                    left: size.side,
-                    top: coverH - r,
+                ),
+                Positioned(
+                  left: size.side,
+                  top: coverH - r,
+                  child: GestureDetector(
+                    onTap: () => preview(me?.profilePhoto ?? '', wide: false),
                     child: Container(
                       padding: const EdgeInsets.all(3),
                       decoration: const BoxDecoration(
@@ -323,11 +331,15 @@ class _DrawerHeader extends ConsumerWidget {
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
-            Padding(
+          ),
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: onTap,
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
               padding: EdgeInsets.symmetric(horizontal: size.side),
               child: Row(
                 children: [
@@ -380,11 +392,85 @@ class _DrawerHeader extends ConsumerWidget {
                 ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
+}
+
+/// Photo in a rounded rectangle just right of my round profile photo, a
+/// little below the top of the screen, over the dimmed drawer. Tapping
+/// anywhere closes it and leaves the drawer open.
+Future<void> _showPhotoPopup(
+  BuildContext context,
+  String url, {
+  required bool wide,
+  required double left,
+}) {
+  final media = MediaQuery.of(context);
+  final dpr = media.devicePixelRatio;
+  final top = media.padding.top + 48;
+  final width = media.size.width - left - 16;
+  // Cover is landscape; profile photo is a portrait rectangle.
+  final height = wide ? width * 0.6 : width * 1.25;
+
+  return showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Close photo',
+    barrierColor: const Color(0x99000000),
+    transitionDuration: const Duration(milliseconds: 180),
+    pageBuilder: (dialog, _, __) => GestureDetector(
+      onTap: () => Navigator.pop(dialog),
+      behavior: HitTestBehavior.opaque,
+      child: Stack(
+        children: [
+          Positioned(
+            left: left,
+            top: top,
+            width: width,
+            height: height,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: const [
+                  BoxShadow(color: Color(0x40000000), blurRadius: 24),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: ColoredBox(
+                  color: _C.card,
+                  child: CachedNetworkImage(
+                    imageUrl: url,
+                    fit: BoxFit.cover,
+                    memCacheWidth: (width * dpr).round(),
+                    placeholder: (_, __) =>
+                        const Center(child: CupertinoActivityIndicator()),
+                    errorWidget: (_, __, ___) =>
+                        const Icon(Icons.broken_image_rounded, color: _C.muted),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+    transitionBuilder: (_, animation, __, child) {
+      final curved =
+          CurvedAnimation(parent: animation, curve: Curves.easeOutBack);
+      return FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          alignment: Alignment.topLeft,
+          scale: Tween(begin: 0.85, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
 }
 
 // ───────── account type ─────────

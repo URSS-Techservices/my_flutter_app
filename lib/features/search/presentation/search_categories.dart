@@ -141,7 +141,9 @@ class _CategoryCardState extends State<_CategoryCard> {
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
         decoration: BoxDecoration(
-          color: widget.category.backgroundColor,
+          // Plain white card so the category image stands out on its own.
+          color: Colors.white,
+          border: Border.all(color: Colors.grey.shade200),
           borderRadius: BorderRadius.circular(context.s(20)),
           boxShadow: [
             BoxShadow(

@@ -19,7 +19,8 @@ class NavBar extends StatelessWidget {
     final bottom = MediaQuery.paddingOf(context).bottom;
     final compact = MediaQuery.sizeOf(context).width < 360;
     final scale = HomeLayout.textScale(context);
-    final height = ((compact ? 56.0 : 62.0) + (scale - 1) * 18).clamp(56.0, 84.0);
+    final height =
+        ((compact ? 60.0 : 68.0) + (scale - 1) * 18).clamp(60.0, 88.0);
 
     return MediaQuery(
       data: MediaQuery.of(context).copyWith(
@@ -27,7 +28,8 @@ class NavBar extends StatelessWidget {
       ),
       child: Builder(
         builder: (context) => Padding(
-          padding: EdgeInsets.fromLTRB(12, 0, 12, bottom > 0 ? 4 : 10),
+          // Sit above the system navigation (gesture bar / 3 buttons).
+          padding: EdgeInsets.fromLTRB(12, 0, 12, bottom > 0 ? bottom + 4 : 10),
           child: Material(
             color: Colors.white,
             elevation: 12,
@@ -52,50 +54,53 @@ class NavBar extends StatelessWidget {
     );
   }
 
-  Widget _add(bool compact) {
-    final size = compact ? 44.0 : 50.0;
-    return Expanded(
-      child: Center(
-        child: GestureDetector(
-          onTap: onAdd,
-          child: Container(
-            width: size,
-            height: size,
-            decoration: const BoxDecoration(
-              color: Color(0xFF6B4EFF),
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Color(0x406B4EFF),
-                  blurRadius: 10,
-                  offset: Offset(0, 4),
-                ),
-              ],
-            ),
-            child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
-          ),
-        ),
-      ),
-    );
-  }
+  /// Plain plus, a little smaller than the other icons but in the same
+  /// style and color, so the bar looks even.
+  Widget _add(bool compact) => _item(
+        Icons.add_rounded,
+        'Create',
+        on: index == 3,
+        compact: compact,
+        onTap: onAdd,
+        iconSize: compact ? 22 : 24,
+      );
 
-  Widget _tab(IconData icon, String label, int i, bool compact) {
-    final on = index == i;
+  Widget _tab(IconData icon, String label, int i, bool compact) => _item(
+        icon,
+        label,
+        on: index == i,
+        compact: compact,
+        onTap: () => onSelect(i),
+      );
+
+  Widget _item(
+    IconData icon,
+    String label, {
+    required bool on,
+    required bool compact,
+    required VoidCallback onTap,
+    double? iconSize,
+  }) {
+    final box = compact ? 24.0 : 26.0;
     return Expanded(
       child: InkWell(
-        onTap: () => onSelect(i),
+        onTap: onTap,
         borderRadius: BorderRadius.circular(20),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                icon,
-                size: compact ? 22 : 24,
-                color: on ? kSecondaryColor : Colors.grey.shade500,
+              // Fixed box so a smaller icon keeps labels in line.
+              SizedBox.square(
+                dimension: box,
+                child: Icon(
+                  icon,
+                  size: iconSize ?? box,
+                  color: on ? kSecondaryColor : Colors.grey.shade500,
+                ),
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 3),
               FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
@@ -103,7 +108,7 @@ class NavBar extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: compact ? 9 : 10,
+                    fontSize: compact ? 10.5 : 11.5,
                     fontWeight: on ? FontWeight.w600 : FontWeight.w400,
                     color: on ? kSecondaryColor : Colors.grey.shade500,
                   ),

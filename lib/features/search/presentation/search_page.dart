@@ -29,15 +29,9 @@ class SearchPage extends ConsumerWidget {
         ref.watch(searchNotifierProvider.select((s) => s.hasQuery));
 
     return Scaffold(
-      backgroundColor: kSearchBackground,
+      backgroundColor: Colors.white,
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [kSearchBackground, Color(0xFFEDE8FA)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
+        color: Colors.white,
         child: SafeArea(
           child: GestureDetector(
             // Dismiss keyboard when tapping outside

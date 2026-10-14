@@ -66,6 +66,10 @@ class _HomePageState extends State<HomePage> {
   late final Widget _notifPage;
   late final Widget _profilePage;
 
+  /// Built the first time Create is opened, then kept so a half-written
+  /// post survives switching tabs.
+  Widget? _addPostPage;
+
   @override
   void initState() {
     super.initState();
@@ -86,7 +90,8 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Location', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text('Location',
+            style: TextStyle(fontWeight: FontWeight.w700)),
         content: const Text(
           'Halo can show nearby posts more accurately if location is on.',
         ),
@@ -154,7 +159,7 @@ class _HomePageState extends State<HomePage> {
         onProfile: () => setState(() => _navIndex = 5),
       ),
       body: IndexedStack(
-        index: _navIndex == 3 ? 0 : _navIndex.clamp(0, 5),
+        index: _navIndex.clamp(0, 5),
         children: [
           SafeArea(
             child: feed.HomePage(
@@ -166,13 +171,13 @@ class _HomePageState extends State<HomePage> {
           ),
           _searchPage,
           _explorePage,
-          const SizedBox.shrink(),
+          _addPostPage ?? const SizedBox.shrink(),
           _notifPage,
           _profilePage,
         ],
       ),
       bottomNavigationBar: NavBar(
-        index: _navIndex == 3 ? 0 : _navIndex,
+        index: _navIndex,
         onSelect: (i) {
           _notifFromDrawer = false;
           if (i == 0 && _navIndex == 0) {
@@ -181,13 +186,13 @@ class _HomePageState extends State<HomePage> {
           setState(() => _navIndex = i);
         },
         onAdd: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              fullscreenDialog: true,
-              builder: (_) => AddPostPage(),
-            ),
-          );
+          _notifFromDrawer = false;
+          setState(() {
+            _addPostPage ??= AddPostPage(
+              onClose: () => setState(() => _navIndex = 0),
+            );
+            _navIndex = 3;
+          });
         },
       ),
     );
@@ -246,7 +251,8 @@ class _ProfileTabState extends State<_ProfileTab> {
     }
     final newPage = newProfilePageFor(_type, _uid, onBack: widget.onBack);
     if (newPage != null) return newPage;
-    if (_type == 'wellness') return wellness.WellnessProfilePage(profileUserId: _uid);
+    if (_type == 'wellness')
+      return wellness.WellnessProfilePage(profileUserId: _uid);
     if (_type == 'guru') return guru.GuruProfilePage(profileUserId: _uid);
     return aspirant.ProfilePage(profileUserId: _uid);
   }
